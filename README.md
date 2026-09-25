@@ -203,4 +203,20 @@ py -m PyInstaller --onefile --windowed --name ProjectFerry --icon ferry_icon.ico
 
 MIT License，详见 [LICENSE](LICENSE)。
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 我好尴尬。。。好想死啊。。。。联系可以走zetadarkdragon@gmail.com。。。大佬不要喷我。。。。我尴尬的相似。。。
