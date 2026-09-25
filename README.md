@@ -218,5 +218,5 @@ MIT License，详见 [LICENSE](LICENSE)。
 
 
 
-
-我好尴尬。。。好想死啊。。。。联系可以走zetadarkdragon@gmail.com。。。大佬不要喷我。。。。我尴尬的相似。。。
+## 如何联系这个可怜的作者
+我好尴尬。。。好想死。。想跳楼呃呵呵呵呵呵。。这是我第一次觉得我拉的ai大便有点用处，然后就传GitHub上了。。。。联系可以走zetadarkdragon@gmail.com。。。求求大佬不要喷我。。。。我尴尬的相似。。。
