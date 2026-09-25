@@ -17,8 +17,6 @@
 
 打开之后它会自己找本机的 MC 实例，填进上面的下拉框。选一个，下面的列表就是缺少中文的模组。
 
-> 运行会在 exe / 脚本旁边生成 `ferry_config.json`（你的设置）、`ferry.log`、`ferry_cache/` 等本机文件，都不会进仓库。
-
 ## 它能做啥、不能做啥
 
 **能做**：扫描模组语言文件（含旧版 `.lang`），找出没中文的 key，用翻译引擎（默认免费的 MyMemory）生成一个低优先级的资源包。有人工/官方汉化就自动让位。
@@ -158,14 +156,6 @@ py mc_ai_translator.py config          # 看当前配置（Key 已打码）
 py mc_ai_translator.py config --init   # 生成默认配置
 ```
 
-**关于密钥，几句正经的：**
-
-- `ferry_config.json` 里有你的 API Key，**已经被 `.gitignore` 忽略了，千万别提交到公开仓库**。要模板就复制不含 Key 的 `ferry_config.example.json`。
-- 日志、`ferry_cache/`、`ferry_progress.json`、`ferry_locks.json`、`user_glossary.json`、`__pycache__/` 这些也都不进仓库。
-- `config` 命令输出、日志、报错弹窗都会给 Key 打码。
-- 要是配置目录已经 `git init` 而 `ferry_config.json` 又没被忽略，程序启动会弹「密钥安全提示」。
-- 如果这把 Key 曾经在公开地方出现过，去服务商后台吊销重新生成。
-
 ## 保护规则（写代码时就守着的）
 
 - AI 只翻人工汉化没覆盖的 `en_us` key；主动开语料补缺时，人工译文只当参考，绝不覆盖。
@@ -212,3 +202,5 @@ py -m PyInstaller --onefile --windowed --name ProjectFerry --icon ferry_icon.ico
 ## 许可
 
 MIT License，详见 [LICENSE](LICENSE)。
+
+我好尴尬。。。好想死啊。。。。联系可以走zetadarkdragon@gmail.com。。。大佬不要喷我。。。。我尴尬的相似。。。
