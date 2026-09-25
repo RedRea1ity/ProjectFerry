@@ -24,6 +24,11 @@ __pycache__/
 venv/
 env/
 
+# PyInstaller 构建产物（ProjectFerry.exe 在仓库根，另行提交）
+build/
+dist/
+*.spec
+
 # 编辑器 / 系统
 .idea/
 .vscode/

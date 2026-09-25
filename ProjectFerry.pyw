@@ -15,8 +15,9 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import mc_ai_translator as core
 
 
-WHITELIST_FILE = Path(__file__).with_name("ferry_whitelist.json")
-UI_STATE_FILE = Path(__file__).with_name("ferry_ui.json")
+# 可写文件放 core.app_dir()（打包后=exe 目录）；图标是只读资源，放脚本/解压目录旁。
+WHITELIST_FILE = core.app_dir() / "ferry_whitelist.json"
+UI_STATE_FILE = core.app_dir() / "ferry_ui.json"
 ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"

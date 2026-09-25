@@ -48,14 +48,21 @@ REVERT_MARKER = "FERRY_REVERTED.json"
 SOURCES_MARKER = "FERRY_SOURCES.json"
 COMMUNITY_NOTICE = "COMMUNITY_ATTRIBUTION.txt"
 
-CONFIG_FILE = Path(__file__).resolve().parent / "ferry_config.json"
-PROGRESS_FILE = Path(__file__).resolve().parent / "ferry_progress.json"
-USER_GLOSSARY_FILE = Path(__file__).resolve().parent / "user_glossary.json"
-LOCKS_FILE = Path(__file__).resolve().parent / "ferry_locks.json"
+def app_dir() -> Path:
+    """可写数据目录：源码运行时是脚本目录；打包成 exe 后是 exe 所在目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+CONFIG_FILE = app_dir() / "ferry_config.json"
+PROGRESS_FILE = app_dir() / "ferry_progress.json"
+USER_GLOSSARY_FILE = app_dir() / "user_glossary.json"
+LOCKS_FILE = app_dir() / "ferry_locks.json"
 
 DEFAULT_GLOSSARY_EN_URL = "https://cdn.jsdelivr.net/gh/PandaDevOfficial/Minecraft-All-Lang@main/en_gb.json"
 LOG = logging.getLogger(__name__)
-LOG_FILE = Path(__file__).resolve().parent / "ferry.log"
+LOG_FILE = app_dir() / "ferry.log"
 
 
 def redact_secrets(text: str) -> str:
@@ -2337,7 +2344,7 @@ def resolve_translate_settings(config: dict[str, Any], instance: Path, overrides
     output_dir = o.get("output_dir") or config.get("output_dir") or str(instance / "resourcepacks")
     fill_community = o.get("fill_community") if o.get("fill_community") is not None else bool(config.get("fill_community", False))
     refine_community = o.get("refine_community") if o.get("refine_community") is not None else bool(config.get("refine_community", False))
-    cache_dir = config.get("cache_dir") or str(Path(__file__).resolve().parent / "ferry_cache")
+    cache_dir = config.get("cache_dir") or str(app_dir() / "ferry_cache")
     glossary = dict(BUILTIN_GLOSSARY)
     glossary.update(load_user_glossary())
     user_glossary = config.get("glossary", {})
