@@ -25,8 +25,7 @@ APP_VERSION = "1.0.0"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
-# 发布前替换成你的仓库地址。
-PROJECT_URL = "https://github.com/<你的用户名>/ProjectFerry"
+PROJECT_URL = "https://github.com/RedRea1ity/-_-ai_-"
 
 ENGINE_KEY_FIELDS = {
     "openai": "openai_api_key",
