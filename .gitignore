@@ -1,0 +1,42 @@
+# 密钥与个人配置：绝对不要提交
+ferry_config.json
+ferry_config.local.json
+*.local.json
+
+# 运行期生成物
+ferry.log
+ferry.log.*
+ferry_cache/
+ferry_progress.json
+ferry_locks.json
+ferry_ui.json
+ferry_whitelist.json
+user_glossary.json
+*.pre-lang-backup
+*.uninstalled.json
+*.zip.part
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 本地代理协作工具
+.workbuddy/
+
+# 内部代理工作笔记 / 调试残留：不对外发布
+task_plan.md
+findings.md
+progress.md
+PROMPT_opencode_UI.md
+_tmp_*.txt
+_tmp_*.py
