@@ -99,6 +99,84 @@ class VersionDetectionTests(unittest.TestCase):
                 self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c1", online=True), 100.5)
             self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c2", online=False), 99.0)
 
+    def test_latest_github_release_compares_versions(self):
+        import unittest.mock as mock
+        release = {"tag_name": "v1.6.0", "body": "更新说明", "html_url": "https://example.com/r",
+                   "assets": [{"name": "ProjectFerry.exe", "browser_download_url": "https://example.com/exe", "size": 1024}]}
+        with mock.patch.object(core, "_fetch_json", return_value=release):
+            info = core.latest_github_release("1.5.0")
+            self.assertEqual(info["version"], "1.6.0")
+            self.assertEqual(info["asset_url"], "https://example.com/exe")
+            self.assertIsNone(core.latest_github_release("1.6.0"), "相同版本不提示")
+            self.assertIsNone(core.latest_github_release("1.7.0"), "本地更新不提示")
+        with mock.patch.object(core, "_fetch_json", side_effect=OSError("offline")):
+            self.assertIsNone(core.latest_github_release("1.5.0"))
+
+    def test_check_online_translation_statuses(self):
+        import io
+        import unittest.mock as mock
+
+        class FakeResponse:
+            def __init__(self, body):
+                self._body = body.encode("utf-8")
+            def read(self, limit=-1):
+                return self._body
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen_error(code):
+            raise urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(b""))
+
+        site = "https://example.com/{modid}"
+        cases = [
+            ('{"a": 1}', 200, "found"),
+            ("", 200, "miss"),
+            ("Couldn't find the requested file", 200, "miss"),
+        ]
+        for body, code, expected in cases:
+            if code == 200:
+                with mock.patch.object(core.urllib.request, "urlopen", return_value=FakeResponse(body)):
+                    self.assertEqual(core.check_online_translation(site, "demo")[0], expected)
+            else:
+                with mock.patch.object(core.urllib.request, "urlopen", side_effect=lambda *a, **k: fake_urlopen_error(code)):
+                    self.assertEqual(core.check_online_translation(site, "demo")[0], expected)
+        with mock.patch.object(core.urllib.request, "urlopen", side_effect=lambda *a, **k: fake_urlopen_error(500)):
+            self.assertEqual(core.check_online_translation(site, "demo")[0], "error")
+
+    def test_query_online_translations_fans_out(self):
+        import unittest.mock as mock
+        def fake_check(site, modid, timeout=6.0):
+            return ("found", site.replace("{modid}", modid)) if modid == "jei" else ("miss", site)
+        with mock.patch.object(core, "check_online_translation", side_effect=fake_check):
+            results = core.query_online_translations(["a/{modid}", "b/{modid}"], ["jei", "nope"])
+        # 无整合包时也包含内置 CFPA 源（2 条 miss）+ 2 源 x 2 模组模板
+        self.assertEqual(len(results), 6)
+        found = sorted(r["url"] for r in results if r["status"] == "found")
+        self.assertEqual(found, ["a/jei", "b/jei"])
+
+    def test_download_release_asset_streams_and_reports_progress(self):
+        import unittest.mock as mock
+        class FakeResponse:
+            headers = {"Content-Length": "10"}
+            def __init__(self):
+                self._data = [b"12345", b"67890"]
+            def read(self, limit=-1):
+                return self._data.pop(0) if self._data else b""
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "new.exe"
+            marks = []
+            with mock.patch.object(core.urllib.request, "urlopen", return_value=FakeResponse()):
+                core.download_release_asset("https://example.com/exe", dest, progress=lambda d, t: marks.append((d, t)))
+            self.assertEqual(dest.read_bytes(), b"1234567890")
+            self.assertEqual(marks[-1], (10, 10))
+
     def test_legacy_lang_file_casing_follows_pack_format(self):
         # 1.6.1–1.10.2（format 1–2）用区域代码 zh_CN；1.11（format 3）起资源包内文件名强制全小写。
         with tempfile.TemporaryDirectory() as tmp:
@@ -343,14 +421,16 @@ class CommunityBaselineTests(unittest.TestCase):
                 english=[core.LangFile("demo", "en_us", "jar", {"a": "Apple", "b": "Pear", "c": "Carrot"})],
                 community=[core.LangFile("demo", "zh_cn", "jar", {"a": "苹果"})],
             )
-            data = json.dumps({"a": "不同苹果", "b": "梨"}, ensure_ascii=False).encode("utf-8")
-            with patch.object(core.urllib.request, "urlopen", return_value=Response(data)) as fetch:
+            # 社区基线来自 CFPA 整合包缓存：手工放一个假整合包进缓存目录。
+            pack_cache = Path(tmp) / "CFPA_Modpack.zip"
+            with zipfile.ZipFile(pack_cache, "w") as zf:
+                zf.writestr("assets/demo/lang/zh_cn.json", json.dumps({"a": "不同苹果", "b": "梨"}, ensure_ascii=False))
+            with patch.object(core.urllib.request, "urlopen", side_effect=AssertionError("基线读取不该联网")):
                 baseline = core.fetch_community_baseline(scan, core.DEFAULT_CONFIG, instance)
             self.assertEqual(baseline, {"demo": {"b": "梨"}})
             self.assertEqual(len(core.missing_entries(scan.english, scan.community + [core.LangFile("demo", "zh_cn", "community", baseline["demo"])], [], fill_community=True)), 1)
             self.assertEqual([entry.key for entry in core.entries_with_baseline(scan, baseline)], ["c"])
-            with patch.object(core.urllib.request, "urlopen", side_effect=AssertionError("cached")):
-                self.assertEqual(core.fetch_community_baseline(scan, core.DEFAULT_CONFIG, instance), baseline)
+            self.assertEqual(core.fetch_community_baseline(scan, core.DEFAULT_CONFIG, instance), baseline)
             pack = instance / "ai.zip"
             core.write_pack(pack, {"demo": {"b": "梨", "c": "AI 胡萝卜"}}, 15, sources={"demo": {"b": "community", "c": "ai"}})
             self.assertEqual(core.load_pack_sources(pack)["demo"], {"b": "community", "c": "ai"})
@@ -364,13 +444,29 @@ class CommunityBaselineTests(unittest.TestCase):
             core.remove_ai_translations(pack, {"demo"})
             self.assertFalse(pack.exists())
 
-    def test_network_failure_does_not_interrupt_translation(self):
+    def test_missing_pack_does_not_interrupt_translation(self):
         with tempfile.TemporaryDirectory() as tmp:
             scan = core.ScanResult(english=[core.LangFile("demo", "en_us", "jar", {"a": "Apple"})])
-            with patch.object(core.urllib.request, "urlopen", side_effect=urllib.error.URLError("offline")):
-                with self.assertLogs(core.LOG, level="WARNING"):
-                    self.assertEqual(core.fetch_community_baseline(scan, core.DEFAULT_CONFIG, Path(tmp)), {})
+            with patch.object(core.urllib.request, "urlopen", side_effect=AssertionError("无整合包时不该联网")):
+                self.assertEqual(core.fetch_community_baseline(scan, core.DEFAULT_CONFIG, Path(tmp)), {})
             self.assertEqual(len(core.missing_entries(scan.english, scan.community, scan.ai)), 1)
+
+    def test_community_pack_translations_reads_json_and_lang(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = Path(tmp) / "CFPA_Modpack.zip"
+            with zipfile.ZipFile(pack, "w") as zf:
+                zf.writestr("assets/jei/lang/zh_cn.json", json.dumps({"item.jei": "合成"}, ensure_ascii=False))
+                zf.writestr("assets/TwilightForest/lang/zh_cn.lang", "entity.boar=野猪\n")
+                zf.writestr("assets/other/lang/en_us.json", "{}")
+                zf.writestr("assets/broken/lang/zh_cn.json", "not json")
+            hits = core.community_pack_translations(pack, ["jei", "TwilightForest", "other", "broken", "missing"])
+            self.assertEqual(hits["jei"], {"item.jei": "合成"})
+            self.assertEqual(hits["TwilightForest"], {"entity.boar": "野猪"})
+            self.assertNotIn("broken", hits)
+            self.assertNotIn("missing", hits)
+            # 大小写不敏感匹配 modid，返回键保留调用方写法
+            self.assertIn("TwilightForest", hits)
+            self.assertEqual(core.community_pack_translations(None, ["jei"]), {})
 
 
 class QualityTests(unittest.TestCase):

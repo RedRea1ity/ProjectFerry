@@ -150,9 +150,7 @@ DEFAULT_CONFIG = {
     "fill_community": False,
     "refine_community": False,
     "community_enabled": True,
-    "community_base_url": "https://cdn.jsdelivr.net/gh/CFPAOrg/Minecraft-Mod-Language-Package@main/assets",
     "community_dict_url": "https://cdn.jsdelivr.net/gh/CFPATools/i18n-dict@main",
-    "community_cache_ttl_days": 7,
     "community_notice_accepted": False,
     "pack_name": "AI_Translation_LowPriority.zip",
     "output_dir": "",
@@ -198,6 +196,12 @@ DEFAULT_CONFIG = {
     "settings_expanded": False,
     # 本地版本表查不到 / 表尾待定时，联网核对远程版本表
     "online_pack_format": True,
+    # 「查询在线汉化」的自定义来源：每行一个网址模板，{modid} 会替换成模组 ID；
+    # CFPA 社区整合包是内置来源，不需要写在这里
+    "lookup_sites": [],
+    # 启动时自动检查 GitHub 新版本（每 7 天最多一次）
+    "update_auto_check": True,
+    "update_last_check": 0,
 }
 
 # (版本元组, 资源包格式)，升序排列；取 <= 目标版本的最大一项。
@@ -863,43 +867,76 @@ def entries_with_baseline(scan: ScanResult, baseline: dict[str, dict[str, str]],
     return entries
 
 
+CFPA_PACK_URL = "https://github.com/CFPAOrg/Minecraft-Mod-Language-Package/releases/download/autobuild/Minecraft-Mod-Language-Modpack.zip"
+CFPA_RELEASE_PAGE = "https://github.com/CFPAOrg/Minecraft-Mod-Language-Package/releases"
+CFPA_PACK_TTL = 14 * 86400
+
+
+def community_pack_path(cache_dir: Path | None = None) -> Path:
+    return (Path(cache_dir) if cache_dir else app_dir() / "ferry_cache") / "CFPA_Modpack.zip"
+
+
+def ensure_community_pack(cache_dir: Path | None = None, timeout: float = 120.0, max_age: float = CFPA_PACK_TTL, allow_fetch: bool = True, progress=None) -> Path | None:
+    """拿到 CFPA 社区整合包（合并版资源包，含全部模组的 zh_cn）；过期才重新下载。"""
+    path = community_pack_path(cache_dir)
+    if path.is_file() and time.time() - path.stat().st_mtime < max_age:
+        return path
+    if not allow_fetch:
+        return path if path.is_file() else None
+    part = path.with_name(path.name + ".part")
+    try:
+        download_release_asset(CFPA_PACK_URL, part, timeout=timeout, progress=progress)
+        part.replace(path)
+        return path
+    except (OSError, ValueError) as exc:
+        LOG.warning("Community pack download failed: %s", exc)
+        part.unlink(missing_ok=True)
+        return path if path.is_file() else None
+
+
+def community_pack_translations(pack_path: Path | None, modids) -> dict[str, dict[str, str]]:
+    """从社区整合包里抽取指定模组的 zh_cn 内容（json / .lang 都认）。"""
+    result: dict[str, dict[str, str]] = {}
+    if not pack_path:
+        return result
+    wanted = {modid.lower(): modid for modid in modids}
+    if not wanted:
+        return result
+    pattern = re.compile(r"assets/([^/]+)/lang/zh_cn[.](json|lang)", re.IGNORECASE)
+    try:
+        with zipfile.ZipFile(pack_path) as zf:
+            for name in zf.namelist():
+                match = pattern.fullmatch(name)
+                if not match or match.group(1).lower() not in wanted:
+                    continue
+                try:
+                    data = _parse_lang_raw(zf.read(name), match.group(2).lower(), f"{pack_path}!{name}")
+                except ValueError:
+                    continue
+                if data:
+                    result.setdefault(wanted[match.group(1).lower()], {}).update(data)
+    except (zipfile.BadZipFile, OSError):
+        return {}
+    return result
+
+
 def fetch_community_baseline(scan: ScanResult, config: dict[str, Any], cache_dir: Path, modids: set[str] | None = None) -> dict[str, dict[str, str]]:
     """Fetch optional community keys, excluding anything already present in the instance."""
     if not config.get("community_enabled", True):
         return {}
-    base = str(config.get("community_base_url") or DEFAULT_CONFIG["community_base_url"]).rstrip("/")
-    if urllib.parse.urlparse(base).scheme != "https":
-        LOG.warning("Community base URL is not HTTPS; skipping")
-        return {}
-    cache = cache_dir / "community"
-    cache.mkdir(parents=True, exist_ok=True)
     current = _modid_keys(scan.community)
     ai = _modid_keys(scan.ai)
     english: dict[str, dict[str, str]] = {}
     for file in scan.english:
         if modids is None or file.modid in modids:
             english.setdefault(file.modid, {}).update(file.data)
+    wanted = [modid for modid in english if re.fullmatch(r"[a-z0-9_.-]+", modid, re.IGNORECASE)]
+    # 整合包只在已缓存时使用（下载由 GUI 扫描后/翻译前单独预热），测试与离线场景不触网。
+    pack = ensure_community_pack(cache_dir, allow_fetch=False)
+    raw_by_modid = community_pack_translations(pack, wanted)
     result: dict[str, dict[str, str]] = {}
     for modid, original in english.items():
-        if not re.fullmatch(r"[a-z0-9_.-]+", modid, re.IGNORECASE):
-            continue
-        path = cache / f"{modid}.json"
-        raw: dict[str, str] = {}
-        try:
-            fresh = path.is_file() and time.time() - path.stat().st_mtime < float(config.get("community_cache_ttl_days", 7)) * 86400
-            if fresh:
-                raw = load_json_bytes(path.read_bytes(), str(path))
-            else:
-                url = f"{base}/{urllib.parse.quote(modid)}/lang/zh_cn.json"
-                with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "ProjectFerry/1.0"}), timeout=8) as response:
-                    content = response.read(4 * 1024 * 1024 + 1)
-                    if len(content) > 4 * 1024 * 1024:
-                        raise ValueError("community language file too large")
-                    raw = load_json_bytes(content, url)
-                path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            LOG.warning("Community baseline unavailable for %s: %s", modid, exc)
-            continue
+        raw = raw_by_modid.get(modid, {})
         filtered = {key: value for key, value in raw.items() if original.get(key, "").strip() and value.strip() and key not in current.get(modid, set()) and key not in ai.get(modid, set()) and key not in scan.reverted.get(modid, set())}
         if filtered:
             result[modid] = filtered
@@ -1946,6 +1983,111 @@ def pack_format_for_version(version: str) -> int | float:
         else:
             break
     return clean_pack_format(chosen)
+
+
+GITHUB_RELEASE_API = "https://api.github.com/repos/RedRea1ity/ProjectFerry/releases/latest"
+GITHUB_RELEASE_PAGE = "https://github.com/RedRea1ity/ProjectFerry/releases/latest"
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.sub(r"[^0-9.]", "", str(version)).strip(".").split(".") if part.isdigit())
+
+
+def latest_github_release(current_version: str, timeout: float = 8.0) -> dict[str, Any] | None:
+    """查询 GitHub 最新 Release；只在比 current_version 新时返回信息，失败或无更新返回 None。"""
+    try:
+        data = _fetch_json(GITHUB_RELEASE_API, timeout)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    tag = str(data.get("tag_name") or "")
+    remote, current = _version_key(tag), _version_key(current_version)
+    if not remote or remote <= current:
+        return None
+    asset_url, asset_size = "", 0
+    for asset in data.get("assets") or []:
+        if isinstance(asset, dict) and str(asset.get("name", "")).lower().endswith(".exe"):
+            asset_url = str(asset.get("browser_download_url") or "")
+            asset_size = int(asset.get("size") or 0)
+            break
+    return {
+        "version": tag.lstrip("v"),
+        "notes": str(data.get("body") or "")[:800],
+        "url": str(data.get("html_url") or GITHUB_RELEASE_PAGE),
+        "asset_url": asset_url,
+        "asset_size": asset_size,
+    }
+
+
+def download_release_asset(url: str, dest: Path, timeout: float = 60.0, progress=None) -> Path:
+    """流式下载 Release 附件；progress(done, total) 用于进度显示。"""
+    request = urllib.request.Request(url, headers={"User-Agent": "ProjectFerry/1.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        total = int(response.headers.get("Content-Length") or 0)
+        done = 0
+        with open(dest, "wb") as fh:
+            while True:
+                block = response.read(65536)
+                if not block:
+                    break
+                fh.write(block)
+                done += len(block)
+                if progress:
+                    progress(done, total)
+    return dest
+
+
+def check_online_translation(site: str, modid: str, timeout: float = 6.0) -> tuple[str, str]:
+    """探测一个查询源上是否存在某模组的汉化；返回 (found|miss|error, 实际访问的网址)。"""
+    url = site.replace("{modid}", modid)
+    request = urllib.request.Request(url, headers={"User-Agent": "ProjectFerry/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(262144).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return ("miss", url) if exc.code == 404 else ("error", url)
+    except OSError:
+        return "error", url
+    # jsDelivr 对仓库级 404 可能回 200 + 这句提示
+    if not body.strip() or "Couldn't find" in body:
+        return "miss", url
+    return "found", url
+
+
+def query_online_translations(sites: list[str], modids: list[str], pack_path: Path | None = None, timeout: float = 6.0, progress=None) -> list[dict[str, str]]:
+    """并发探测多个模组在多个查询源上的汉化情况；pack_path 给定时先查内置 CFPA 整合包。"""
+    usable_sites = [site.strip() for site in sites if "{modid}" in site]
+    total = max(1, len(modids) * (len(usable_sites) + (1 if pack_path else 0)))
+    done = 0
+    results: list[dict[str, str]] = []
+
+    def worker(site: str, modid: str) -> dict[str, str]:
+        nonlocal done
+        status, url = check_online_translation(site, modid, timeout)
+        done += 1
+        if progress:
+            progress(done, total)
+        return {"modid": modid, "site": site, "status": status, "url": url}
+
+    if modids:
+        pack_hits = community_pack_translations(pack_path, modids) if pack_path else {}
+        for modid in modids:
+            done += 1
+            if progress:
+                progress(done, total)
+            results.append({
+                "modid": modid,
+                "site": "CFPA 社区汉化（内置）",
+                "status": "found" if pack_hits.get(modid) else "miss",
+                "url": CFPA_RELEASE_PAGE,
+            })
+        if usable_sites:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(worker, site, modid) for site in usable_sites for modid in modids]
+                for future in concurrent.futures.as_completed(futures):
+                    results.append(future.result())
+    return results
 
 
 def _remote_format_cache_path(cache_dir: Path | None = None) -> Path:

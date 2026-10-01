@@ -4,9 +4,7 @@
   "fill_community": false,
   "refine_community": false,
   "community_enabled": true,
-  "community_base_url": "https://cdn.jsdelivr.net/gh/CFPAOrg/Minecraft-Mod-Language-Package@main/assets",
   "community_dict_url": "https://cdn.jsdelivr.net/gh/CFPATools/i18n-dict@main",
-  "community_cache_ttl_days": 7,
   "community_notice_accepted": false,
   "pack_name": "AI_Translation_LowPriority.zip",
   "output_dir": "",
@@ -37,5 +35,6 @@
   "glossary": {},
   "keep_untranslated": [],
   "skip_keys": {},
-  "disclaimer_accepted": false
+  "disclaimer_accepted": false,
+  "lookup_sites": []
 }

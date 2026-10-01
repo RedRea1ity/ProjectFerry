@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import traceback
@@ -22,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -267,6 +268,8 @@ class FerryApp(tk.Tk):
         self.managing_pack = False
         self._closing = False
         self.updating_glossary = False
+        self.looking_up = False
+        self.checking_update = False
         self.cancel_event = threading.Event()
         self.translatable_targets: dict[str, set[str]] = {}
         self.hardcoded_results: list[tuple[str, int, list[str]]] = []
@@ -290,6 +293,7 @@ class FerryApp(tk.Tk):
             self.after(200, self.refresh_instances),
             self.after(400, self._maybe_show_notice),
             self.after(700, self._security_check),
+            self.after(5000, self._maybe_auto_update_check),
         ]
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -537,6 +541,8 @@ class FerryApp(tk.Tk):
         self.limits_button.pack(side="right", padx=(6, 0))
         self.quality_button = ttk.Button(bottom, text="质量检查", command=self._show_quality)
         self.quality_button.pack(side="right", padx=(6, 0))
+        self.lookup_button = ttk.Button(bottom, text="查询在线汉化", command=self.start_online_lookup)
+        self.lookup_button.pack(side="right", padx=(6, 0))
         ttk.Label(bottom, text="双击行直接翻译；右键可卸载、还原、重翻，详见「使用说明」。", font=FONT_SMALL, foreground=FAINT).pack(side="left")
 
         # 先从下往上预留 底栏 → 设置 → 翻译区，再让表格占剩余空间；
@@ -1466,6 +1472,7 @@ class FerryApp(tk.Tk):
             "右键行：删除 AI 汉化、重载译文、还原英文、",
             "　　　　重翻整个模组、安装人工汉化包、设置不翻译词条。",
             "F5：重新扫描；Esc：清空搜索。",
+            "选中模组后点「查询在线汉化」，可查多个网站有没有现成汉化；查询源在「设置」里自定义。",
         ])
         section("状态符号", [
             "✓ 已完全汉化　◐ 部分翻译　○ 待翻译　◈ 已有人工汉化",
@@ -1477,6 +1484,241 @@ class FerryApp(tk.Tk):
         ])
         ttk.Button(body, text="关闭", command=window.destroy).pack(anchor="e", pady=(16, 0))
         self._center_over(window, 580, 500)
+
+    def start_online_lookup(self) -> None:
+        """选中若干模组，逐个查询源探测网上有没有现成汉化。"""
+        if self.looking_up or self.scanning:
+            return
+        modids = sorted({modid for mods in self._selected_targets().values() for modid in mods})
+        if not modids:
+            self.status_var.set("先在表格里选中要查询的模组，再点「查询在线汉化」。")
+            return
+        sites = [site for site in (self.config.get("lookup_sites") or []) if isinstance(site, str) and "{modid}" in site]
+        self.looking_up = True
+        self.lookup_button.configure(state="disabled")
+        self.status_var.set(f"正在查询 {len(modids)} 个模组的在线汉化（{len(sites)} 个源）……")
+        threading.Thread(target=self._lookup_worker, args=(sites, modids), daemon=True).start()
+
+    def _lookup_worker(self, sites: list[str], modids: list[str]) -> None:
+        try:
+            cache_dir = core.app_dir() / "ferry_cache"
+
+            def pack_progress(done: int, total: int) -> None:
+                self.result_queue.put(("status", f"下载社区汉化整合包…… {max(1, done // 1048576)}/{max(1, total // 1048576)} MB"))
+
+            pack = core.ensure_community_pack(cache_dir, allow_fetch=True, progress=pack_progress)
+            results = core.query_online_translations(
+                sites, modids, pack_path=pack,
+                progress=lambda done, total: self.result_queue.put(("status", f"在线汉化查询中…… {done}/{total}")),
+            )
+            self.result_queue.put(("lookup_done", results))
+        except Exception as exc:
+            self.result_queue.put(("error", f"在线汉化查询失败：{core.redact_secrets(str(exc))}"))
+
+    def _show_lookup_results(self, results: list[dict[str, str]]) -> None:
+        found = sum(1 for item in results if item["status"] == "found")
+        miss = sum(1 for item in results if item["status"] == "miss")
+        error = sum(1 for item in results if item["status"] == "error")
+        window = tk.Toplevel(self)
+        window.title("在线汉化查询结果 - 摆渡计划")
+        window.transient(self)
+        body = ttk.Frame(window, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="在线汉化查询结果", font=FONT_TITLE).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=f"共 {len(results)} 项：{found} 找到 · {miss} 未找到 · {error} 失败。选中行后可打开链接查看。",
+            font=FONT_SMALL, foreground=MUTED,
+        ).pack(anchor="w", pady=(2, 6))
+        frame = ttk.Frame(body)
+        frame.pack(fill="both", expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        tree = ttk.Treeview(frame, columns=("modid", "site", "status"), show="headings", height=14)
+        for column, text, width, anchor in (("modid", "模组", 200, "w"), ("site", "查询源", 320, "w"), ("status", "结果", 90, "center")):
+            tree.column(column, width=width, anchor=anchor)
+            tree.heading(column, text=text)
+        tree.tag_configure("found", foreground=GREEN)
+        tree.tag_configure("miss", foreground=MUTED)
+        tree.tag_configure("error", foreground=RED)
+        status_text = {"found": "✓ 找到", "miss": "未找到", "error": "失败"}
+        urls: dict[str, str] = {}
+        for item in sorted(results, key=lambda r: (r["modid"], r["site"])):
+            node = tree.insert("", "end", values=(item["modid"], item["site"], status_text.get(item["status"], item["status"])), tags=(item["status"],))
+            urls[node] = item["url"]
+        tree.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=scroll.set)
+
+        def open_link() -> None:
+            for node in tree.selection():
+                url = urls.get(node)
+                if url:
+                    try:
+                        os.startfile(url)
+                    except OSError:
+                        pass
+
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(10, 0))
+        make_action_button(btns, "打开链接", open_link, ACCENT).pack(side="right")
+        ttk.Button(btns, text="编辑查询源…", command=self._show_lookup_sites_editor).pack(side="left")
+        ttk.Button(btns, text="关闭", command=window.destroy).pack(side="right", padx=(0, 8))
+        self._center_over(window, 660, 460)
+
+    def _show_lookup_sites_editor(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("查询汉化网站 - 摆渡计划")
+        window.transient(self)
+        body = ttk.Frame(window, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="每行一个查询源网址，用 {modid} 代替模组 ID。", font=FONT_BODY).pack(anchor="w")
+        ttk.Label(
+            body,
+            text="查询时把 {modid} 替换成模组 ID 再访问；能打开且内容非空即视为「找到汉化」。CFPA 社区整合包是内置来源，无需在此填写。",
+            font=FONT_SMALL, foreground=MUTED, wraplength=520, justify="left",
+        ).pack(anchor="w", pady=(2, 6))
+        text = tk.Text(body, height=8, wrap="none")
+        text.pack(fill="both", expand=True)
+        text.insert("1.0", "\n".join(self.config.get("lookup_sites") or []))
+
+        def save() -> None:
+            lines = [line.strip() for line in text.get("1.0", "end").splitlines() if line.strip()]
+            bad = [line for line in lines if "{modid}" not in line]
+            if bad:
+                messagebox.showwarning("查询源", "这几行缺少 {modid}，请修正后再保存：\n" + "\n".join(bad[:3]))
+                return
+            self.config["lookup_sites"] = lines
+            core.save_config(self.config)
+            self.status_var.set(f"查询源已保存：{len(lines)} 个，下次查询生效。")
+            window.destroy()
+
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(10, 0))
+        make_action_button(btns, "保存", save, ACCENT).pack(side="right")
+        ttk.Button(btns, text="取消", command=window.destroy).pack(side="right", padx=(0, 8))
+        self._center_over(window, 580, 340)
+
+    def _maybe_auto_update_check(self) -> None:
+        if self._closing or not self.config.get("update_auto_check", True):
+            return
+        if time.time() - float(self.config.get("update_last_check") or 0) < 7 * 86400:
+            return
+        self._start_update_check(manual=False)
+
+    def _start_update_check(self, manual: bool) -> None:
+        if self.checking_update:
+            return
+        self.checking_update = True
+        self.config["update_last_check"] = time.time()
+        try:
+            core.save_config(self.config)
+        except OSError:
+            pass
+        if manual:
+            self.status_var.set("正在检查更新……")
+        threading.Thread(
+            target=lambda: self.result_queue.put(("update_check", (core.latest_github_release(APP_VERSION), manual))),
+            daemon=True,
+        ).start()
+
+    def _show_update_offer(self, info: dict[str, str]) -> None:
+        window = tk.Toplevel(self)
+        window.title(f"发现新版本 v{info['version']} - 摆渡计划")
+        window.transient(self)
+        body = ttk.Frame(window, padding=18)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=f"发现新版本 v{info['version']}（当前 v{APP_VERSION}）", font=FONT_TITLE).pack(anchor="w")
+        notes = tk.Text(body, height=10, wrap="word")
+        notes.pack(fill="both", expand=True, pady=(8, 0))
+        notes.insert("1.0", info["notes"] or "（无更新说明）")
+        notes.configure(state="disabled")
+        auto = tk.BooleanVar(value=bool(self.config.get("update_auto_check", True)))
+        ttk.Checkbutton(body, text="启动时自动检查更新（每周最多一次）", variable=auto).pack(anchor="w", pady=(8, 0))
+
+        def save_toggle() -> None:
+            self.config["update_auto_check"] = auto.get()
+            core.save_config(self.config)
+
+        def open_page() -> None:
+            save_toggle()
+            try:
+                os.startfile(info["url"])
+            except OSError:
+                pass
+            window.destroy()
+
+        def auto_update() -> None:
+            save_toggle()
+            if not info["asset_url"]:
+                open_page()
+                return
+            if not getattr(sys, "frozen", False):
+                messagebox.showinfo("自动更新", "以脚本方式运行时不做自动替换，请到发布页下载新版本。")
+                open_page()
+                return
+            window.destroy()
+            self._download_update(info)
+
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(12, 0))
+        make_action_button(btns, "自动更新", auto_update, ACCENT).pack(side="right")
+        ttk.Button(btns, text="打开发布页", command=open_page).pack(side="right", padx=(6, 8))
+        ttk.Button(btns, text="以后再说", command=lambda: (save_toggle(), window.destroy())).pack(side="right")
+        self._center_over(window, 560, 420)
+
+    def _download_update(self, info: dict[str, str]) -> None:
+        exe = Path(sys.executable)
+        dest = exe.with_name("ProjectFerry.update.exe")
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        self.progress.configure(value=0, maximum=max(1, int(info.get("asset_size") or 1)))
+        self.status_var.set(f"正在下载 v{info['version']}……")
+
+        def worker() -> None:
+            try:
+                core.download_release_asset(
+                    info["asset_url"], dest,
+                    progress=lambda done, total: self.result_queue.put(("update_progress", (done, total))),
+                )
+                self.result_queue.put(("update_ready", (dest, info["version"])))
+            except Exception as exc:
+                self.result_queue.put(("update_failed", core.redact_secrets(str(exc))))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_update_swap(self, payload: tuple[Path, str]) -> None:
+        dest, version = payload
+        self.progress.configure(value=0)
+        if not getattr(sys, "frozen", False) or not dest.is_file() or dest.stat().st_size < 1048576:
+            dest.unlink(missing_ok=True)
+            self.status_var.set("下载的更新文件无效，请到发布页手动下载。")
+            return
+        exe = Path(sys.executable)
+        try:
+            old = exe.with_name(exe.stem + ".old.exe")
+            if old.exists():
+                old.unlink()
+            os.replace(exe, old)
+            try:
+                os.replace(dest, exe)
+            except OSError:
+                os.replace(old, exe)
+                raise
+        except OSError as exc:
+            self.status_var.set(f"自动更新失败：{exc}。可到发布页手动下载。")
+            return
+        self.status_var.set(f"已更新到 v{version}，重启程序后生效。")
+        if messagebox.askyesno("更新完成", f"已更新到 v{version}。现在重启摆渡计划吗？"):
+            try:
+                os.startfile(str(exe))
+            except OSError:
+                pass
+            self._on_close()
 
     def _show_limits(self) -> None:
         window = tk.Toplevel(self)
@@ -1557,6 +1799,7 @@ class FerryApp(tk.Tk):
 
         btn_row = ttk.Frame(body)
         btn_row.pack(fill="x", pady=(14, 0))
+        ttk.Button(btn_row, text="检查更新", command=lambda: self._start_update_check(manual=True)).pack(side="left", padx=(8, 0))
         ttk.Button(btn_row, text="打开项目目录", command=self.open_project).pack(side="left")
         ttk.Button(btn_row, text="关闭", command=window.destroy).pack(side="right")
         self._center_over(window, 640, 580)
@@ -1576,6 +1819,11 @@ class FerryApp(tk.Tk):
         concurrency_var = tk.IntVar(value=int(self.concurrency_var.get()))
         ttk.Spinbox(row, from_=1, to=16, textvariable=concurrency_var, width=5).pack(side="left")
         ttk.Label(row, text="（多个批次同时翻译，加速；MyMemory 免费额度有限，建议 2~4）", foreground=MUTED).pack(side="left", padx=(8, 0))
+
+        lookup_row = ttk.Frame(body)
+        lookup_row.pack(fill="x", pady=(10, 0))
+        ttk.Label(lookup_row, text="在线汉化查询源：").pack(side="left")
+        ttk.Button(lookup_row, text="编辑查询源…", command=self._show_lookup_sites_editor).pack(side="left", padx=(6, 0))
 
         ttk.Label(body, text="多模型并发池（可添加你自建的多个 API，并行翻译不同批次）", font=FONT_BOLD).pack(anchor="w", pady=(0, 6))
         ttk.Label(body, text="每行一个模型：引擎 / 模型 / 权重 / 地址。权重越大承担越多批次，用于按字符量平摊各 API 的资费。", foreground=MUTED, wraplength=610).pack(anchor="w", pady=(0, 6))
@@ -2348,6 +2596,10 @@ class FerryApp(tk.Tk):
                         english=[file for file in scan.english if file.modid in modids],
                         community=scan.community, ai=scan.ai, reverted=scan.reverted,
                     )
+                    core.ensure_community_pack(
+                        Path(settings["cache_dir"]), allow_fetch=True,
+                        progress=lambda done, total: self.result_queue.put(("status", f"下载社区汉化整合包…… {max(1, done // 1048576)}/{max(1, total // 1048576)} MB")),
+                    )
                     baseline = core.fetch_community_baseline(candidate_scan, config, Path(settings["cache_dir"]), modids)
                     baseline_files = [core.LangFile(modid, "zh_cn", "community-baseline", data) for modid, data in baseline.items()]
                     entries = core.entries_with_baseline(scan, baseline, set(self.whitelist), modids, settings["fill_community"], settings["refine_community"])
@@ -2427,6 +2679,12 @@ class FerryApp(tk.Tk):
             self.limits_button.configure(state="normal" if hardcoded else "disabled")
             self.all_rows = rows
             self._render_rows()
+            if self.config.get("community_enabled", True):
+                threading.Thread(
+                    target=core.ensure_community_pack,
+                    args=(core.app_dir() / "ferry_cache",),
+                    daemon=True,
+                ).start()
             ai_mods = sum(1 for r in rows if not r["placeholder"] and not r["has_community"])
             com_mods = sum(1 for r in rows if not r["placeholder"] and r["has_community"])
             partial = sum(1 for r in rows if not r["placeholder"] and not r["has_community"] and r["ai"] > 0 and r["missing"] > 0)
@@ -2512,11 +2770,34 @@ class FerryApp(tk.Tk):
             self.glossary_button.configure(state="normal")
             self.status_var.set(f"术语表已更新：{payload} 条，下次翻译自动生效。")
             messagebox.showinfo("术语表更新", f"已更新 {payload} 条术语到 user_glossary.json。")
+        elif kind == "lookup_done":
+            self.looking_up = False
+            self.lookup_button.configure(state="normal")
+            self._show_lookup_results(payload)
+        elif kind == "update_check":
+            self.checking_update = False
+            info, manual = payload
+            if info:
+                self._show_update_offer(info)
+            elif manual:
+                self.status_var.set(f"已是最新版本 {APP_VERSION}。")
+        elif kind == "update_progress":
+            done, total = payload
+            self.progress.configure(maximum=max(1, total), value=done)
+            percent = f"（{done * 100 // max(1, total)}%）" if total else ""
+            self.status_var.set(f"正在下载更新……{percent}")
+        elif kind == "update_ready":
+            self._apply_update_swap(payload)
+        elif kind == "update_failed":
+            self.status_var.set(f"更新下载失败：{payload}。可到发布页手动下载。")
         else:
             self.scanning = False
             self.translating = False
             self.updating_glossary = False
+            self.looking_up = False
+            self.checking_update = False
             self.glossary_button.configure(state="normal")
+            self.lookup_button.configure(state="normal")
             self._set_translating_ui(False)
             self.progress.configure(value=0)
             self.status_var.set("出错了，详情见弹窗。")
