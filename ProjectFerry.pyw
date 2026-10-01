@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.6.2"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -1512,7 +1512,7 @@ class FerryApp(tk.Tk):
             cache_dir = core.app_dir() / "ferry_cache"
 
             def pack_progress(done: int, total: int) -> None:
-                self.result_queue.put(("status", f"下载社区汉化整合包…… {max(1, done // 1048576)}/{max(1, total // 1048576)} MB"))
+                self.result_queue.put(("pack_progress", (done, total)))
 
             pack = core.ensure_community_pack(cache_dir, allow_fetch=True, progress=pack_progress)
             results = core.query_online_translations(
@@ -2651,10 +2651,9 @@ class FerryApp(tk.Tk):
                         english=[file for file in scan.english if file.modid in modids],
                         community=scan.community, ai=scan.ai, reverted=scan.reverted,
                     )
-                    core.ensure_community_pack(
-                        Path(settings["cache_dir"]), allow_fetch=True,
-                        progress=lambda done, total: self.result_queue.put(("status", f"下载社区汉化整合包…… {max(1, done // 1048576)}/{max(1, total // 1048576)} MB")),
-                    )
+                    # 只用已缓存的整合包：在线下载会卡住翻译线程（进度条看起来就是死的）。
+                    # 首次运行还没下完时本回合跳过基线，扫描后的预热线程会补上，下次翻译生效。
+                    core.ensure_community_pack(Path(settings["cache_dir"]), allow_fetch=False)
                     baseline = core.fetch_community_baseline(candidate_scan, config, Path(settings["cache_dir"]), modids)
                     baseline_files = [core.LangFile(modid, "zh_cn", "community-baseline", data) for modid, data in baseline.items()]
                     entries = core.entries_with_baseline(scan, baseline, set(self.whitelist), modids, settings["fill_community"], settings["refine_community"])
@@ -2831,7 +2830,12 @@ class FerryApp(tk.Tk):
         elif kind == "lookup_done":
             self.looking_up = False
             self.lookup_button.configure(state="normal")
+            self.progress.configure(value=0)
             self._show_lookup_results(payload)
+        elif kind == "pack_progress":
+            done, total = payload
+            self.progress.configure(maximum=max(1, total), value=done)
+            self.status_var.set(f"下载社区汉化整合包…… {max(1, done // 1048576)}/{max(1, total // 1048576)} MB")
         elif kind == "update_check":
             self.checking_update = False
             info, manual = payload
