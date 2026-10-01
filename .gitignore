@@ -41,6 +41,7 @@ Thumbs.db
 
 # 本地代理协作工具
 .workbuddy/
+_push_retry.sh
 
 # 内部代理工作笔记 / 调试残留：不对外发布
 task_plan.md
