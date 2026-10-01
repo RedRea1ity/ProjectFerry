@@ -25,9 +25,9 @@ venv/
 env/
 
 # PyInstaller 构建产物（ProjectFerry.exe 在仓库根，另行提交）
+# ProjectFerry.spec 是源文件，需要提交（release CI 用它构建）
 build/
 dist/
-*.spec
 
 # 编辑器 / 系统
 .idea/
