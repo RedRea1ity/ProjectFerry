@@ -1476,7 +1476,9 @@ def write_pack(output: Path, translations: dict[str, dict[str, str]], pack_forma
             if pack_format <= 3:
                 if any("\n" in key or "\r" in key for key in data):
                     raise ValueError(f"{modid} 的语言 key 包含换行，无法写入旧版 .lang")
-                content = "\n".join(f"{key}={value.replace(chr(13), '').replace(chr(10), r'\n')}" for key, value in sorted(data.items())) + "\n"
+                # 3.11 的 f-string 表达式里不允许反斜杠，换行转义先在表达式外拼好。
+                escaped_newline = chr(92) + "n"
+                content = "\n".join(f"{key}={value.replace(chr(13), '').replace(chr(10), escaped_newline)}" for key, value in sorted(data.items())) + "\n"
                 # 1.11（pack_format 3）起资源包内文件名要求全小写；1.6.1–1.10.2 的语言区域代码仍是 zh_CN。
                 lang_name = "zh_cn.lang" if pack_format >= 3 else "zh_CN.lang"
                 zf.writestr(f"assets/{modid}/lang/{lang_name}", content.encode("utf-8"))
