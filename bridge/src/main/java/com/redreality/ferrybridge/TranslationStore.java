@@ -1,6 +1,7 @@
 package com.redreality.ferrybridge;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.nio.file.Files;
@@ -32,11 +33,11 @@ final class TranslationStore {
             if (root == null || !root.has("map") || !root.get("map").isJsonObject()) {
                 return "映射表格式不对（缺少 map 字段）";
             }
-            for (Map.Entry<String,?> entry : root.getAsJsonObject("map").entrySet()) {
+            for (Map.Entry<String, JsonElement> entry : root.getAsJsonObject("map").entrySet()) {
                 String english = entry.getKey();
                 if (english == null || english.isBlank()) continue;
-                String chinese = entry.getValue() != null && entry.getValue().isJsonPrimitive()
-                        ? entry.getValue().getAsString() : null;
+                JsonElement value = entry.getValue();
+                String chinese = value != null && value.isJsonPrimitive() ? value.getAsString() : null;
                 if (chinese != null && !chinese.isBlank()) {
                     loaded.put(english, chinese);
                 }
