@@ -24,6 +24,10 @@ __pycache__/
 venv/
 env/
 
+# 桥接模组的 Gradle 缓存 / 运行目录
+bridge/.gradle/
+bridge/run/
+
 # PyInstaller 构建产物（ProjectFerry.exe 在仓库根，另行提交）
 # ProjectFerry.spec 是源文件，需要提交（release CI 用它构建）
 build/

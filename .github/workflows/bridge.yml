@@ -1,0 +1,39 @@
+name: bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bridge/**"
+      - ".github/workflows/bridge.yml"
+    tags:
+      - "bridge-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.1.1"
+      - name: Build bridge jar
+        run: gradle build -p bridge --no-daemon
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferrybridge-jar
+          path: bridge/build/libs/*.jar
+          if-no-files-found: error
+      - name: Publish bridge release
+        if: startsWith(github.ref, 'refs/tags/bridge-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bridge/build/libs/*.jar

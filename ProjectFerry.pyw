@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.7.0"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -545,6 +545,8 @@ class FerryApp(tk.Tk):
         self.quality_button.pack(side="right", padx=(6, 0))
         self.lookup_button = ttk.Button(bottom, text="查询在线汉化", command=self.start_online_lookup)
         self.lookup_button.pack(side="right", padx=(6, 0))
+        self.bridge_button = ttk.Button(bottom, text="导出桥接映射", command=self.export_bridge_mapping)
+        self.bridge_button.pack(side="right", padx=(6, 0))
         ttk.Label(bottom, text="双击行直接翻译；右键可卸载、还原、重翻，详见「使用说明」。", font=FONT_SMALL, foreground=FAINT).pack(side="left")
 
         # 先从下往上预留 底栏 → 设置 → 翻译区，再让表格占剩余空间；
@@ -1492,6 +1494,37 @@ class FerryApp(tk.Tk):
         ])
         ttk.Button(body, text="关闭", command=window.destroy).pack(anchor="e", pady=(16, 0))
         self._center_over(window, 580, 500)
+
+    def export_bridge_mapping(self) -> None:
+        """把扫描到的英文原文 + 已有中文译文导出成摆渡桥的映射表。"""
+        if self.scanning:
+            messagebox.showinfo("提示", "正在扫描，请稍候再导出。")
+            return
+        instance_value = self.path_var.get().strip()
+        scan = self.scan_cache.get(instance_value)
+        if scan is None:
+            messagebox.showinfo("提示", "请先扫描实例，再导出桥接映射。")
+            return
+        try:
+            settings = core.resolve_translate_settings(self._snapshot_config(), Path(instance_value))
+            pack = Path(settings["output_dir"]) / settings["pack_name"]
+            ai_by_modid = core.load_pack_translations(pack)
+        except (OSError, ValueError):
+            ai_by_modid = {}
+        mapping = core.build_bridge_mapping(scan.english, scan.community, ai_by_modid)
+        if not mapping:
+            self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
+            return
+        target_dir = Path(instance_value) / "config" / "ferrybridge"
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            payload = {"format": 1, "generated": time.strftime("%Y-%m-%d %H:%M:%S"), "count": len(mapping), "map": mapping}
+            target = target_dir / "translations.json"
+            target.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("导出桥接映射", f"写入失败：{exc}")
+            return
+        self.status_var.set(f"桥接映射已导出 {len(mapping)} 条 → {target}；装上摆渡桥模组后进游戏按重载键生效。")
 
     def start_online_lookup(self) -> None:
         """选中若干模组，逐个查询源探测网上有没有现成汉化。"""

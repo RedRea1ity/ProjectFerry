@@ -99,6 +99,18 @@ class VersionDetectionTests(unittest.TestCase):
                 self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c1", online=True), 100.5)
             self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c2", online=False), 99.0)
 
+    def test_build_bridge_mapping_prefers_human_over_ai(self):
+        english = [core.LangFile("demo", "en_us", "jar", {
+            "item.a": "Apple", "item.b": "Pear", "item.same": "Same", "item.blank": "Blank",
+        })]
+        community = [core.LangFile("demo", "zh_cn", "human", {"item.a": "人工苹果", "item.blank": "  "})]
+        ai = {"demo": {"item.a": "AI 苹果", "item.b": "AI 梨", "item.same": "Same"}}
+        mapping = core.build_bridge_mapping(english, community, ai)
+        self.assertEqual(mapping["Apple"], "人工苹果", "人工译文优先")
+        self.assertEqual(mapping["Pear"], "AI 梨")
+        self.assertNotIn("Same", mapping, "译文等于原文的键没有价值")
+        self.assertNotIn("Blank", mapping, "空译文不导出")
+
     def test_latest_github_release_compares_versions(self):
         import unittest.mock as mock
         release = {"tag_name": "v1.6.0", "body": "更新说明", "html_url": "https://example.com/r",

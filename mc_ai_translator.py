@@ -965,6 +965,26 @@ def reference_examples(batch: list[Entry], corpus: dict[str, tuple[str, str]], l
     return [{"key": key, "en": corpus[key][0], "zh": corpus[key][1]} for key in ranked[:limit]]
 
 
+def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_by_modid: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+    """汇总 英文原文 -> 中文 的显示映射，供摆渡桥模组做 NBT/硬编码文本替换；人工译文优先于 AI。"""
+    en_by_mod: dict[str, dict[str, str]] = {}
+    for file in english:
+        en_by_mod.setdefault(file.modid, {}).update(file.data)
+    zh_by_mod: dict[str, dict[str, str]] = {}
+    for modid, data in (ai_by_modid or {}).items():
+        zh_by_mod.setdefault(modid, {}).update({k: v for k, v in data.items() if v and str(v).strip()})
+    for file in community:
+        zh_by_mod.setdefault(file.modid, {}).update({k: v for k, v in file.data.items() if v and str(v).strip()})
+    pairs: dict[str, str] = {}
+    for modid, entries in en_by_mod.items():
+        zhs = zh_by_mod.get(modid, {})
+        for key, english_text in entries.items():
+            zh = zhs.get(key)
+            if english_text.strip() and zh and str(zh).strip() and english_text != zh:
+                pairs.setdefault(english_text, str(zh))
+    return pairs
+
+
 def _normalize_reverted(reverted: dict[str, set[str]] | None) -> dict[str, set[str]]:
     result: dict[str, set[str]] = {}
     for modid, keys in (reverted or {}).items():

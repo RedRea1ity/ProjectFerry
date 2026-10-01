@@ -1,0 +1,26 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+issueTrackerURL="https://github.com/RedRea1ity/ProjectFerry/issues"
+
+[[mods]]
+modId="ferrybridge"
+version="1.0.0"
+displayName="摆渡桥 FerryBridge"
+authors="红现实"
+description='''摆渡计划的 NBT / 硬编码文本显示层桥接：按英文原文精确替换渲染文本，不改存档、不改模组文件，删掉即还原。'''
+displayTest="IGNORE_ALL_VERSION"
+
+[[dependencies.ferrybridge]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.ferrybridge]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1,1.21)"
+    ordering="NONE"
+    side="CLIENT"
