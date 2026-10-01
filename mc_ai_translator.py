@@ -2781,6 +2781,12 @@ def command_scan(args: argparse.Namespace) -> int:
 
 
 def command_translate(args: argparse.Namespace) -> int:
+    # 英文区域的 Windows 控制台（cp1252）编不了中文提示：宁可显示成 ? 也不让 CLI 崩溃。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     config = load_config()
     instance, mods, resourcepacks = instance_dirs_from_args(args)
     overrides = {
