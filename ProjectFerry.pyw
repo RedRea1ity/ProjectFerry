@@ -22,11 +22,11 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.5.0"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
-PROJECT_URL = "https://github.com/RedRea1ity/-_-ai_-"
+PROJECT_URL = "https://github.com/RedRea1ity/ProjectFerry"
 
 ENGINE_KEY_FIELDS = {
     "openai": "openai_api_key",
@@ -63,8 +63,29 @@ CUSTOM_LABEL_TO_ENGINE = {v: k for k, v in CUSTOM_ENGINES.items()}
 
 PLACEHOLDER_MODID = "—— 无待汉化模组 ——"
 
+# —— 视觉基调：渡口水色。冷灰底 + 渡船蓝，只让主操作带颜色，其余安静。 ——
+BG = "#EEF1F5"          # 窗底
+CARD = "#FFFFFF"        # 卡片 / 表格底
+BORDER = "#D8DEE6"      # 描边
+INK = "#26313D"         # 主文字
+BODY_INK = "#4E5964"    # 次文字
+MUTED = "#74808D"       # 说明文字
+FAINT = "#9AA5B1"       # 弱提示
+ACCENT = "#1B5E9F"      # 渡船蓝：主操作 / 链接 / 进度
+GREEN = "#1E7A3C"       # 完成 / 开始翻译
+AMBER = "#9A6A00"       # 部分完成 / 待确认
+RED = "#C2372E"         # 失败 / 停止
+SELECT_BG = "#DDE9F7"   # 表格选中行
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_TITLE = (FONT_FAMILY, 12, "bold")
+FONT_BODY = (FONT_FAMILY, 10)
+FONT_BOLD = (FONT_FAMILY, 10, "bold")
+FONT_SMALL = (FONT_FAMILY, 9)
+FONT_SMALL_BOLD = (FONT_FAMILY, 9, "bold")
+
 # C：筛选档位（顺序即下拉框顺序）。
 TABLE_FILTERS = ["全部", "只看有缺口", "只看失败", "只看含人工汉化", "只看疑似硬编码", "只看已完成"]
+SEARCH_PLACEHOLDER = "搜索模组名或状态…"
 
 
 def _shade(color: str, factor: float) -> str:
@@ -83,13 +104,20 @@ def _shade(color: str, factor: float) -> str:
 class RoundedButton(tk.Canvas):
     """圆角高亮按钮：外观与原生按钮一致，支持文字 / 状态切换。"""
 
-    def __init__(self, parent, text: str = "", command=None, fill: str = "#185FA5", fg: str = "#FFFFFF",
-                 font=("Microsoft YaHei UI", 10, "bold"), padx: int = 16, pady: int = 5,
-                 radius: int = 8, state: str = "normal", **kwargs):
-        try:
-            background = ttk.Style(parent).lookup("TFrame", "background") or "#F0F0F0"
-        except Exception:
-            background = "#F0F0F0"
+    def __init__(self, parent, text: str = "", command=None, fill: str = ACCENT, fg: str = "#FFFFFF",
+                 font=FONT_BOLD, padx: int = 18, pady: int = 6,
+                 radius: int = 7, state: str = "normal", **kwargs):
+        bg = kwargs.pop("bg", None)
+        if bg is None:
+            try:
+                bg = parent.cget("background")
+            except Exception:
+                bg = None
+        if not bg:
+            try:
+                bg = ttk.Style(parent).lookup("TFrame", "background") or BG
+            except Exception:
+                bg = BG
         self._text = text
         self._command = command
         self._fill = fill
@@ -105,7 +133,7 @@ class RoundedButton(tk.Canvas):
         text_h = metrics.metrics("linespace") if text else 0
         self._width = int(kwargs.pop("width", 0) or (text_w + 2 * padx))
         self._height = int(kwargs.pop("height", 0) or (text_h + 2 * pady))
-        super().__init__(parent, width=self._width, height=self._height, highlightthickness=0, bd=0, bg=background, **kwargs)
+        super().__init__(parent, width=self._width, height=self._height, highlightthickness=0, bd=0, bg=bg, **kwargs)
         self.configure(cursor="hand2")
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
@@ -116,8 +144,8 @@ class RoundedButton(tk.Canvas):
     def _draw(self) -> None:
         self.delete("all")
         disabled = self._state == "disabled"
-        base = "#9AA0A6" if disabled else self._fill
-        color = _shade(base, 0.88) if (self._hover and not disabled) else base
+        base = "#AEB6BF" if disabled else self._fill
+        color = _shade(base, 0.9) if (self._hover and not disabled) else base
         fg = "#EDEDED" if disabled else self._fg
         w, h, r = self._width, self._height, self._radius
         points = [
@@ -184,8 +212,8 @@ class RoundedButton(tk.Canvas):
         return super().cget(key)
 
 
-def make_action_button(parent, text: str, command, color: str, state: str = "normal") -> RoundedButton:
-    return RoundedButton(parent, text=text, command=command, fill=color, state=state)
+def make_action_button(parent, text: str, command, color: str, state: str = "normal", bg: str | None = None) -> RoundedButton:
+    return RoundedButton(parent, text=text, command=command, fill=color, state=state, bg=bg)
 
 
 STATUS_SYMBOLS = {
@@ -197,12 +225,6 @@ STATUS_TAGS = {
     "pending": "status_pending", "community": "status_community", "reverted": "status_reverted",
     "uninstalled": "status_uninstalled", "failed": "failed",
 }
-
-
-def mini_bar(percent: int, width: int = 8) -> str:
-    percent = max(0, min(100, int(percent)))
-    filled = int(round(percent / 100 * width))
-    return "█" * filled + "░" * (width - filled)
 
 
 def _enable_high_dpi() -> None:
@@ -252,6 +274,7 @@ class FerryApp(tk.Tk):
         self.row_modids: dict[str, str] = {}
         self.uninstalled_by_row: set[str] = set()
         self.coverage_by_row: dict[str, str] = {}
+        self.status_tip_by_row: dict[str, str] = {}
         self.coverage_tip: tk.Toplevel | None = None
         self.coverage_hover_item = ""
         self.scan_cache: dict[str, core.ScanResult] = {}
@@ -277,87 +300,118 @@ class FerryApp(tk.Tk):
                 style.theme_use("vista")
         except Exception:
             pass
-        # 表格文字等比放大：行高、正文字号、表头字号一起调大。
-        style.configure("Treeview", rowheight=32, font=("Microsoft YaHei UI", 11))
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 11, "bold"))
+        # 统一观感：灰底画布 + 白卡片，字体全走同一族；颜色只给主操作和状态。
+        style.configure("TFrame", background=BG)
+        style.configure("TLabel", background=BG, foreground=INK, font=FONT_BODY)
+        style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=FONT_SMALL)
+        style.configure("Card.TFrame", background=CARD)
+        style.configure("Card.TLabel", background=CARD, foreground=INK, font=FONT_BODY)
+        style.configure("Card.Muted.TLabel", background=CARD, foreground=MUTED, font=FONT_SMALL)
+        style.configure("Card.TCheckbutton", background=CARD, foreground=INK, font=FONT_BODY)
+        style.configure("TCheckbutton", background=BG, foreground=INK, font=FONT_BODY)
+        style.configure("Treeview", rowheight=30, font=FONT_BODY, background=CARD, fieldbackground=CARD, borderwidth=0)
+        style.configure("Treeview.Heading", font=FONT_SMALL_BOLD, background=BG, foreground=BODY_INK, relief="flat", padding=(2, 6))
+        style.map("Treeview.Heading", background=[("active", BG)])
+        style.map("Treeview", background=[("selected", SELECT_BG)], foreground=[("selected", INK)])
+        style.configure("Horizontal.TProgressbar", troughcolor="#E2E7EE", background=ACCENT, thickness=6, borderwidth=0)
 
-        root = ttk.Frame(self, padding=8)
+        root = ttk.Frame(self, padding=(12, 10, 12, 10))
         root.pack(fill="both", expand=True)
-        ttk.Label(root, text="摆渡计划 / ProjectFerry", font=("Microsoft YaHei UI", 15, "bold")).pack(anchor="w")
-        ttk.Label(root, text="只补缺口，不覆盖也不改动任何已有的人工译文；改动只发生在资源包，删除即还原。", foreground="#185FA5", wraplength=680).pack(anchor="w", pady=(1, 6))
+
+        # 顶栏：图标 + 名字 + slogan；右侧只留三个常驻入口，低频功能全部收进弹窗。
+        header = ttk.Frame(root)
+        header.pack(fill="x", pady=(0, 8))
+        header_icon = self._icon_image(22)
+        if header_icon is not None:
+            self._header_icon_img = header_icon  # 保持引用，避免被回收
+            tk.Label(header, image=header_icon, bg=BG).pack(side="left", padx=(0, 8))
+        ttk.Label(header, text=APP_DISPLAY, font=FONT_TITLE).pack(side="left")
+        ttk.Label(header, text=APP_NAME, font=FONT_SMALL, foreground=FAINT).pack(side="left", padx=(7, 12), pady=(4, 0))
+        ttk.Label(header, text=APP_SLOGAN, font=FONT_SMALL, foreground=FAINT).pack(side="left", pady=(4, 0))
+        for text, command in (("关于", self._show_about), ("设置", self._show_settings), ("使用说明", self._show_help)):
+            link = tk.Label(header, text=text, fg=ACCENT, bg=BG, font=FONT_SMALL, cursor="hand2")
+            link.pack(side="right", padx=(12, 0), pady=(3, 0))
+            link.bind("<Button-1>", lambda _e, c=command: c())
 
         self.path_var = tk.StringVar()
         self.instance_paths: list[Path] = []
 
-        instance_box = ttk.LabelFrame(root, text="Minecraft 实例")
-        instance_box.pack(fill="x", pady=(0, 6))
+        # 第一步：选实例。收进一张白卡片，让「扫描」成为这一屏唯一的主按钮。
+        ttk.Label(root, text="实例", font=FONT_SMALL_BOLD, foreground=MUTED).pack(anchor="w", pady=(0, 3))
+        instance_card = tk.Frame(root, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+        instance_card.pack(fill="x", pady=(0, 8))
+        instance_box = ttk.Frame(instance_card, style="Card.TFrame", padding=10)
+        instance_box.pack(fill="both", expand=True)
         instance_box.columnconfigure(0, weight=1)
 
-        inst_row = ttk.Frame(instance_box)
-        inst_row.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 4))
+        inst_row = ttk.Frame(instance_box, style="Card.TFrame")
+        inst_row.grid(row=0, column=0, sticky="ew")
         inst_row.columnconfigure(0, weight=1)
-
-        self.instance_combo = ttk.Combobox(inst_row, state="readonly", width=34, height=8)
-        self.instance_combo.grid(row=0, column=0, sticky="w")
+        self.instance_combo = ttk.Combobox(inst_row, state="readonly", height=8, font=FONT_BODY)
+        self.instance_combo.grid(row=0, column=0, sticky="ew")
         self.instance_combo.bind("<<ComboboxSelected>>", self._instance_selected)
+        self.scan_button = make_action_button(inst_row, "扫描", self.start_scan, ACCENT, bg=CARD)
+        self.scan_button.grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(inst_row, text="浏览…", command=self.choose_path).grid(row=0, column=2, padx=(6, 0))
+        ttk.Button(inst_row, text="刷新", command=self.refresh_instances).grid(row=0, column=3, padx=(6, 0))
 
-        inst_btns = ttk.Frame(inst_row)
-        inst_btns.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        ttk.Button(inst_btns, text="刷新实例", command=self.refresh_instances).pack(side="left")
-        ttk.Button(inst_btns, text="扫描当前实例", command=self.start_scan).pack(side="left", padx=(6, 0))
-        ttk.Button(inst_btns, text="浏览…", command=self.choose_path).pack(side="left", padx=(6, 0))
-        ttk.Button(inst_btns, text="用户白名单", command=self.manage_whitelist).pack(side="left", padx=(6, 0))
-
-        # F：下拉框只显示实例名，这里用一行实时显示完整路径，避免选错实例。
+        # 下拉框只显示实例名，下面一行实时显示完整路径，避免选错实例。
+        path_row = ttk.Frame(instance_box, style="Card.TFrame")
+        path_row.grid(row=1, column=0, sticky="ew", pady=(7, 0))
+        path_row.columnconfigure(0, weight=1)
         self.instance_path_var = tk.StringVar(value="")
-        ttk.Label(instance_box, textvariable=self.instance_path_var, foreground="#666666", wraplength=1180, justify="left").grid(row=1, column=0, sticky="w", padx=10, pady=(0, 6))
+        ttk.Label(path_row, textvariable=self.instance_path_var, style="Card.Muted.TLabel", justify="left").grid(row=0, column=0, sticky="w")
+        ttk.Button(path_row, text="用户白名单", command=self.manage_whitelist).grid(row=0, column=1)
         self.path_var.trace_add("write", lambda *_: self.instance_path_var.set(self.path_var.get()))
 
-        # 状态 + 游戏版本/格式合并到一行，减少一条横带。
+        # 状态行：一件事一行。左边说进展，右边给游戏版本；颜色随内容变化（忙=蓝，成=绿，坏=红）。
         status_row = ttk.Frame(root)
-        status_row.pack(fill="x", pady=(0, 4))
-        self.status_var = tk.StringVar(value="正在准备扫描……")
-        ttk.Label(status_row, textvariable=self.status_var, foreground="#185FA5", wraplength=720, justify="left").pack(side="left", fill="x", expand=True)
-        self.pack_format_var = tk.StringVar(value="游戏版本待检测")
-        ttk.Label(status_row, textvariable=self.pack_format_var, foreground="#666666").pack(side="right", padx=(8, 0))
+        status_row.pack(fill="x", pady=(0, 6))
+        self.status_var = tk.StringVar(value="正在探测本机 Minecraft 实例……")
+        self.status_label = ttk.Label(status_row, textvariable=self.status_var, foreground=ACCENT, wraplength=600, justify="left", font=FONT_BODY)
+        self.status_label.pack(side="left", fill="x", expand=True)
+        self.pack_format_var = tk.StringVar(value="")
+        ttk.Label(status_row, textvariable=self.pack_format_var, foreground=MUTED, font=FONT_SMALL).pack(side="right", padx=(8, 0))
         ttk.Button(status_row, text="格式…", width=6, command=self._choose_pack_format).pack(side="right", padx=(6, 0))
+        self.status_var.trace_add("write", self._tone_status)
 
         toolbar = ttk.Frame(root)
-        toolbar.pack(fill="x", pady=(0, 4))
-        ttk.Label(toolbar, text="搜索：").pack(side="left")
+        toolbar.pack(fill="x", pady=(0, 5))
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=22)
+        self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=30, font=FONT_BODY, foreground=FAINT)
         self.search_entry.pack(side="left")
+        self.search_entry.insert(0, SEARCH_PLACEHOLDER)
+        self.search_entry.bind("<FocusIn>", self._search_focus_in)
+        self.search_entry.bind("<FocusOut>", self._search_focus_out)
         self.search_var.trace_add("write", lambda *_: self._render_rows())
-        # G：清除按钮。
-        ttk.Button(toolbar, text="×", width=3, command=self._clear_search).pack(side="left", padx=(2, 10))
-        ttk.Label(toolbar, text="显示：").pack(side="left")
+        ttk.Button(toolbar, text="×", width=3, command=self._clear_search).pack(side="left", padx=(3, 12))
+        ttk.Label(toolbar, text="筛选", font=FONT_SMALL, foreground=MUTED).pack(side="left")
         self.filter_var = tk.StringVar(value="全部")
-        self.filter_combo = ttk.Combobox(toolbar, textvariable=self.filter_var, state="readonly", width=16, values=TABLE_FILTERS)
-        self.filter_combo.pack(side="left")
+        self.filter_combo = ttk.Combobox(toolbar, textvariable=self.filter_var, state="readonly", width=15, values=TABLE_FILTERS, font=FONT_BODY)
+        self.filter_combo.pack(side="left", padx=(6, 0))
         self.filter_combo.bind("<<ComboboxSelected>>", lambda _event: self._render_rows())
         # D：对当前筛选后可见的行做全选 / 反选。
         ttk.Button(toolbar, text="反选", command=self._invert_selection).pack(side="right")
         ttk.Button(toolbar, text="全选", command=self._select_all_visible).pack(side="right", padx=(0, 6))
 
-        table_frame = ttk.Frame(root)
+        table_card = tk.Frame(root, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
         self.show_instance_column = False
         self.sort_column = "missing"
         self.sort_desc = True
         self.all_rows: list[dict] = []
-        self.tree = ttk.Treeview(table_frame, show="headings", selectmode="extended", height=10)
+        self.tree = ttk.Treeview(table_card, show="headings", selectmode="extended", height=10)
         self._configure_tree_columns(False)
-        self.tree.tag_configure("row_even", background="#F4F7FB")
-        self.tree.tag_configure("row_odd", background="#FFFFFF")
-        self.tree.tag_configure("status_done", foreground="#137A3F")
-        self.tree.tag_configure("status_partial", foreground="#B26A00")
-        self.tree.tag_configure("status_pending", foreground="#1A1A1A")
-        self.tree.tag_configure("status_community", foreground="#4C5A68")
+        self.tree.tag_configure("row_even", background="#F6F8FB")
+        self.tree.tag_configure("row_odd", background=CARD)
+        self.tree.tag_configure("status_done", foreground=GREEN)
+        self.tree.tag_configure("status_partial", foreground=AMBER)
+        self.tree.tag_configure("status_pending", foreground=BODY_INK)
+        self.tree.tag_configure("status_community", foreground="#5B6B7B")
         self.tree.tag_configure("status_reverted", foreground="#8A6D00")
         self.tree.tag_configure("status_uninstalled", foreground="#9A5A22")
-        self.tree.tag_configure("status_complete", foreground="#137A3F")
+        self.tree.tag_configure("status_complete", foreground=GREEN)
         self.tree.tag_configure("status_hardcoded", foreground="#8A4F00")
-        self.tree.tag_configure("failed", foreground="#C00000")
+        self.tree.tag_configure("failed", foreground=RED)
         self.tree.bind("<Double-1>", self._on_tree_double)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.bind("<Button-3>", self._on_tree_right_click)
@@ -373,80 +427,88 @@ class FerryApp(tk.Tk):
             self.bind("<Command-a>", self._on_ctrl_a)
         except tk.TclError:
             pass
-        yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
-        xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        yscroll = ttk.Scrollbar(table_card, orient="vertical", command=self.tree.yview)
+        xscroll = ttk.Scrollbar(table_card, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
         xscroll.grid(row=1, column=0, sticky="ew")
+        # 空状态：表格没内容时给出下一步动作，而不是一片空白。
+        self.empty_state = tk.Label(table_card, text="", bg=CARD, fg=MUTED, font=FONT_BODY, justify="center")
+        self.empty_state.grid(row=0, column=0, sticky="nsew")
+        self.empty_state.grid_remove()
+        # 表格随窗口拉伸：没有 weight 时 Treeview 只保持请求宽度，
+        # 右侧会留白、竖滚动条悬在半路、最大化后压不满。
+        table_card.rowconfigure(0, weight=1)
+        table_card.columnconfigure(0, weight=1)
+
+        # 翻译按钮 + 进度：紧贴表格下方；状态符号说明交给「使用说明」，不再铺一排小字。
+        run_zone = ttk.Frame(root)
+        run_bar = ttk.Frame(run_zone)
+        run_bar.pack(fill="x")
         self.selection_var = tk.StringVar(value="")
-        ttk.Label(table_frame, textvariable=self.selection_var, foreground="#666666", font=("Microsoft YaHei UI", 10)).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
-
-        # P2-4：进度文字 + 进度条紧贴表格下方。
-        self.progress_text_var = tk.StringVar(value="")
-        ttk.Label(table_frame, textvariable=self.progress_text_var, foreground="#555555", font=("Microsoft YaHei UI", 10)).grid(row=3, column=0, columnspan=2, sticky="w")
-        self.progress = ttk.Progressbar(table_frame, mode="determinate")
-        self.progress.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(2, 0))
-
-        # P0-3：翻译按钮从设置区移到表格下方，紧跟「看表格 → 选模组 → 点翻译」动线。
-        run_bar = ttk.Frame(table_frame)
-        run_bar.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Label(run_bar, text="翻译操作：", foreground="#555555").pack(side="left")
-        self.stop_button = make_action_button(run_bar, "停止", self._stop_translate, "#C0392B", state="disabled")
-        self.stop_button.pack(side="right", padx=(8, 0))
-        self.translate_all_button = make_action_button(run_bar, "翻译全部待AI", self._translate_all, "#1B7F3B")
-        self.translate_all_button.pack(side="right", padx=(8, 0))
-        self.translate_selected_button = make_action_button(run_bar, "翻译选中模组", self._translate_selected, "#185FA5")
+        ttk.Label(run_bar, textvariable=self.selection_var, foreground=MUTED, font=FONT_SMALL).pack(side="left")
+        self.stop_button = make_action_button(run_bar, "停止", self._stop_translate, RED, state="disabled")
+        self.stop_button.pack(side="right")
+        self.translate_all_button = make_action_button(run_bar, "翻译全部待AI", self._translate_all, GREEN)
+        self.translate_all_button.pack(side="right", padx=(8, 10))
+        self.translate_selected_button = make_action_button(run_bar, "翻译选中模组", self._translate_selected, ACCENT)
         self.translate_selected_button.pack(side="right")
-        table_frame.rowconfigure(0, weight=1)
-        table_frame.columnconfigure(0, weight=1)
+        progress_row = ttk.Frame(run_zone)
+        progress_row.pack(fill="x", pady=(7, 0))
+        self.progress_text_var = tk.StringVar(value="")
+        ttk.Label(progress_row, textvariable=self.progress_text_var, foreground=MUTED, font=FONT_SMALL).pack(side="right")
+        self.progress = ttk.Progressbar(progress_row, mode="determinate")
+        self.progress.pack(side="left", fill="x", expand=True)
 
-        # P1-1：翻译设置默认折叠，只留一行摘要；低频配置不再常驻占高。
-        translate_frame = ttk.LabelFrame(root, text="翻译设置")
-        settings_header = ttk.Frame(translate_frame)
-        settings_header.pack(fill="x", padx=10, pady=(6, 0))
+        # P1-1：翻译设置默认折叠成一行摘要；「并发 / 模型池」保持常驻入口。
+        settings_box = ttk.Frame(root)
+        settings_header = ttk.Frame(settings_box)
+        settings_header.pack(fill="x")
         self.settings_summary_var = tk.StringVar(value="")
-        ttk.Label(settings_header, textvariable=self.settings_summary_var, foreground="#555555").pack(side="left")
-        self.settings_toggle_button = ttk.Button(settings_header, text="展开", command=self._toggle_settings)
-        self.settings_toggle_button.pack(side="right")
+        ttk.Label(settings_header, textvariable=self.settings_summary_var, foreground=MUTED, font=FONT_SMALL).pack(side="left", padx=(2, 0))
+        ttk.Button(settings_header, text="并发 / 模型池…", command=self._show_settings).pack(side="right")
+        self.settings_toggle_button = tk.Label(settings_header, text="▸ 翻译设置", fg=ACCENT, bg=BG, font=FONT_SMALL_BOLD, cursor="hand2")
+        self.settings_toggle_button.pack(side="right", padx=(0, 12))
+        self.settings_toggle_button.bind("<Button-1>", lambda _e: self._toggle_settings())
 
-        self.grid_frame = ttk.Frame(translate_frame)
+        self.grid_frame = ttk.Frame(settings_box)
         for column in (1, 3, 5):
             self.grid_frame.columnconfigure(column, weight=1)
 
-        ttk.Label(self.grid_frame, text="翻译引擎：").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Label(self.grid_frame, text="翻译引擎").grid(row=0, column=0, sticky="w", pady=3)
         self.category_var = tk.StringVar()
-        self.category_combo = ttk.Combobox(self.grid_frame, textvariable=self.category_var, state="readonly", width=15, values=list(FREE_ENGINES.values()) + [CUSTOM_CATEGORY_LABEL])
+        self.category_combo = ttk.Combobox(self.grid_frame, textvariable=self.category_var, state="readonly", width=15, values=list(FREE_ENGINES.values()) + [CUSTOM_CATEGORY_LABEL], font=FONT_BODY)
         self.category_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=3)
         self.category_combo.bind("<<ComboboxSelected>>", self._engine_selected)
-        ttk.Label(self.grid_frame, text="兼容接口：").grid(row=0, column=2, sticky="w", padx=(0, 4), pady=3)
+        ttk.Label(self.grid_frame, text="兼容接口").grid(row=0, column=2, sticky="w", padx=(0, 4), pady=3)
         self.provider_var = tk.StringVar()
-        self.provider_combo = ttk.Combobox(self.grid_frame, textvariable=self.provider_var, state="readonly", width=18, values=list(CUSTOM_ENGINES.values()))
+        self.provider_combo = ttk.Combobox(self.grid_frame, textvariable=self.provider_var, state="readonly", width=18, values=list(CUSTOM_ENGINES.values()), font=FONT_BODY)
         self.provider_combo.grid(row=0, column=3, sticky="ew", padx=(0, 10), pady=3)
         self.provider_combo.bind("<<ComboboxSelected>>", self._provider_selected)
-        ttk.Label(self.grid_frame, text="预设：").grid(row=0, column=4, sticky="w", padx=(0, 4), pady=3)
+        ttk.Label(self.grid_frame, text="预设").grid(row=0, column=4, sticky="w", padx=(0, 4), pady=3)
         self.profile_var = tk.StringVar()
-        self.profile_combo = ttk.Combobox(self.grid_frame, textvariable=self.profile_var, state="readonly")
+        self.profile_combo = ttk.Combobox(self.grid_frame, textvariable=self.profile_var, state="readonly", font=FONT_BODY)
         self.profile_combo.grid(row=0, column=5, sticky="ew", pady=3)
         self.profile_combo.bind("<<ComboboxSelected>>", self._profile_selected)
 
         # P0-2：API Key 默认掩码，右侧「显示」按钮切换明文（只改显示，不改存储）。
-        ttk.Label(self.grid_frame, text="API Key：").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Label(self.grid_frame, text="API Key").grid(row=1, column=0, sticky="w", pady=3)
         self.api_key_var = tk.StringVar()
         key_frame = ttk.Frame(self.grid_frame)
         key_frame.grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=3)
         key_frame.columnconfigure(0, weight=1)
-        self.api_key_entry = ttk.Entry(key_frame, textvariable=self.api_key_var, show="•")
+        self.api_key_entry = ttk.Entry(key_frame, textvariable=self.api_key_var, show="•", font=FONT_BODY)
         self.api_key_entry.grid(row=0, column=0, sticky="ew")
         self.api_key_show_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(key_frame, text="显示", variable=self.api_key_show_var, command=self._toggle_api_key_visibility).grid(row=0, column=1, padx=(4, 0))
-        ttk.Label(self.grid_frame, text="Base URL：").grid(row=1, column=2, sticky="w", padx=(0, 4), pady=3)
+        ttk.Label(self.grid_frame, text="Base URL").grid(row=1, column=2, sticky="w", padx=(0, 4), pady=3)
         self.url_var = tk.StringVar()
-        self.url_entry = ttk.Entry(self.grid_frame, textvariable=self.url_var)
+        self.url_entry = ttk.Entry(self.grid_frame, textvariable=self.url_var, font=FONT_BODY)
         self.url_entry.grid(row=1, column=3, sticky="ew", padx=(0, 10), pady=3)
-        ttk.Label(self.grid_frame, text="模型：").grid(row=1, column=4, sticky="w", padx=(0, 4), pady=3)
+        ttk.Label(self.grid_frame, text="模型").grid(row=1, column=4, sticky="w", padx=(0, 4), pady=3)
         self.model_var = tk.StringVar()
-        self.model_entry = ttk.Entry(self.grid_frame, textvariable=self.model_var)
+        self.model_entry = ttk.Entry(self.grid_frame, textvariable=self.model_var, font=FONT_BODY)
         self.model_entry.grid(row=1, column=5, sticky="ew", pady=3)
 
         actions = ttk.Frame(self.grid_frame)
@@ -459,8 +521,6 @@ class FerryApp(tk.Tk):
         self.glossary_button.pack(side="left", padx=(6, 0))
         self.fill_var = tk.BooleanVar(value=bool(self.config.get("fill_community", False)))
         ttk.Checkbutton(actions, text="填补人工汉化缺失", variable=self.fill_var, command=self._refine_changed).pack(side="left", padx=(12, 0))
-        # P0-1：并发只在设置弹窗里改，主界面给一个入口按钮，避免两个控件互相覆盖。
-        ttk.Button(actions, text="并发 / 模型池…", command=self._show_settings).pack(side="right")
 
         self.refine_var = tk.BooleanVar(value=bool(self.config.get("refine_community", False)))
         ttk.Checkbutton(self.grid_frame, text="参考人工汉化语料补全缺失 key（不改原译文）", variable=self.refine_var, command=self._refine_changed).grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
@@ -469,29 +529,45 @@ class FerryApp(tk.Tk):
 
         self.concurrency_var = tk.IntVar(value=int(self.config.get("concurrency", 1)))
         self.settings_expanded = bool(self.config.get("settings_expanded", False))
+
+        # 底栏：低频工具靠右，左边只留一句最短操作提示。
+        bottom = ttk.Frame(root)
+        ttk.Button(bottom, text="日志", command=self._show_log).pack(side="right")
+        self.limits_button = ttk.Button(bottom, text="汉化限制", command=self._show_limits, state="disabled")
+        self.limits_button.pack(side="right", padx=(6, 0))
+        self.quality_button = ttk.Button(bottom, text="质量检查", command=self._show_quality)
+        self.quality_button.pack(side="right", padx=(6, 0))
+        ttk.Label(bottom, text="双击行直接翻译；右键可卸载、还原、重翻，详见「使用说明」。", font=FONT_SMALL, foreground=FAINT).pack(side="left")
+
+        # 先从下往上预留 底栏 → 设置 → 翻译区，再让表格占剩余空间；
+        # 高度不足时只压缩表格，翻译按钮、进度条和底栏始终可见。
+        bottom.pack(side="bottom", fill="x", pady=(6, 0))
+        settings_box.pack(side="bottom", fill="x", pady=(4, 0))
+        run_zone.pack(side="bottom", fill="x", pady=(6, 0))
+        table_card.pack(fill="both", expand=True)
         self._apply_settings_visibility()
 
-        bottom = ttk.Frame(root)
-        bottom.pack(side="bottom", fill="x", pady=(6, 0))
-        bottom.columnconfigure(0, weight=1)
-        # 提示与按钮分成两行，避免并排相加把窗口最小宽度顶得很大。
-        ttk.Label(bottom, text="提示：Ctrl 多选；双击翻译该模组；右键可删除译文 / 还原英文 / 重翻 / 跳过词条 / 安装人工汉化包。", foreground="#666666", wraplength=520).grid(row=0, column=0, sticky="w")
-        btn_bar = ttk.Frame(bottom)
-        btn_bar.grid(row=1, column=0, sticky="e", pady=(4, 0))
-        ttk.Button(btn_bar, text="打开项目目录", command=self.open_project).pack(side="right")
-        ttk.Button(btn_bar, text="关于", command=self._show_about).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="设置", command=self._show_settings).pack(side="right", padx=(6, 0))
-        self.quality_button = ttk.Button(btn_bar, text="质量检查", command=self._show_quality)
-        self.quality_button.pack(side="right", padx=(6, 0))
-        # P1-5：汉化限制与实例无关，移到此处与质量检查 / 日志 / 设置 / 关于同排。
-        self.limits_button = ttk.Button(btn_bar, text="汉化限制", command=self._show_limits, state="disabled")
-        self.limits_button.pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="日志", command=self._show_log).pack(side="right", padx=(6, 0))
+    def _tone_status(self, *_args: object) -> None:
+        """状态文字按内容着色：失败=红、完成=绿、没有/待确认=琥珀、进行中=渡船蓝。"""
+        text = self.status_var.get()
+        if any(word in text for word in ("失败", "错误", "出错")):
+            color = RED
+        elif any(word in text for word in ("完成", "已保存", "已删除", "已更新", "已安装", "已生成", "已重载")):
+            color = GREEN
+        elif any(word in text for word in ("没有", "待确认", "无需", "未找到")):
+            color = AMBER
+        elif text.startswith("正在"):
+            color = ACCENT
+        else:
+            color = INK
+        self.status_label.configure(foreground=color)
 
-        # 先预留底部栏和翻译区（从下往上），再让表格占用剩余空间；
-        # 高度不足时只压缩表格，翻译按钮、进度条和底部按钮始终可见。
-        translate_frame.pack(side="bottom", fill="x", pady=(10, 0))
-        table_frame.pack(fill="both", expand=True)
+    def _show_empty(self, text: str | None) -> None:
+        if text:
+            self.empty_state.configure(text=text)
+            self.empty_state.grid()
+        else:
+            self.empty_state.grid_remove()
 
     # ---------- P1-2 / P1-3 / P1-4 / P1-6：表格列、渲染、搜索、筛选、排序 ----------
 
@@ -506,36 +582,37 @@ class FerryApp(tk.Tk):
 
     def _apply_settings_visibility(self) -> None:
         if getattr(self, "settings_expanded", False):
-            self.grid_frame.pack(fill="x", padx=10, pady=6)
-            self.settings_toggle_button.configure(text="收起")
+            self.grid_frame.pack(fill="x", padx=2, pady=(4, 0))
+            self.settings_toggle_button.configure(text="▾ 翻译设置")
         else:
             self.grid_frame.pack_forget()
-            self.settings_toggle_button.configure(text="展开")
+            self.settings_toggle_button.configure(text="▸ 翻译设置")
         self._update_settings_summary()
 
     def _update_settings_summary(self) -> None:
         engine = self._current_engine()
         model_field = ENGINE_MODEL_FIELDS.get(engine, "")
-        model = self.model_var.get().strip() or str(self.config.get(model_field, "")) or "(默认模型)"
+        model = self.model_var.get().strip() or str(self.config.get(model_field, "")) or "默认模型"
         try:
             concurrency = int(self.concurrency_var.get())
         except Exception:
             concurrency = 1
-        self.settings_summary_var.set(f"引擎：{self._engine_label(engine)} · 模型：{model} · 并发 {concurrency}")
+        self.settings_summary_var.set(f"引擎 {self._engine_label(engine)}，模型 {model}，并发 {concurrency}")
 
     def _configure_tree_columns(self, show_instance: bool) -> None:
         columns = ["modid", "complete", "status", "missing", "ai", "community"]
         headings = {"modid": "模组", "complete": "完成度", "status": "状态", "missing": "缺", "ai": "AI", "community": "人工"}
-        anchors = {"modid": "w", "complete": "w", "status": "w", "missing": "center", "ai": "center", "community": "center"}
-        widths = {"modid": 320 if not show_instance else 260, "complete": 132, "status": 180, "missing": 64, "ai": 56, "community": 78}
+        anchors = {"modid": "w", "complete": "center", "status": "w", "missing": "center", "ai": "center", "community": "center"}
+        widths = {"modid": 240 if not show_instance else 220, "complete": 84, "status": 176, "missing": 56, "ai": 52, "community": 64}
         if show_instance:
             columns.append("instance")
             headings["instance"] = "实例"
             anchors["instance"] = "w"
-            widths["instance"] = 150
+            widths["instance"] = 130
         self.tree.configure(columns=columns)
         for col in columns:
-            self.tree.column(col, width=widths[col], minwidth=40, anchor=anchors[col], stretch=col in ("modid", "status", "instance"))
+            self.tree.column(col, width=widths[col], minwidth=40, anchor=anchors[col], stretch=col == "modid")
+            self.tree.heading(col, anchor=anchors[col])
         self._headings = {col: headings[col] for col in columns}
         self.show_instance_column = show_instance
         self._refresh_headings()
@@ -558,11 +635,6 @@ class FerryApp(tk.Tk):
             self.sort_desc = column in ("missing", "ai", "community", "complete")
         self._refresh_headings()
         self._render_rows()
-
-    @staticmethod
-    def _mini_bar(percent: float, width: int = 5) -> str:
-        filled = max(0, min(width, int(round(percent * width))))
-        return "▉" * filled + "░" * (width - filled)
 
     def _row_matches(self, row: dict, query: str) -> bool:
         # B：同时匹配 modid 与状态 label（含「硬编码 / 失败 / 手册」等标记文字）。
@@ -601,18 +673,34 @@ class FerryApp(tk.Tk):
         return (row.get("modid") or "").lower()
 
     def _row_values(self, row: dict) -> tuple:
-        # A-1：状态列显示完整 label（含硬编码 / 手册待翻 / 上次失败标记），加符号前缀。
-        status_text = f"{row['symbol']} {row.get('label') or row['short']}".strip()
+        # 状态列只放短状态（符号 + 摘要），保证任何窗口宽度都放得下；
+        # 完整标记（硬编码 / 手册 / 失败 / 降级说明）悬停「状态」列可看全文。
+        status_text = f"{row['symbol']} {row['short']}{'·手册' if row['patch_pending'] else ''}".strip()
         values: list = [row["modid"], row["complete_text"], status_text, row["missing"], row["ai"], row["community"]]
         if self.show_instance_column:
             values.append(row["instance"])
         return tuple(values)
 
+    def _search_query(self) -> str:
+        text = self.search_var.get()
+        return "" if text == SEARCH_PLACEHOLDER else text.strip().lower()
+
+    def _search_focus_in(self, _event: object = None) -> None:
+        if self.search_var.get() == SEARCH_PLACEHOLDER:
+            self.search_entry.icursor(tk.END)
+            self.search_var.set("")
+            self.search_entry.configure(foreground=INK)
+
+    def _search_focus_out(self, _event: object = None) -> None:
+        if not self.search_var.get():
+            self.search_entry.configure(foreground=FAINT)
+            self.search_var.set(SEARCH_PLACEHOLDER)
+
     def _render_rows(self) -> None:
         show_instance = len({r["instance_path"] for r in self.all_rows if not r["placeholder"]}) > 1
         if show_instance != self.show_instance_column:
             self._configure_tree_columns(show_instance)
-        query = self.search_var.get().strip().lower()
+        query = self._search_query()
         chosen = self.filter_var.get()
         visible = [r for r in self.all_rows if self._row_visible(r, query, chosen)]
         visible.sort(key=self._sort_key, reverse=self.sort_desc)
@@ -623,6 +711,7 @@ class FerryApp(tk.Tk):
         self.row_modids.clear()
         self.uninstalled_by_row.clear()
         self.coverage_by_row.clear()
+        self.status_tip_by_row.clear()
         for index, row in enumerate(visible):
             tags = ["row_even" if index % 2 else "row_odd"]
             if row["tag"]:
@@ -636,6 +725,15 @@ class FerryApp(tk.Tk):
                 self.uninstalled_by_row.add(item)
             if row["coverage"]:
                 self.coverage_by_row[item] = row["coverage"]
+            if not row["placeholder"] and row.get("label"):
+                self.status_tip_by_row[item] = f"{row['symbol']} {row['label']}"
+        # 空状态指引：没扫过 → 教第一步；扫过但筛完为空 → 提示清条件。
+        if not self.all_rows:
+            self._show_empty("正在扫描实例……" if self.scanning else "选一个 Minecraft 实例，点「扫描」\n会列出缺中文的模组；已有人工汉化的会自动让位")
+        elif not visible:
+            self._show_empty("没有匹配的模组\n试试清空搜索，或换一个筛选条件")
+        else:
+            self._show_empty(None)
 
     def _mark_hardcoded_row(self, row: dict) -> None:
         """后台硬编码检测结果回来后，给已显示的行补上标记。"""
@@ -663,6 +761,8 @@ class FerryApp(tk.Tk):
 
     def _clear_search(self) -> None:
         self.search_var.set("")
+        if self.focus_get() is not self.search_entry:
+            self._search_focus_out()
 
     def _on_ctrl_a(self, _event: object = None) -> str:
         widget = self.focus_get()
@@ -680,8 +780,8 @@ class FerryApp(tk.Tk):
         return "break"
 
     def _on_escape_key(self, _event: object = None) -> str:
-        if self.search_var.get():
-            self.search_var.set("")
+        if self._search_query():
+            self._clear_search()
         else:
             selection = self.tree.selection()
             if selection:
@@ -721,7 +821,7 @@ class FerryApp(tk.Tk):
         total = int(st.total_keys)
         percent = 0.0 if is_uninstalled or total <= 0 else (total - int(st.missing)) / total
         percent = max(0.0, min(1.0, percent))
-        complete_text = "" if total <= 0 else f"{self._mini_bar(percent)} {int(round(percent * 100))}%"
+        complete_text = "" if total <= 0 else f"{int(round(percent * 100))}%"
         return {
             "modid": st.modid,
             "label": label,
@@ -823,7 +923,7 @@ class FerryApp(tk.Tk):
         # 没有图标文件时用代码画一个，保持零第三方依赖。
         size = 64
         image = tk.PhotoImage(width=size, height=size)
-        image.put("#185FA5", to=(0, 0, size, size))
+        image.put(ACCENT, to=(0, 0, size, size))
         image.put("#D6E6F7", to=(29, 8, 32, 44))
         for y in range(10, 42):
             width = int((y - 10) * 22 / 32)
@@ -832,6 +932,22 @@ class FerryApp(tk.Tk):
             image.put("#FFFFFF", to=(12 + i, 44 + i, 52 - i, 45 + i))
         image.put("#D6E6F7", to=(8, 56, 56, 58))
         return image
+
+    def _icon_image(self, px: int) -> tk.PhotoImage | None:
+        """按目标像素取整倍缩小的图标；PNG 原图可能很大，直接塞进弹窗会把它撑爆。"""
+        try:
+            icon = self._load_icon_image()
+        except tk.TclError:
+            return None
+        if icon is None:
+            return None
+        try:
+            factor = max(1, icon.width() // px)
+            if factor > 1:
+                icon = icon.subsample(factor)
+        except tk.TclError:
+            return None
+        return icon
 
     def _set_app_icon(self) -> None:
         try:
@@ -870,7 +986,8 @@ class FerryApp(tk.Tk):
         saved = self._parse_geometry(self._load_ui_state().get("geometry"))
         if saved is not None:
             width, height, sx, sy = saved
-            width = min(max(width, req_w), max_w)
+            # geometry() 不受 minsize 约束，恢复旧窗口时也要兜底到可用最小宽。
+            width = min(max(width, 880, req_w), max_w)
             height = min(max(height, req_h), max_h)
             x = work_x + (work_w - width) // 2 if sx is None else min(max(sx, work_x), work_x + work_w - width)
             y = work_y + (work_h - height) // 4 if sy is None else min(max(sy, work_y), work_y + work_h - height)
@@ -1175,7 +1292,7 @@ class FerryApp(tk.Tk):
         frame.pack(fill="both", expand=True)
         columns = ("modid", "key", "source", "target", "issue", "severity")
         tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="extended")
-        tree.tag_configure("error", foreground="#C00000")
+        tree.tag_configure("error", foreground=RED)
         tree.tag_configure("warning", foreground="#9A5A22")
         for name, title, width in zip(columns, ("模组", "key", "原文", "译文", "问题", "等级"), (115, 190, 180, 180, 125, 60)):
             tree.heading(name, text=title)
@@ -1271,24 +1388,50 @@ class FerryApp(tk.Tk):
             messagebox.showwarning("密钥安全提示", warning)
 
     def _maybe_show_notice(self) -> None:
+        """首次启动：不讲「做不到什么」，先教三步怎么用；能力边界收成底部一行小字。"""
         if self._closing or self.config.get("notice_dismissed"):
             return
         window = tk.Toplevel(self)
-        window.title("汉化能力说明 - 摆渡计划")
+        window.title("欢迎使用摆渡计划")
         window.transient(self)
-        body = ttk.Frame(window, padding=18)
+        window.configure(bg=CARD)
+        body = tk.Frame(window, bg=CARD, padx=24, pady=20)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="汉化能力说明", font=("Microsoft YaHei UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(body, text="摆渡计划通过替换 Minecraft 语言文件（lang key）来汉化。以下内容无法通过资源包覆盖：", foreground="#333333", wraplength=510).pack(anchor="w", pady=(8, 6))
-        for line in (
-            "• 硬编码在模组代码里的文本（部分模组把物品备注、对话、配置界面文字直接写死在代码中）",
-            "• 图片 / 纹理里的文字",
-            "• 存在物品 NBT / 数据组件里的描述（lore）",
-        ):
-            ttk.Label(body, text=line, foreground="#555555", wraplength=510, justify="left").pack(anchor="w", pady=2)
-        ttk.Label(body, text="扫描完实例后，底部「汉化限制」按钮会列出疑似无法完全汉化的模组，供你参考。", foreground="#185FA5", wraplength=510).pack(anchor="w", pady=(12, 0))
+
+        head = tk.Frame(body, bg=CARD)
+        head.pack(fill="x")
+        icon = self._icon_image(40)
+        if icon is not None:
+            window._welcome_icon = icon
+            tk.Label(head, image=icon, bg=CARD).pack(side="left", padx=(0, 12))
+        head_text = tk.Frame(head, bg=CARD)
+        head_text.pack(side="left", fill="x", expand=True)
+        tk.Label(head_text, text=APP_DISPLAY, font=(FONT_FAMILY, 14, "bold"), bg=CARD, fg=INK).pack(anchor="w")
+        tk.Label(head_text, text=APP_SLOGAN, font=FONT_SMALL, bg=CARD, fg=MUTED).pack(anchor="w", pady=(2, 0))
+
+        ttk.Separator(body).pack(fill="x", pady=(12, 12))
+        steps = [
+            ("1", "选实例，点「扫描」", "会自动找到本机的 Minecraft 实例，也可以「浏览…」手动选。"),
+            ("2", "在表格里看缺口", "只列缺中文的模组；已有人工汉化的自动让位，绝不覆盖。"),
+            ("3", "点「翻译全部待AI」", "生成一个资源包，进游戏启用即可；删掉资源包就还原。"),
+        ]
+        for num, title, desc in steps:
+            row = tk.Frame(body, bg=CARD)
+            row.pack(fill="x", pady=4)
+            badge = tk.Label(row, text=num, bg=ACCENT, fg="#FFFFFF", font=FONT_SMALL_BOLD, width=2, pady=3)
+            badge.pack(side="left")
+            text_frame = tk.Frame(row, bg=CARD)
+            text_frame.pack(side="left", padx=(12, 0))
+            tk.Label(text_frame, text=title, font=FONT_BOLD, bg=CARD, fg=INK).pack(anchor="w")
+            tk.Label(text_frame, text=desc, font=FONT_SMALL, bg=CARD, fg=MUTED, wraplength=420, justify="left").pack(anchor="w")
+
+        tk.Label(
+            body,
+            text="只能改语言文件：写死在代码、图片、NBT 里的文字覆盖不了，扫描后点「汉化限制」可查看。",
+            font=FONT_SMALL, bg=CARD, fg=FAINT, wraplength=480, justify="left",
+        ).pack(anchor="w", pady=(14, 0))
         dismiss = tk.BooleanVar(value=False)
-        ttk.Checkbutton(body, text="以后不再显示", variable=dismiss).pack(anchor="w", pady=(14, 0))
+        ttk.Checkbutton(body, text="下次不再显示", variable=dismiss, style="Card.TCheckbutton").pack(anchor="w", pady=(10, 0))
 
         def close() -> None:
             if dismiss.get():
@@ -1296,8 +1439,44 @@ class FerryApp(tk.Tk):
                 core.save_config(self.config)
             window.destroy()
 
-        ttk.Button(body, text="我知道了", command=close).pack(anchor="e", pady=(10, 0))
-        self._center_over(window, 560, 300)
+        make_action_button(body, "开始摆渡", close, ACCENT, bg=CARD).pack(anchor="e", pady=(14, 0))
+        self._center_over(window, 540, 360)
+
+    def _show_help(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("使用说明 - 摆渡计划")
+        window.transient(self)
+        body = ttk.Frame(window, padding=20)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="使用说明", font=FONT_TITLE).pack(anchor="w")
+
+        def section(title: str, lines: list[str]) -> None:
+            ttk.Label(body, text=title, font=FONT_SMALL_BOLD, foreground=MUTED).pack(anchor="w", pady=(14, 3))
+            for text in lines:
+                ttk.Label(body, text=text, foreground=BODY_INK, font=FONT_BODY, wraplength=540, justify="left").pack(anchor="w", pady=1)
+
+        section("三步上手", [
+            "1. 选一个 Minecraft 实例，点「扫描」。",
+            "2. 表格里只列缺中文的模组，已有人工汉化的自动让位。",
+            "3. 点「翻译全部待AI」生成资源包，进游戏启用（删除即还原）。",
+        ])
+        section("表格操作", [
+            "双击行：直接翻译该模组。",
+            "Ctrl / Shift 点选：多选；Ctrl+A：全选可见行。",
+            "右键行：删除 AI 汉化、重载译文、还原英文、",
+            "　　　　重翻整个模组、安装人工汉化包、设置不翻译词条。",
+            "F5：重新扫描；Esc：清空搜索。",
+        ])
+        section("状态符号", [
+            "✓ 已完全汉化　◐ 部分翻译　○ 待翻译　◈ 已有人工汉化",
+            "⚠ 疑似硬编码　⊗ AI 汉化已卸载",
+            "⊘ 已还原英文　✗ 上次翻译失败",
+        ])
+        section("能力边界", [
+            "只能改语言文件：写死在模组代码、图片纹理、NBT 描述里的文字无法覆盖，扫描后点「汉化限制」查看。",
+        ])
+        ttk.Button(body, text="关闭", command=window.destroy).pack(anchor="e", pady=(16, 0))
+        self._center_over(window, 580, 500)
 
     def _show_limits(self) -> None:
         window = tk.Toplevel(self)
@@ -1305,8 +1484,11 @@ class FerryApp(tk.Tk):
         window.transient(self)
         body = ttk.Frame(window, padding=14)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="疑似无法完全汉化的模组", font=("Microsoft YaHei UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(body, text="这些模组含硬编码文本（不在语言文件里），资源包无法覆盖。列表为启发式检测，可能包含少量技术字符串，仅供参考。", foreground="#555555", wraplength=600).pack(anchor="w", pady=(4, 8))
+        ttk.Label(body, text="疑似无法完全汉化的模组", font=FONT_TITLE).pack(anchor="w")
+        ttk.Label(body, text="这些模组含硬编码文本（不在语言文件里），资源包无法覆盖。列表为启发式检测，可能包含少量技术字符串，仅供参考。", foreground=BODY_INK, wraplength=880).pack(anchor="w", pady=(4, 8))
+        btn_row = ttk.Frame(body)
+        btn_row.pack(side="bottom", fill="x", pady=(8, 0))
+        ttk.Button(btn_row, text="关闭", command=window.destroy).pack(side="right")
         text = tk.Text(body, wrap="word", height=18)
         text.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(body, orient="vertical", command=text.yview)
@@ -1321,8 +1503,7 @@ class FerryApp(tk.Tk):
                     text.insert("end", f"    {sample}\n")
                 text.insert("end", "\n")
         text.configure(state="disabled")
-        ttk.Button(body, text="关闭", command=window.destroy).pack(anchor="e", pady=(8, 0))
-        self._center_over(window, 640, 400)
+        self._center_over(window, 920, 430)
 
     def _show_about(self) -> None:
         window = tk.Toplevel(self)
@@ -1333,26 +1514,23 @@ class FerryApp(tk.Tk):
 
         header = ttk.Frame(body)
         header.pack(fill="x")
-        try:
-            icon = self._load_icon_image()
-        except tk.TclError:
-            icon = None
+        icon = self._icon_image(40)
         if icon is not None:
             window._about_icon = icon  # 保持引用，避免被回收
             ttk.Label(header, image=icon).pack(side="left", padx=(0, 14))
         head_text = ttk.Frame(header)
         head_text.pack(side="left", fill="x", expand=True)
-        ttk.Label(head_text, text=f"{APP_DISPLAY} / {APP_NAME}", font=("Microsoft YaHei UI", 15, "bold")).pack(anchor="w")
-        ttk.Label(head_text, text=f"版本 {APP_VERSION}", foreground="#666666").pack(anchor="w")
-        ttk.Label(head_text, text=APP_SLOGAN, foreground="#185FA5").pack(anchor="w")
-        ttk.Label(head_text, text="Where words fail, we ferry.", foreground="#888888").pack(anchor="w")
+        ttk.Label(head_text, text=f"{APP_DISPLAY} / {APP_NAME}", font=FONT_TITLE).pack(anchor="w")
+        ttk.Label(head_text, text=f"版本 {APP_VERSION}", foreground=MUTED).pack(anchor="w")
+        ttk.Label(head_text, text=APP_SLOGAN, foreground=ACCENT).pack(anchor="w")
+        ttk.Label(head_text, text="Where words fail, we ferry.", foreground=FAINT).pack(anchor="w")
 
-        ttk.Label(body, text="Minecraft 临时 AI 汉化工具：没有人工/官方汉化时先摆渡过去，检测到人工/官方汉化就自动让位、到岸即离。所有改动只发生在资源包，删除即还原。", foreground="#555555", wraplength=520, justify="left").pack(anchor="w", pady=(12, 6))
+        ttk.Label(body, text="Minecraft 临时 AI 汉化工具：没有人工/官方汉化时先摆渡过去，检测到人工/官方汉化就自动让位、到岸即离。所有改动只发生在资源包，删除即还原。", foreground=BODY_INK, wraplength=580, justify="left").pack(anchor="w", pady=(12, 6))
 
         def section(title: str, items: list[str]) -> None:
-            ttk.Label(body, text=title, font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(8, 2))
+            ttk.Label(body, text=title, font=FONT_BOLD).pack(anchor="w", pady=(8, 2))
             for text in items:
-                ttk.Label(body, text="• " + text, foreground="#555555", wraplength=510, justify="left").pack(anchor="w")
+                ttk.Label(body, text="• " + text, foreground=BODY_INK, wraplength=580, justify="left").pack(anchor="w")
 
         section("功能要点", [
             "资源包式临时汉化：只补缺口，绝不覆盖人工 / 官方 / 社区译文",
@@ -1373,12 +1551,15 @@ class FerryApp(tk.Tk):
         ])
 
         ttk.Separator(body).pack(fill="x", pady=(12, 8))
-        ttk.Label(body, text=f"作者：{APP_AUTHOR}　·　许可证：{APP_LICENSE}", foreground="#555555").pack(anchor="w")
-        ttk.Label(body, text=f"项目主页：{PROJECT_URL}", foreground="#185FA5", wraplength=520).pack(anchor="w", pady=(2, 0))
-        ttk.Label(body, text="灵感来自《边狱巴士》零协汉化组。", foreground="#888888", wraplength=520).pack(anchor="w", pady=(8, 0))
+        ttk.Label(body, text=f"作者：{APP_AUTHOR}　·　许可证：{APP_LICENSE}", foreground=BODY_INK).pack(anchor="w")
+        ttk.Label(body, text=f"项目主页：{PROJECT_URL}", foreground=ACCENT, wraplength=520).pack(anchor="w", pady=(2, 0))
+        ttk.Label(body, text="灵感来自《边狱巴士》零协汉化组。", foreground=FAINT, wraplength=520).pack(anchor="w", pady=(8, 0))
 
-        ttk.Button(body, text="关闭", command=window.destroy).pack(anchor="e", pady=(14, 0))
-        self._center_over(window, 580, 560)
+        btn_row = ttk.Frame(body)
+        btn_row.pack(fill="x", pady=(14, 0))
+        ttk.Button(btn_row, text="打开项目目录", command=self.open_project).pack(side="left")
+        ttk.Button(btn_row, text="关闭", command=window.destroy).pack(side="right")
+        self._center_over(window, 640, 580)
 
     def _show_settings(self) -> None:
         window = tk.Toplevel(self)
@@ -1394,10 +1575,10 @@ class FerryApp(tk.Tk):
         # P0-1：以主界面唯一的 concurrency_var 为准，而不是从 config 读旧值。
         concurrency_var = tk.IntVar(value=int(self.concurrency_var.get()))
         ttk.Spinbox(row, from_=1, to=16, textvariable=concurrency_var, width=5).pack(side="left")
-        ttk.Label(row, text="（多个批次同时翻译，加速；MyMemory 免费额度有限，建议 2~4）", foreground="#666666").pack(side="left", padx=(8, 0))
+        ttk.Label(row, text="（多个批次同时翻译，加速；MyMemory 免费额度有限，建议 2~4）", foreground=MUTED).pack(side="left", padx=(8, 0))
 
-        ttk.Label(body, text="多模型并发池（可添加你自建的多个 API，并行翻译不同批次）", font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(0, 6))
-        ttk.Label(body, text="每行一个模型：引擎 / 模型 / 权重 / 地址。权重越大承担越多批次，用于按字符量平摊各 API 的资费。", foreground="#666666", wraplength=610).pack(anchor="w", pady=(0, 6))
+        ttk.Label(body, text="多模型并发池（可添加你自建的多个 API，并行翻译不同批次）", font=FONT_BOLD).pack(anchor="w", pady=(0, 6))
+        ttk.Label(body, text="每行一个模型：引擎 / 模型 / 权重 / 地址。权重越大承担越多批次，用于按字符量平摊各 API 的资费。", foreground=MUTED, wraplength=610).pack(anchor="w", pady=(0, 6))
         pool_frame = ttk.Frame(body)
         pool_frame.pack(fill="both", expand=True)
         listbox = tk.Listbox(pool_frame, height=8)
@@ -1470,7 +1651,7 @@ class FerryApp(tk.Tk):
         ttk.Label(frame, text="权重：").grid(row=4, column=0, sticky="w", pady=4)
         weight_var = tk.DoubleVar(value=float(initial.get("weight", 1) or 1))
         ttk.Spinbox(frame, from_=0.1, to=100, increment=0.1, textvariable=weight_var, width=8).grid(row=4, column=1, sticky="w", pady=4)
-        ttk.Label(frame, text="权重越大承担越多批次（如便宜 / 免费模型给 2~3），按字符量平摊资费。", foreground="#666666", wraplength=470).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Label(frame, text="权重越大承担越多批次（如便宜 / 免费模型给 2~3），按字符量平摊资费。", foreground=MUTED, wraplength=470).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
         def ok() -> None:
             label = engine_var.get()
@@ -1608,12 +1789,13 @@ class FerryApp(tk.Tk):
 
     def _set_instance_options(self, paths: list[Path], select: int | None = None) -> None:
         self.instance_paths = list(paths)
-        self.instance_combo.configure(values=[f"{path.name}  —  {path}" for path in self.instance_paths])
+        names = [path.name for path in self.instance_paths]
+        self.instance_combo.configure(values=[name if names.count(name) == 1 else f"{name}（{path.parent}）" for name, path in zip(names, self.instance_paths)])
         if self.instance_paths and select is not None:
             select = max(0, min(select, len(self.instance_paths) - 1))
             self.instance_combo.current(select)
         elif not self.instance_paths:
-            self.instance_combo.set("未找到实例，请点击浏览")
+            self.instance_combo.set("没有找到实例，点「浏览…」手动选择")
 
     def refresh_instances(self) -> None:
         if self._closing:
@@ -1668,8 +1850,12 @@ class FerryApp(tk.Tk):
         self.row_modids.clear()
         self.uninstalled_by_row.clear()
         self.coverage_by_row.clear()
+        self.status_tip_by_row.clear()
         self.scan_cache.clear()
         self.selection_var.set("")
+        # 清掉旧列表，让表格空状态显示「正在扫描」，而不是残留上一轮结果。
+        self.all_rows = []
+        self._render_rows()
         # 路径在主线程读好再传进工作线程，避免工作线程访问 Tk 变量。
         threading.Thread(target=self._scan_worker, args=(self.fill_var.get(), self.refine_var.get(), self.path_var.get().strip()), daemon=True).start()
 
@@ -1776,12 +1962,11 @@ class FerryApp(tk.Tk):
         if not selection:
             self.selection_var.set("")
             return
-        item = selection[0]
-        modid = self.row_modids.get(item, "")
-        instance_path = self.row_targets.get(item, "")
-        if modid == PLACEHOLDER_MODID:
-            modid = "（无待汉化模组）"
-        self.selection_var.set(f"选中：{modid}    实例路径：{instance_path}")
+        if len(selection) == 1:
+            modid = self.row_modids.get(selection[0], "")
+            self.selection_var.set(f"已选：{modid}" if modid and modid != PLACEHOLDER_MODID else "")
+        else:
+            self.selection_var.set(f"已选 {len(selection)} 个模组")
 
     def _hide_coverage_tip(self, _event: object = None) -> None:
         self.coverage_hover_item = ""
@@ -1792,7 +1977,16 @@ class FerryApp(tk.Tk):
     def _on_coverage_motion(self, event: tk.Event) -> None:
         item = self.tree.identify_row(event.y)
         column = self.tree.identify_column(event.x)
-        if column != "#2" or item not in self.coverage_by_row:
+        if not item:
+            self._hide_coverage_tip()
+            return
+        if column == "#2":
+            text = self.coverage_by_row.get(item, "")
+        elif column == "#3":
+            text = self.status_tip_by_row.get(item, "")
+        else:
+            text = ""
+        if not text:
             self._hide_coverage_tip()
             return
         if item == self.coverage_hover_item:
@@ -1801,7 +1995,7 @@ class FerryApp(tk.Tk):
         self.coverage_hover_item = item
         tip = tk.Toplevel(self)
         tip.wm_overrideredirect(True)
-        ttk.Label(tip, text=self.coverage_by_row[item], padding=(10, 8), justify="left", relief="solid").pack()
+        ttk.Label(tip, text=text, padding=(10, 8), justify="left", relief="solid").pack()
         tip.update_idletasks()
         work_x, work_y, work_w, work_h = get_work_area(self)
         x = min(event.x_root + 14, work_x + work_w - tip.winfo_reqwidth())
@@ -2237,23 +2431,21 @@ class FerryApp(tk.Tk):
             com_mods = sum(1 for r in rows if not r["placeholder"] and r["has_community"])
             partial = sum(1 for r in rows if not r["placeholder"] and not r["has_community"] and r["ai"] > 0 and r["missing"] > 0)
             pending_community = max(0, sum(len(v) for v in translatable_targets.values()) - ai_mods)
-            hint = ""
             if partial:
                 self.translate_all_button.configure(text="继续翻译")
-                hint = f"；检测到 {partial} 个模组上次未翻完"
             else:
                 self.translate_all_button.configure(text="翻译全部待AI")
-            if failed_modids:
-                hint += f"；{len(failed_modids)} 个模组有失败记录（标红）"
-            if hardcoded:
-                hint += f"；{len(hardcoded)} 个模组疑似含硬编码文本（见「汉化限制」）"
-            if self.refine_var.get():
-                summary = f"扫描完成：{ai_mods} 个模组待 AI 翻译，{pending_community} 个模组待人工汉化精加工"
+            if not ai_mods and not partial:
+                summary = f"扫描完成：{com_mods} 个模组都已有人工汉化，不需要 AI 补。"
+            elif self.refine_var.get():
+                summary = f"扫描完成：{ai_mods} 个模组待 AI 翻译，{pending_community} 个待人工汉化精加工。"
             elif self.fill_var.get():
-                summary = f"扫描完成：{ai_mods} 个模组待 AI 翻译，{pending_community} 个模组待补人工汉化缺失"
+                summary = f"扫描完成：{ai_mods} 个模组待 AI 翻译，{pending_community} 个待补人工汉化缺失。"
             else:
-                summary = f"扫描完成：{ai_mods} 个模组待 AI 翻译，{com_mods} 个已有人工汉化（自动降级）"
-            self.status_var.set(f"{summary}{hint}。")
+                summary = f"扫描完成：{ai_mods} 个模组缺中文，{com_mods} 个已有人工汉化（自动让位）。"
+            if failed_modids:
+                summary += f" {len(failed_modids)} 个模组上次翻译失败（标红），可用「只看失败」筛出来重翻。"
+            self.status_var.set(summary)
         elif kind == "empty":
             self.scanning = False
             self.status_var.set(str(payload))

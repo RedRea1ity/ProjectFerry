@@ -1,0 +1,28 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run unit tests
+        run: python -m unittest -v test_refine test_spec_p0
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+      - name: Build exe
+        run: pyinstaller ProjectFerry.spec --noconfirm
+      - name: Upload exe to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ProjectFerry.exe

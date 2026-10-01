@@ -18,7 +18,7 @@ class VersionDetectionTests(unittest.TestCase):
     def test_early_resource_pack_versions_use_format_one(self):
         self.assertEqual(core.pack_format_for_version("1.6.1"), 1)
         self.assertEqual(core.pack_format_for_version("1.7.10"), 1)
-        with self.assertRaisesRegex(ValueError, "手动指定"):
+        with self.assertRaisesRegex(ValueError, "没有资源包机制"):
             core.pack_format_for_version("1.5.2")
 
     def test_year_based_versions_map_to_latest_resource_formats(self):
@@ -31,8 +31,8 @@ class VersionDetectionTests(unittest.TestCase):
         self.assertEqual(core.pack_format_for_version("26.2"), 88.0)
         self.assertEqual(core.pack_format_for_version("26.3"), 97.1)
         self.assertEqual(core.pack_format_for_version("1.26.3"), 97.1)
-        self.assertEqual(core.pack_format_for_version("26.4"), 98.0)
-        self.assertEqual(core.pack_format_for_version("27.1"), 98.0)
+        self.assertEqual(core.pack_format_for_version("26.4"), 99.0)
+        self.assertEqual(core.pack_format_for_version("27.1"), 99.0)
 
     def test_new_versions_use_min_max_format_without_pack_format(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -52,6 +52,61 @@ class VersionDetectionTests(unittest.TestCase):
             whole_meta = json.loads(zipfile.ZipFile(whole).read("pack.mcmeta"))["pack"]
             self.assertEqual((whole_meta["min_format"], whole_meta["max_format"]), (69, 69))
             self.assertEqual(core.read_pack_format(whole), 69)
+
+    def test_remote_pack_format_table(self):
+        # 缓存命中（TTL 内）不联网；过期后联网取新值并落缓存；网络失败回退过期缓存。
+        import time as time_module
+        import unittest.mock as mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "cache"
+            cache.mkdir()
+            (cache / "pack_formats.json").write_text(json.dumps({
+                "fetched_at": time_module.time(),
+                "formats": {"26.5": 100.0, "1.20.1": 15, "junk": "x"},
+            }), encoding="utf-8")
+            with mock.patch.object(core, "_fetch_json", side_effect=AssertionError("缓存命中不该联网")):
+                self.assertEqual(core.pack_format_for_version_remote("26.5", cache_dir=cache, online=True), 100.0)
+                self.assertEqual(core.pack_format_for_version_remote("1.20.1", cache_dir=cache, online=True), 15)
+
+            stale = Path(tmp) / "stale"
+            stale.mkdir()
+            (stale / "pack_formats.json").write_text(json.dumps({"fetched_at": 0, "formats": {"26.4": 99.0}}), encoding="utf-8")
+            with mock.patch.object(core, "_fetch_json", side_effect=OSError("offline")):
+                self.assertEqual(core.pack_format_for_version_remote("26.4", cache_dir=stale), 99.0)
+            with mock.patch.object(core, "_fetch_json", return_value={"formats": {"26.4": 100.5, "bad": "oops"}}):
+                self.assertEqual(core.pack_format_for_version_remote("26.4", cache_dir=stale), 100.5)
+                saved = json.loads((stale / "pack_formats.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["formats"], {"26.4": 100.5})
+
+    def test_detect_pack_format_prefers_online_for_table_tail(self):
+        # 表尾（26.4+）在正式版定版前随时可能变：联网优先，断网回退本地表；老版本从不联网。
+        import unittest.mock as mock
+        with tempfile.TemporaryDirectory() as tmp:
+            def make_instance(name, version):
+                instance = Path(tmp) / name
+                vdir = instance / "versions" / version
+                vdir.mkdir(parents=True)
+                with zipfile.ZipFile(vdir / f"{version}.jar", "w") as archive:
+                    archive.writestr("empty.txt", "")
+                return instance
+
+            old_instance = make_instance("old", "1.20.1")
+            with mock.patch.object(core, "_fetch_json", side_effect=AssertionError("表内版本不该联网")):
+                self.assertEqual(core.detect_pack_format(old_instance, cache_dir=Path(tmp), online=True), 15)
+
+            new_instance = make_instance("new", "26.4")
+            with mock.patch.object(core, "_fetch_json", return_value={"formats": {"26.4": 100.5}}):
+                self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c1", online=True), 100.5)
+            self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c2", online=False), 99.0)
+
+    def test_legacy_lang_file_casing_follows_pack_format(self):
+        # 1.6.1–1.10.2（format 1–2）用区域代码 zh_CN；1.11（format 3）起资源包内文件名强制全小写。
+        with tempfile.TemporaryDirectory() as tmp:
+            for fmt, expected in ((1, "assets/demo/lang/zh_CN.lang"), (2, "assets/demo/lang/zh_CN.lang"), (3, "assets/demo/lang/zh_cn.lang")):
+                pack = Path(tmp) / f"pack{fmt}.zip"
+                core.write_pack(pack, {"demo": {"key": "值"}}, fmt)
+                names = [name for name in zipfile.ZipFile(pack).namelist() if name.endswith(".lang")]
+                self.assertEqual(names, [expected], f"pack_format {fmt}")
 
     def test_client_version_json_gives_exact_format_and_version(self):
         with tempfile.TemporaryDirectory() as tmp:

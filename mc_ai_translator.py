@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from functools import lru_cache
 import hashlib
 import heapq
 import html
@@ -192,6 +193,11 @@ DEFAULT_CONFIG = {
     "skip_keys": {},
     # 是否已确认"部分模组无法完全汉化"的启动声明
     "disclaimer_accepted": False,
+    # GUI 状态：首次引导是否不再显示、翻译设置是否展开
+    "notice_dismissed": False,
+    "settings_expanded": False,
+    # 本地版本表查不到 / 表尾待定时，联网核对远程版本表
+    "online_pack_format": True,
 }
 
 # (版本元组, 资源包格式)，升序排列；取 <= 目标版本的最大一项。
@@ -223,7 +229,7 @@ PACK_FORMATS = [
     ((26, 1), 84.0),
     ((26, 2), 88.0),
     ((26, 3), 97.1),
-    ((26, 4), 98.0),
+    ((26, 4), 99.0),
 ]
 
 # 资源包 1.21.9（25w31a）起 pack.mcmeta 改用 min_format / max_format，
@@ -231,6 +237,13 @@ PACK_FORMATS = [
 MIN_MAX_FORMAT_SINCE = 65.0
 # 游戏已改用年份版本号（如 26.2）。把误写的 1.26.3 之类的 "1.NN.x" 归一为年号版本。
 YEAR_VERSION_MIN_SECOND = 22
+# 远程版本表：新 Minecraft 版本发布后，只需在仓库里更新 pack_formats.json，
+# 旧安装会在本地表查不到（或表尾版本待定）时联网拉取，无需重新下载程序。
+PACK_FORMATS_REMOTE_URLS = (
+    "https://raw.githubusercontent.com/RedRea1ity/ProjectFerry/main/pack_formats.json",
+    "https://cdn.jsdelivr.net/gh/RedRea1ity/ProjectFerry@main/pack_formats.json",
+)
+REMOTE_FORMAT_TTL = 24 * 3600
 
 ENGINES_WITH_KEY = {"openai", "anthropic", "gemini", "deepl"}
 CLOUD_ENGINES = {"openai", "anthropic", "gemini", "deepl"}
@@ -266,6 +279,8 @@ Rules:
 - Use concise natural in-game Chinese. Item/block/entity names should be noun phrases.
 - Keep the original meaning; do not add explanations, notes, markdown, or extra keys.
 """
+
+TRANSLATION_PROMPT_VERSION = "contextual-glossary-v2"
 
 REFINE_PROMPT = """Use the provided human English/Chinese pairs as terminology and style references for this mod.
 Translate only the untranslated keys in `strings` into natural, consistent Simplified Chinese.
@@ -1152,13 +1167,63 @@ def group_entries(entries: list[Entry], batch_size: int) -> list[list[Entry]]:
     return groups
 
 
-def cache_key(entries: list[Entry], engine: str, model: str, glossary: dict[str, str] | None = None, keep: set[str] | None = None, references: list[dict[str, str]] | None = None) -> str:
+@lru_cache(maxsize=32)
+def _term_hint_pattern(term_names: tuple[str, ...]) -> re.Pattern[str] | None:
+    if not term_names:
+        return None
+    alternatives = "|".join(re.escape(term) for term in term_names)
+    return re.compile(r"(?<![A-Za-z0-9])(" + alternatives + r")(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def relevant_term_hints(entries: list[Entry], terms: dict[str, str] | None, excluded: set[str] | None = None, limit: int = 18) -> dict[str, str]:
+    """Select specific terminology hints occurring in this batch; avoid forcing short polysemous words."""
+    if not terms:
+        return {}
+    excluded_folded = {word.casefold() for word in (excluded or set())}
+    text = "\n".join(entry.english for entry in entries)
+    candidates: dict[str, tuple[str, str]] = {}
+    for source, target in terms.items():
+        source = str(source).strip()
+        target = str(target).strip()
+        if not source or not target or source.casefold() in excluded_folded:
+            continue
+        # Short single words (Lead, Map, Power, Thing, colors, etc.) are too ambiguous
+        # to pin to one Chinese sense without sentence context.
+        if " " not in source and len(source) < 7:
+            continue
+        candidates[source.casefold()] = (source, target)
+    ordered = sorted(candidates.values(), key=lambda item: (-len(item[0]), item[0].casefold()))
+    pattern = _term_hint_pattern(tuple(source for source, _ in ordered))
+    if pattern is None:
+        return {}
+    matched: dict[str, str] = {}
+    for match in pattern.finditer(text):
+        key = match.group(1).casefold()
+        source, target = candidates[key]
+        matched.setdefault(source, target)
+        if len(matched) >= limit:
+            break
+    # Because alternatives are longest-first, a longer phrase suppresses its contained shorter hint.
+    selected: dict[str, str] = {}
+    for source, target in sorted(matched.items(), key=lambda item: (-len(item[0]), item[0].casefold())):
+        if any(re.search(r"(?<![A-Za-z0-9])" + re.escape(longer) + r"(?![A-Za-z0-9])", source, re.IGNORECASE) for longer in selected):
+            continue
+        selected[source] = target
+    return selected
+
+
+def cache_key(entries: list[Entry], engine: str, model: str, glossary: dict[str, str] | None = None, keep: set[str] | None = None, references: list[dict[str, str]] | None = None, base_url: str = "", term_hints: dict[str, str] | None = None) -> str:
     context = ""
-    if glossary or keep:
-        context = json.dumps({"g": sorted((glossary or {}).items()), "k": sorted(keep or set())}, ensure_ascii=False, sort_keys=True)
+    if glossary or keep or term_hints:
+        context = json.dumps({
+            "g": sorted((glossary or {}).items()),
+            "k": sorted(keep or set()),
+            "h": sorted((term_hints or {}).items()),
+        }, ensure_ascii=False, sort_keys=True)
     payload = json.dumps([(e.modid, e.key, e.english, e.kind, e.book, e.rel_path, e.json_pointer) for e in entries], ensure_ascii=False, sort_keys=True)
     reference_context = json.dumps(references, ensure_ascii=False, sort_keys=True) if references is not None else ""
-    return hashlib.sha256((engine + "\n" + model + "\n" + context + "\n" + payload + "\n" + reference_context).encode("utf-8")).hexdigest()
+    parts = (TRANSLATION_PROMPT_VERSION, engine, model, base_url, context, payload, reference_context)
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def _model_input(masked: dict[str, str], settings: dict[str, Any]) -> str:
@@ -1168,7 +1233,15 @@ def _model_input(masked: dict[str, str], settings: dict[str, Any]) -> str:
 
 
 def _system_prompt(settings: dict[str, Any]) -> str:
-    return SYSTEM_PROMPT + ("\n" + REFINE_PROMPT if settings.get("refine_community") else "")
+    prompt = SYSTEM_PROMPT + ("\n" + REFINE_PROMPT if settings.get("refine_community") else "")
+    hints = settings.get("term_hints") or {}
+    if hints:
+        prompt += (
+            "\nTerminology hints for this batch (English -> Simplified Chinese). "
+            "These are contextual suggestions, not unconditional substitutions; use a term only when its meaning fits the sentence.\n"
+            + json.dumps(hints, ensure_ascii=False, sort_keys=True)
+        )
+    return prompt
 
 
 def _parse_ai_json(content: Any) -> dict[str, str]:
@@ -1404,7 +1477,9 @@ def write_pack(output: Path, translations: dict[str, dict[str, str]], pack_forma
                 if any("\n" in key or "\r" in key for key in data):
                     raise ValueError(f"{modid} 的语言 key 包含换行，无法写入旧版 .lang")
                 content = "\n".join(f"{key}={value.replace(chr(13), '').replace(chr(10), r'\n')}" for key, value in sorted(data.items())) + "\n"
-                zf.writestr(f"assets/{modid}/lang/zh_CN.lang", content.encode("utf-8"))
+                # 1.11（pack_format 3）起资源包内文件名要求全小写；1.6.1–1.10.2 的语言区域代码仍是 zh_CN。
+                lang_name = "zh_cn.lang" if pack_format >= 3 else "zh_CN.lang"
+                zf.writestr(f"assets/{modid}/lang/{lang_name}", content.encode("utf-8"))
             else:
                 zf.writestr(f"assets/{modid}/lang/zh_cn.json", json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         for path, data in sorted((patchouli or {}).items()):
@@ -1472,7 +1547,7 @@ def migrate_legacy_pack(pack: Path, pack_format: int) -> bool:
         os.replace(temporary, pack)
     finally:
         temporary.unlink(missing_ok=True)
-    LOG.info("Migrated legacy language pack to zh_CN.lang: %s", pack)
+    LOG.info("Migrated legacy language pack to .lang: %s", pack)
     return True
 
 
@@ -1860,7 +1935,8 @@ def pack_format_for_version(version: str) -> int | float:
     if not vt:
         raise ValueError(f"无法确认 {version} 的资源包格式，请手动指定 pack_format。")
     if vt < PACK_FORMATS[0][0]:
-        raise ValueError(f"无法确认 {version} 的资源包格式，请手动指定 pack_format。")
+        # 资源包是 1.6.1 才引入的机制，更老的版本没有可写的东西。
+        raise ValueError(f"{version} 没有资源包机制（1.6.1 起才支持），无法生成汉化包。")
     chosen = PACK_FORMATS[0][1]
     for ver, fmt in PACK_FORMATS:
         if ver <= vt:
@@ -1868,6 +1944,63 @@ def pack_format_for_version(version: str) -> int | float:
         else:
             break
     return clean_pack_format(chosen)
+
+
+def _remote_format_cache_path(cache_dir: Path | None = None) -> Path:
+    return (Path(cache_dir) if cache_dir else app_dir() / "ferry_cache") / "pack_formats.json"
+
+
+def _fetch_json(url: str, timeout: float) -> Any:
+    request = urllib.request.Request(url, headers={"User-Agent": "ProjectFerry/1.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8-sig"))
+
+
+def _parse_remote_formats(data: Any) -> dict[tuple[int, ...], int | float]:
+    """解析 {"formats": {"26.3": 97.1}}；丢弃无法解析或离谱的条目。"""
+    result: dict[tuple[int, ...], int | float] = {}
+    entries = data.get("formats") if isinstance(data, dict) else None
+    if not isinstance(entries, dict):
+        return result
+    for version, value in entries.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 1 <= float(value) <= 9999:
+            continue
+        vt = normalize_version_tuple(_version_tuple(str(version)))
+        if vt:
+            result[vt] = clean_pack_format(value)
+    return result
+
+
+def pack_format_for_version_remote(version: str, cache_dir: Path | None = None, timeout: float = 8.0, online: bool = True) -> int | float | None:
+    """从仓库的远程版本表查 pack_format；查不到或网络失败返回 None，调用方回退本地表。"""
+    cache_file = _remote_format_cache_path(cache_dir)
+    try:
+        cached = json.loads(cache_file.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        cached = {}
+    formats = _parse_remote_formats(cached if isinstance(cached, dict) else {})
+    fresh = isinstance(cached, dict) and time.time() - float(cached.get("fetched_at") or 0) < REMOTE_FORMAT_TTL
+    if formats and fresh:
+        return formats.get(normalize_version_tuple(_version_tuple(version)))
+    fetched: dict[tuple[int, ...], int | float] = {}
+    if online:
+        for url in PACK_FORMATS_REMOTE_URLS:
+            try:
+                fetched = _parse_remote_formats(_fetch_json(url, timeout))
+            except (OSError, ValueError) as exc:
+                LOG.debug("Remote pack format fetch failed: %s (%s)", url, exc)
+                continue
+            if fetched:
+                break
+    if fetched:
+        formats = fetched
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"fetched_at": time.time(), "formats": {".".join(map(str, key)): value for key, value in formats.items()}}
+            cache_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError:
+            LOG.debug("Could not save remote pack format cache: %s", cache_file, exc_info=True)
+    return formats.get(normalize_version_tuple(_version_tuple(version))) if formats else None
 
 
 MC_VERSION_RE = re.compile(r"(?<![\d.])(1\.\d{1,2}(?:\.\d+)?|\d{2}\.\d{1,2}(?:\.\d+)?)(?![\d.])")
@@ -2025,7 +2158,7 @@ def detect_minecraft_version(instance_path: Path) -> str | None:
     return None
 
 
-def detect_pack_format(instance_path: Path) -> int | float:
+def detect_pack_format(instance_path: Path, cache_dir: Path | None = None, online: bool = True) -> int | float:
     # 优先读取客户端 version.json 的 pack_version，权威且含 minor，无需维护版本表。
     exact = client_pack_format(instance_path)
     if exact is not None:
@@ -2033,7 +2166,27 @@ def detect_pack_format(instance_path: Path) -> int | float:
     version = detect_minecraft_version(instance_path)
     if version is None:
         raise ValueError("未检测到游戏版本；请在 GUI 选择版本或在命令行指定 --pack-format N。")
-    return pack_format_for_version(version)
+    local: int | float | None
+    try:
+        local = pack_format_for_version(version)
+    except ValueError as exc:
+        vt = normalize_version_tuple(_version_tuple(version))
+        if vt and vt < PACK_FORMATS[0][0]:
+            raise  # 1.6.1 之前没有资源包机制，联网也查不到，直接给出明确原因。
+        local = None
+        del exc
+    # 表尾条目（26.4+）在正式版定版前随时可能变：联网核对远程版本表，失败再用本地表。
+    vt = normalize_version_tuple(_version_tuple(version))
+    live_zone = bool(vt) and vt >= PACK_FORMATS[-1][0]
+    if local is not None and not live_zone:
+        return local
+    if online:
+        remote = pack_format_for_version_remote(version, cache_dir=cache_dir)
+        if remote is not None:
+            return remote
+    if local is not None:
+        return local
+    raise ValueError(f"无法确认 {version} 的资源包格式，请手动指定 pack_format 或检查网络后重试。")
 
 
 def resolve_pack_format(config: dict[str, Any], instance: Path, overrides: dict[str, Any] | None = None) -> int | float:
@@ -2045,7 +2198,11 @@ def resolve_pack_format(config: dict[str, Any], instance: Path, overrides: dict[
     pack = Path(overrides.get("output_dir") or config.get("output_dir") or instance / "resourcepacks") / (overrides.get("pack_name") or config.get("pack_name") or DEFAULT_CONFIG["pack_name"])
     existing = read_pack_format(pack)
     try:
-        detected = detect_pack_format(instance)
+        detected = detect_pack_format(
+            instance,
+            cache_dir=Path(config.get("cache_dir") or app_dir() / "ferry_cache"),
+            online=bool(config.get("online_pack_format", True)),
+        )
     except ValueError:
         detected = None
     # 向上兼容：检测到的版本比旧包格式新时升级；反之尊重已有（可能是手动或更高版本）格式。
@@ -2345,11 +2502,15 @@ def resolve_translate_settings(config: dict[str, Any], instance: Path, overrides
     fill_community = o.get("fill_community") if o.get("fill_community") is not None else bool(config.get("fill_community", False))
     refine_community = o.get("refine_community") if o.get("refine_community") is not None else bool(config.get("refine_community", False))
     cache_dir = config.get("cache_dir") or str(app_dir() / "ferry_cache")
-    glossary = dict(BUILTIN_GLOSSARY)
-    glossary.update(load_user_glossary())
+    # Automatically collected Mojang terms are contextual hints, not forced replacements.
+    # Only terms the user explicitly put in ferry_config.json.glossary are strict.
+    term_hints = dict(BUILTIN_GLOSSARY)
+    term_hints.update(load_user_glossary())
+    glossary: dict[str, str] = {}
     user_glossary = config.get("glossary", {})
     if isinstance(user_glossary, dict):
         glossary.update(user_glossary)
+        term_hints.update(user_glossary)
     keep = set(BUILTIN_KEEP)
     user_keep = config.get("keep_untranslated", [])
     if isinstance(user_keep, list):
@@ -2368,6 +2529,7 @@ def resolve_translate_settings(config: dict[str, Any], instance: Path, overrides
         "mymemory_email": config.get("mymemory_email", ""),
         "deepl_free": bool(config.get("deepl_free", True)),
         "glossary": glossary,
+        "term_hints": term_hints,
         "keep": keep,
         "weight": 1.0,
     }
@@ -2445,14 +2607,23 @@ def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=N
         keep = set(base_keep) | modid_keep_words(modid)
         refining = bool(settings.get("refine_community") and (corpus or {}).get(modid))
         references = reference_examples(batch, (corpus or {})[modid]) if refining else None
-        cache_key_value = cache_key(batch, engine_settings["engine"], engine_settings["model"], glossary, base_keep, references)
+        hints = relevant_term_hints(batch, settings.get("term_hints"), set(glossary) | keep)
+        cache_key_value = cache_key(
+            batch, engine_settings["engine"], engine_settings["model"], glossary, keep,
+            references, engine_settings.get("base_url", ""), hints,
+        )
         cache_file = cache_dir / f"{cache_key_value}.json"
         if cache_file.exists() and not bypass_cache:
             raw = json.loads(cache_file.read_text(encoding="utf-8"))
         else:
             masked = {entry.key: mask_all(entry.english, glossary, keep)[0] for entry in batch}
             try:
-                request_settings = {**engine_settings, "refine_community": refining, "reference_examples": references or []}
+                request_settings = {
+                    **engine_settings,
+                    "refine_community": refining,
+                    "reference_examples": references or [],
+                    "term_hints": hints,
+                }
                 raw = _translate_batch_with_retry(engine_settings["engine"], masked, request_settings, cancel_event=cancel_event)
             except RuntimeError as exc:
                 message = f"{modid}（{len(batch)} 条）：{exc}"

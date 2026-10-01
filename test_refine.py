@@ -107,6 +107,88 @@ class CorpusTranslationTests(unittest.TestCase):
                 core.cache_key(entries, "openai", "test", references=core.reference_examples(entries, corpus["example"])),
             )
 
+    def test_auto_glossary_terms_are_contextual_hints_not_forced_replacements(self):
+        terms = {"Lead": "拴绳", "Map": "地图", "Redstone": "红石", "Golden Apple": "金苹果"}
+        source = "Lead the way to the map, then use redstone near the Golden Apple."
+        entries = [core.Entry("demo", "test", source, "test")]
+        hints = core.relevant_term_hints(entries, terms)
+        masked, replacements = core.mask_all(source, {}, set())
+        self.assertEqual(masked, source)
+        self.assertEqual(replacements, {})
+        self.assertNotIn("Lead", hints)
+        self.assertNotIn("Map", hints)
+        self.assertEqual(hints.get("Redstone"), "红石")
+        self.assertEqual(hints.get("Golden Apple"), "金苹果")
+
+    def test_explicit_user_glossary_stays_strict(self):
+        source = "Lead the way"
+        masked, replacements = core.mask_all(source, {"Lead": "铅"}, set())
+        self.assertNotIn("Lead", masked)
+        self.assertEqual(list(replacements.values()), ["铅"])
+
+    def test_resolved_auto_glossary_is_hint_but_user_glossary_is_strict(self):
+        config = {
+            **core.DEFAULT_CONFIG,
+            "engine": "openai",
+            "openai_base_url": "https://api.example.test/v1",
+            "openai_api_key": "test",
+            "openai_model": "test-model",
+            "glossary": {"Custom Widget": "自定义组件"},
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            core, "load_user_glossary", return_value={"Lead": "拴绳", "Redstone Dust": "红石粉"}
+        ):
+            settings = core.resolve_translate_settings(config, Path(tmp), {"pack_format": 15})
+        self.assertEqual(settings["glossary"], {"Custom Widget": "自定义组件"})
+        self.assertEqual(settings["term_hints"]["Lead"], "拴绳")
+        source = "Lead Block, Custom Widget, and Redstone Dust"
+        masked, replacements = core.mask_all(source, settings["glossary"], settings["keep"])
+        self.assertIn("Lead Block", masked)
+        self.assertIn("Redstone Dust", masked)
+        self.assertEqual(list(replacements.values()), ["自定义组件"])
+        hints = core.relevant_term_hints(
+            [core.Entry("demo", "key", source, "test")],
+            settings["term_hints"],
+            set(settings["glossary"]) | settings["keep"],
+        )
+        self.assertNotIn("Lead", hints)
+        self.assertNotIn("Custom Widget", hints)
+        self.assertEqual(hints.get("Redstone Dust"), "红石粉")
+
+    def test_cache_key_separates_provider_prompt_and_term_hints(self):
+        entries = [core.Entry("demo", "key", "Hello", "test")]
+        a = core.cache_key(entries, "openai", "deepseek-chat", base_url="https://api.deepseek.com/v1")
+        b = core.cache_key(entries, "openai", "deepseek-chat", base_url="https://other.example/v1")
+        c = core.cache_key(entries, "openai", "deepseek-chat", base_url="https://api.deepseek.com/v1", term_hints={"Redstone": "红石"})
+        self.assertEqual(len({a, b, c}), 3)
+
+    def test_glossary_hints_are_sent_as_context_to_openai_compatible_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            entries = [core.Entry("demo", "key", "Mine redstone near the Golden Apple", "test")]
+            settings = {
+                "cache_dir": str(Path(tmp) / "cache"), "batch_size": 1, "concurrency": 1,
+                "glossary": {}, "term_hints": {"Redstone": "红石", "Golden Apple": "金苹果"},
+                "keep": set(), "delay": 0, "timeout": 5, "refine_community": False,
+                "engine": "openai", "model": "deepseek-chat", "base_url": "https://api.example.test/v1", "api_key": "test",
+            }
+            captured = []
+
+            def fake_post(_url, payload, _headers, _timeout):
+                captured.append(payload)
+                content = payload["messages"][1]["content"]
+                self.assertIn("redstone", content.lower())
+                prompt = payload["messages"][0]["content"]
+                self.assertIn("Redstone", prompt)
+                self.assertIn("Golden Apple", prompt)
+                self.assertIn("contextual suggestions", prompt)
+                return {"choices": [{"message": {"content": json.dumps({"key": "在金苹果附近挖红石"}, ensure_ascii=False)}}]}
+
+            with patch.object(core, "_http_post_json", side_effect=fake_post):
+                translated, errors, failed = core.translate_entries(entries, settings)
+            self.assertFalse(errors or failed)
+            self.assertEqual(translated["demo"]["key"], "在金苹果附近挖红石")
+            self.assertEqual(len(captured), 1)
+
     def test_ai_pack_yields_to_human_translations_and_leaves_other_mods(self):
         with tempfile.TemporaryDirectory() as tmp:
             pack = Path(tmp) / "ai.zip"

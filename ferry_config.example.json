@@ -12,6 +12,7 @@
   "output_dir": "",
   "cache_dir": "",
   "pack_format": 0,
+  "online_pack_format": true,
   "batch_size": 30,
   "timeout": 180,
   "delay": 0.2,

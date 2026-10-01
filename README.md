@@ -67,9 +67,11 @@
 
 1.6.1 之前没有资源包机制，所以**不做**。所有汉化都靠资源包覆盖，不碰模组文件。
 
-**1.6.1–1.12.2 旧版**：`pack_format` 1–3 写的是 `assets/<modid>/lang/zh_CN.lang`（UTF-8），1.13+ 才写 `zh_cn.json`。旧实例里如果已经有本工具生成的 JSON 包，重扫/翻译时会自动迁成 `.lang`，原 ZIP 先备份成同目录的 `.pre-lang-backup`。
+**1.6.1–1.12.2 旧版**：`pack_format` 1–2（1.6.1–1.10.2）写 `assets/<modid>/lang/zh_CN.lang`，`pack_format` 3（1.11–1.12.2）起资源包内文件名强制全小写、改写 `zh_cn.lang`；1.13+ 才写 `zh_cn.json`。旧实例里如果已经有本工具生成的 JSON 包，重扫/翻译时会自动迁成 `.lang`，原 ZIP 先备份成同目录的 `.pre-lang-backup`。
 
-**新版向上兼容**：优先读实例客户端 jar 里的 `version.json`，直接拿 `pack_version.resource_major/resource_minor`（比如 1.21.10→69.0，26.3→97.1），所以以后出新版本基本不用改代码。读不到才退回版本表：1.21.8→64，1.21.9→69.0，1.21.11→75.0，26.1→84.0，26.2→88.0，26.3→97.1，26.4 快照→98.0。游戏现在是年份版本号（`26.2`、`26.3`），你要是填成 `1.26.3` 它会自动当成 `26.3`。1.21.9（25w31a）起 `pack.mcmeta` 用 `min_format` + `max_format`（整数或 `[major, minor]`），更早的还是 `pack_format`，读取时两种都认。
+**新版向上兼容**：优先读实例客户端 jar 里的 `version.json`，直接拿 `pack_version.resource_major/resource_minor`（比如 1.21.10→69.0，26.3→97.1），所以以后出新版本基本不用改代码。读不到才退回版本表：1.21.8→64，1.21.9→69.0，1.21.11→75.0，26.1→84.0，26.2→88.0，26.3→97.1，26.4→99.0（当前快照值，正式版以 version.json 为准）。游戏现在是年份版本号（`26.2`、`26.3`），你要是填成 `1.26.3` 它会自动当成 `26.3`。1.21.9（25w31a）起 `pack.mcmeta` 用 `min_format` + `max_format`（整数或 `[major, minor]`），更早的还是 `pack_format`，读取时两种都认。
+
+**版本表联网更新**：出新的 Minecraft 版本而本地版本表还没跟上时，工具会去仓库根目录的 `pack_formats.json` 拉最新表（raw.githubusercontent 主源 + jsDelivr 备源，结果缓存 24 小时到 `ferry_cache/`），拉不到就继续用内置表，再不行才弹手动选择。所以以后每次游戏更新，只要在 GitHub 上给这个 JSON 补一行，旧安装不用重新下载程序。不想联网可以在 `ferry_config.json` 里把 `online_pack_format` 设为 `false`。
 
 未知版本时 GUI 会让你手动选/填（支持 97.1 这种小数），命令行用 `--pack-format N`，或者 `--yes` 硬按 15 走（包里会标「版本未确认」）。HMCL/PCL 私有配置我还没实机确认，`options.txt` 自动启用也一直关着。
 
@@ -83,7 +85,7 @@
 
 ## 术语表
 
-翻译前会保护 Minecraft 官方术语（苦力怕、红石、精准采集之类），翻完统一还原成官方译名，保证跨模组一致；也会保护模组名和 Forge/NeoForge 这类品牌词。
+翻译时会把 Mojang 自动词库作为上下文术语提示（例如 `Redstone Dust` → 红石粉），不再把 `Lead`、`Map` 这类多义短词脱离句子强行替换。你在 `ferry_config.json` 的 `glossary` 里亲自填写的词仍会严格固定；模组名及 Forge/NeoForge 等品牌词也会保护。
 
 联网更新官方术语表（从 Mojang 官方语言文件里提取实体/附魔/效果/物品名）：
 
