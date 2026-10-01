@@ -202,6 +202,8 @@ DEFAULT_CONFIG = {
     # 启动时自动检查 GitHub 新版本（每 7 天最多一次）
     "update_auto_check": True,
     "update_last_check": 0,
+    # 不翻译名单：这些模组完全跳过 AI 翻译（GUI 右键加入）
+    "no_translate_mods": [],
 }
 
 # (版本元组, 资源包格式)，升序排列；取 <= 目标版本的最大一项。

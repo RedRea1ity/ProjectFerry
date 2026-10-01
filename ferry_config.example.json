@@ -36,5 +36,6 @@
   "keep_untranslated": [],
   "skip_keys": {},
   "disclaimer_accepted": false,
-  "lookup_sites": []
+  "lookup_sites": [],
+  "no_translate_mods": []
 }

@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -284,6 +284,7 @@ class FerryApp(tk.Tk):
         self._hardcoded_cache: dict[str, list[tuple[str, int, list[str]]]] = {}
         self.whitelist: set[str] = self._load_whitelist()
         self.config: dict = core.load_config()
+        self.no_translate: set[str] = set(self.config.get("no_translate_mods") or [])
         self._last_engine: str = str(self.config.get("engine", "mymemory"))
         self._build_ui()
         self._apply_geometry()
@@ -413,6 +414,7 @@ class FerryApp(tk.Tk):
         self.tree.tag_configure("status_community", foreground="#5B6B7B")
         self.tree.tag_configure("status_reverted", foreground="#8A6D00")
         self.tree.tag_configure("status_uninstalled", foreground="#9A5A22")
+        self.tree.tag_configure("status_excluded", foreground=FAINT)
         self.tree.tag_configure("status_complete", foreground=GREEN)
         self.tree.tag_configure("status_hardcoded", foreground="#8A4F00")
         self.tree.tag_configure("failed", foreground=RED)
@@ -743,7 +745,7 @@ class FerryApp(tk.Tk):
 
     def _mark_hardcoded_row(self, row: dict) -> None:
         """后台硬编码检测结果回来后，给已显示的行补上标记。"""
-        if row.get("hardcoded"):
+        if row.get("hardcoded") or row.get("excluded"):
             return
         row["hardcoded"] = True
         label = row.get("label", "")
@@ -796,13 +798,15 @@ class FerryApp(tk.Tk):
 
     # ---------- 扫描结果 -> 行数据 ----------
 
-    def _status_visual(self, st, is_uninstalled: bool, failed_count: int, hardcoded: bool, patch_pending: bool) -> tuple[str, str, str]:
+    def _status_visual(self, st, is_uninstalled: bool, failed_count: int, hardcoded: bool, patch_pending: bool, is_excluded: bool = False) -> tuple[str, str, str]:
         if failed_count:
             return "✗", f"失败{failed_count}条", "failed"
         if is_uninstalled:
             return "⊗", "已卸载", "status_uninstalled"
         if st.fully_reverted:
             return "⊘", "已还原", "status_reverted"
+        if is_excluded:
+            return "∅", "已排除（不翻译）", "status_excluded"
         # A-2：含硬编码文本时单独成状态，避免掉进「待翻·缺0」这种自相矛盾的显示。
         if hardcoded:
             return "⚠", ("含硬编码文本" if st.missing == 0 else f"含硬编码·缺{st.missing}"), "status_hardcoded"
@@ -815,15 +819,17 @@ class FerryApp(tk.Tk):
             return "◐", f"部分·缺{st.missing}", "status_partial"
         return "○", f"待翻·缺{st.missing}", "status_pending"
 
-    def _make_row(self, st, label: str, coverage: str, instance: Path, is_uninstalled: bool, failed_count: int, patch_pending: bool, hardcoded: bool) -> dict:
+    def _make_row(self, st, label: str, coverage: str, instance: Path, is_uninstalled: bool, failed_count: int, patch_pending: bool, hardcoded: bool, is_excluded: bool = False) -> dict:
         # A-1：保证三个关键标记一定出现在主表状态文字里（调用方已拼则跳过）。
+        if is_excluded and "已排除" not in label:
+            label = f"{label}·已排除" if label else "已排除"
         if hardcoded and "硬编码" not in label:
             label = f"{label}·疑似硬编码文本" if label else "疑似硬编码文本"
         if patch_pending and "手册" not in label:
             label = f"{label}·手册待翻" if label else "手册待翻"
         if failed_count and "失败" not in label:
             label = f"{label}·上次失败{failed_count}条" if label else f"上次失败{failed_count}条"
-        symbol, short, tag = self._status_visual(st, is_uninstalled, failed_count, hardcoded, patch_pending)
+        symbol, short, tag = self._status_visual(st, is_uninstalled, failed_count, hardcoded, patch_pending, is_excluded)
         total = int(st.total_keys)
         percent = 0.0 if is_uninstalled or total <= 0 else (total - int(st.missing)) / total
         percent = max(0.0, min(1.0, percent))
@@ -848,6 +854,7 @@ class FerryApp(tk.Tk):
             "failed": bool(failed_count),
             "patch_pending": bool(patch_pending),
             "has_community": bool(st.has_community),
+            "excluded": bool(is_excluded),
             "placeholder": False,
         }
 
@@ -856,7 +863,7 @@ class FerryApp(tk.Tk):
             "modid": PLACEHOLDER_MODID, "label": "", "hardcoded": False, "missing": 0, "ai": 0, "community": 0, "total": 0,
             "percent": 0.0, "complete_text": "", "symbol": "", "short": "无待汉化模组", "tag": "status_pending",
             "coverage": "", "instance": instance.name, "instance_path": str(instance),
-            "uninstalled": False, "failed": False, "patch_pending": False, "has_community": False, "placeholder": True,
+            "uninstalled": False, "failed": False, "patch_pending": False, "has_community": False, "excluded": False, "placeholder": True,
         }
 
     def _pending_count(self, targets: dict[str, set[str]]) -> int:
@@ -1473,6 +1480,7 @@ class FerryApp(tk.Tk):
             "　　　　重翻整个模组、安装人工汉化包、设置不翻译词条。",
             "F5：重新扫描；Esc：清空搜索。",
             "选中模组后点「查询在线汉化」，可查多个网站有没有现成汉化；查询源在「设置」里自定义。",
+            "右键「加入不翻译名单」：此模组完全跳过 AI 翻译（状态列显示 ∅），右键可移出恢复。",
         ])
         section("状态符号", [
             "✓ 已完全汉化　◐ 部分翻译　○ 待翻译　◈ 已有人工汉化",
@@ -2174,10 +2182,11 @@ class FerryApp(tk.Tk):
                             failed_modids.add(st.modid)
                         is_uninstalled = st.modid in uninstalled[str(instance)]
                         is_hardcoded = st.modid in hardcoded_namespaces
+                        is_excluded = st.modid in self.no_translate
                         complete = st.fully_translated and not is_uninstalled and st.modid not in patch_pending and not is_hardcoded
                         coverage = core.translation_coverage_label(st) if complete else ""
-                        rows.append(self._make_row(st, label, coverage, instance, is_uninstalled, failed_count, st.modid in patch_pending, is_hardcoded))
-                        if st.modid not in uninstalled[str(instance)] and ((st.missing > 0 and (not st.has_community or fill_community or refine_community)) or st.modid in patch_pending):
+                        rows.append(self._make_row(st, label, coverage, instance, is_uninstalled, failed_count, st.modid in patch_pending, is_hardcoded, is_excluded))
+                        if not is_excluded and st.modid not in uninstalled[str(instance)] and ((st.missing > 0 and (not st.has_community or fill_community or refine_community)) or st.modid in patch_pending):
                             translatable_targets.setdefault(str(instance), set()).add(st.modid)
                 else:
                     rows.append(self._placeholder_row(instance))
@@ -2258,6 +2267,10 @@ class FerryApp(tk.Tk):
         targets = self._selected_targets()
         if not targets:
             return
+        excluded = sorted({m for mods in targets.values() for m in mods if m in self.no_translate})
+        if excluded:
+            self.status_var.set(f"{'、'.join(excluded[:3])} 在不翻译名单里；右键选「移出不翻译名单」可恢复。")
+            return
         count = self._pending_count(targets)
         if count <= 0:
             messagebox.showinfo("无需翻译", "所选模组没有待翻译的 key。")
@@ -2283,11 +2296,44 @@ class FerryApp(tk.Tk):
         menu.add_command(label="重载已卸载的 AI 汉化", command=self._reload_translation, state="normal" if any(item in self.uninstalled_by_row for item in selection) else "disabled")
         menu.add_command(label="重翻整个模组", command=self._retranslate_mod)
         menu.add_command(label="设置不翻译 key…", command=self._skip_mod_key)
+        excluded_here = [self.row_modids.get(item, "") for item in selection if self.row_modids.get(item, "") in self.no_translate]
+        if excluded_here:
+            menu.add_command(label="移出不翻译名单（恢复翻译）", command=self._remove_no_translate)
+        if any(self.row_modids.get(item, "") and self.row_modids.get(item, "") != PLACEHOLDER_MODID and self.row_modids.get(item, "") not in self.no_translate for item in selection):
+            menu.add_command(label="加入不翻译名单（不再翻译此模组）", command=self._add_no_translate)
         menu.add_command(label="强制还原英文（生成覆盖资源包）", command=lambda: self._remove_translation("en"))
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _add_no_translate(self) -> None:
+        if self.scanning or self.translating or self.managing_pack:
+            messagebox.showinfo("提示", "请先等待当前扫描 / 翻译结束。")
+            return
+        added = sorted({m for m in (self.row_modids.get(item, "") for item in self.tree.selection()) if m and m != PLACEHOLDER_MODID and m not in self.no_translate})
+        if not added:
+            return
+        self.no_translate.update(added)
+        self.config["no_translate_mods"] = sorted(self.no_translate)
+        core.save_config(self.config)
+        names = "、".join(added[:5]) + (" 等" if len(added) > 5 else "")
+        self.status_var.set(f"已把 {len(added)} 个模组加入不翻译名单（{names}），重新扫描后生效。")
+        self.start_scan()
+
+    def _remove_no_translate(self) -> None:
+        if self.scanning or self.translating or self.managing_pack:
+            messagebox.showinfo("提示", "请先等待当前扫描 / 翻译结束。")
+            return
+        removed = sorted({m for m in (self.row_modids.get(item, "") for item in self.tree.selection()) if m in self.no_translate})
+        if not removed:
+            return
+        self.no_translate.difference_update(removed)
+        self.config["no_translate_mods"] = sorted(self.no_translate)
+        core.save_config(self.config)
+        names = "、".join(removed[:5]) + (" 等" if len(removed) > 5 else "")
+        self.status_var.set(f"已把 {len(removed)} 个模组移出不翻译名单（{names}），重新扫描后生效。")
+        self.start_scan()
 
     def _install_human_pack(self) -> None:
         if self.scanning or self.translating or self.managing_pack:
@@ -2461,6 +2507,15 @@ class FerryApp(tk.Tk):
         if not targets:
             messagebox.showinfo("提示", "请先在列表里选中要汉化的模组（可按住 Ctrl 多选）。")
             return
+        dropped = sorted({m for mods in targets.values() for m in mods if m in self.no_translate})
+        if dropped:
+            for modids in targets.values():
+                modids.difference_update(self.no_translate)
+            targets = {path: modids for path, modids in targets.items() if modids}
+            if not targets:
+                self.status_var.set(f"选中的模组都在不翻译名单里（{'、'.join(dropped[:3])}）；右键可移出。")
+                return
+            self.status_var.set(f"已跳过不翻译名单里的 {len(dropped)} 个模组。")
         self._start_translate(targets)
 
     def _translate_all(self) -> None:
@@ -2685,8 +2740,9 @@ class FerryApp(tk.Tk):
                     args=(core.app_dir() / "ferry_cache",),
                     daemon=True,
                 ).start()
-            ai_mods = sum(1 for r in rows if not r["placeholder"] and not r["has_community"])
-            com_mods = sum(1 for r in rows if not r["placeholder"] and r["has_community"])
+            excluded_n = sum(1 for r in rows if r.get("excluded"))
+            ai_mods = sum(1 for r in rows if not r["placeholder"] and not r["has_community"] and not r.get("excluded"))
+            com_mods = sum(1 for r in rows if not r["placeholder"] and r["has_community"] and not r.get("excluded"))
             partial = sum(1 for r in rows if not r["placeholder"] and not r["has_community"] and r["ai"] > 0 and r["missing"] > 0)
             pending_community = max(0, sum(len(v) for v in translatable_targets.values()) - ai_mods)
             if partial:
@@ -2701,6 +2757,8 @@ class FerryApp(tk.Tk):
                 summary = f"扫描完成：{ai_mods} 个模组待 AI 翻译，{pending_community} 个待补人工汉化缺失。"
             else:
                 summary = f"扫描完成：{ai_mods} 个模组缺中文，{com_mods} 个已有人工汉化（自动让位）。"
+            if excluded_n:
+                summary += f" {excluded_n} 个已手动排除（不翻译），右键可移出。"
             if failed_modids:
                 summary += f" {len(failed_modids)} 个模组上次翻译失败（标红），可用「只看失败」筛出来重翻。"
             self.status_var.set(summary)
