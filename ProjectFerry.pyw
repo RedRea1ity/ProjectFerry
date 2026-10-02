@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -473,6 +473,8 @@ class FerryApp(tk.Tk):
         settings_header.pack(fill="x")
         self.settings_summary_var = tk.StringVar(value="")
         ttk.Label(settings_header, textvariable=self.settings_summary_var, foreground=MUTED, font=FONT_SMALL).pack(side="left", padx=(2, 0))
+        self.hardcoded_var = tk.BooleanVar(value=bool(self.config.get("translate_hardcoded", True)))
+        ttk.Checkbutton(settings_header, text="翻译硬编码文本", variable=self.hardcoded_var, command=self._refine_changed).pack(side="left", padx=(12, 0))
         ttk.Button(settings_header, text="并发 / 模型池…", command=self._show_settings).pack(side="right")
         self.settings_toggle_button = tk.Label(settings_header, text="▸ 翻译设置", fg=ACCENT, bg=BG, font=FONT_SMALL_BOLD, cursor="hand2")
         self.settings_toggle_button.pack(side="right", padx=(0, 12))
@@ -527,8 +529,7 @@ class FerryApp(tk.Tk):
         self.glossary_button.pack(side="left", padx=(6, 0))
         self.fill_var = tk.BooleanVar(value=bool(self.config.get("fill_community", False)))
         ttk.Checkbutton(actions, text="填补人工汉化缺失", variable=self.fill_var, command=self._refine_changed).pack(side="left", padx=(12, 0))
-        self.hardcoded_var = tk.BooleanVar(value=bool(self.config.get("translate_hardcoded", True)))
-        ttk.Checkbutton(actions, text="翻译硬编码文本（桥接用）", variable=self.hardcoded_var, command=self._refine_changed).pack(side="left", padx=(12, 0))
+
 
         self.refine_var = tk.BooleanVar(value=bool(self.config.get("refine_community", False)))
         ttk.Checkbutton(self.grid_frame, text="参考人工汉化语料补全缺失 key（不改原译文）", variable=self.refine_var, command=self._refine_changed).grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
