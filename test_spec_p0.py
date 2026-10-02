@@ -111,6 +111,58 @@ class VersionDetectionTests(unittest.TestCase):
         self.assertNotIn("Same", mapping, "译文等于原文的键没有价值")
         self.assertNotIn("Blank", mapping, "空译文不导出")
 
+    def test_hardcoded_nbt_pipeline(self):
+        import json as json_module
+
+        def class_with(text: str) -> bytes:
+            raw = text.encode("utf-8")
+            magic = bytes((0xCA, 0xFE, 0xBA, 0xBE))
+            return (magic + (0).to_bytes(2, "big") + (61).to_bytes(2, "big")
+                    + (2).to_bytes(2, "big") + bytes((1,)) + len(raw).to_bytes(2, "big") + raw)
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            strings = [
+                "You hear a distant whisper from the ancient ruins at midnight",
+                "The forgotten king guards the silent treasury of dust and sorrow",
+                "A letter from the front line describes the winter campaign",
+                "The gunsmith explains how to maintain the bolt action rifle",
+                "Field manual: always check the chamber before cleaning",
+                "Radio crackles with coordinates for the artillery strike",
+            ]
+            with zipfile.ZipFile(mods / "tacz-1.20.1.jar", "w") as zf:
+                zf.writestr("assets/tacz/lang/en_us.json", json_module.dumps({"item.x": "Hello world"}))
+                for index, text in enumerate(strings):
+                    zf.writestr(f"com/example/C{index}.class", class_with(text))
+
+            findings = core.detect_hardcoded_texts(mods, threshold=2)
+            self.assertEqual([(name, count) for name, count, _ in findings], [("tacz-1.20.1.jar", 6)])
+            scan = core.scan_inputs(mods, None)
+            by_modid = core.hardcoded_strings_by_modid(scan, findings)
+            self.assertEqual(set(by_modid), {"tacz"})
+            self.assertEqual(sorted(by_modid["tacz"]), sorted(strings))
+
+            entries = core.missing_hardcoded_entries(by_modid, {}, {"tacz"})
+            self.assertEqual(len(entries), 6)
+            self.assertTrue(all(entry.kind == "nbt" and entry.key.startswith("nbt:") for entry in entries))
+            # 已有译文的条目不再生成
+            existing = {"tacz": {entries[0].english: "已翻"}}
+            again = core.missing_hardcoded_entries(by_modid, existing, {"tacz"})
+            self.assertEqual(len(again), 5)
+            self.assertNotIn(entries[0].english, {entry.english for entry in again})
+
+            translated = {"tacz": {entry.key: "译" for entry in entries}}
+            pairs = core.hardcoded_pairs_from_entries(entries, translated)
+            self.assertEqual(pairs, {"tacz": {text: "译" for text in strings}})
+
+            pack = Path(tmp) / "AI_Translation_LowPriority.zip"
+            pack.write_bytes(b"placeholder")
+            core.save_hardcoded_translations(pack, pairs)
+            self.assertEqual(core.load_hardcoded_translations(pack), pairs)
+
+            mapping = core.build_bridge_mapping(scan.english, [], {}, hardcoded=pairs)
+            self.assertEqual(mapping, {text: "译" for text in strings})
+
     def test_latest_github_release_compares_versions(self):
         import unittest.mock as mock
         release = {"tag_name": "v1.6.0", "body": "更新说明", "html_url": "https://example.com/r",

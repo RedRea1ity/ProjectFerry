@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -527,6 +527,8 @@ class FerryApp(tk.Tk):
         self.glossary_button.pack(side="left", padx=(6, 0))
         self.fill_var = tk.BooleanVar(value=bool(self.config.get("fill_community", False)))
         ttk.Checkbutton(actions, text="填补人工汉化缺失", variable=self.fill_var, command=self._refine_changed).pack(side="left", padx=(12, 0))
+        self.hardcoded_var = tk.BooleanVar(value=bool(self.config.get("translate_hardcoded", True)))
+        ttk.Checkbutton(actions, text="翻译硬编码文本（桥接用）", variable=self.hardcoded_var, command=self._refine_changed).pack(side="left", padx=(12, 0))
 
         self.refine_var = tk.BooleanVar(value=bool(self.config.get("refine_community", False)))
         ttk.Checkbutton(self.grid_frame, text="参考人工汉化语料补全缺失 key（不改原译文）", variable=self.refine_var, command=self._refine_changed).grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
@@ -881,6 +883,11 @@ class FerryApp(tk.Tk):
                 reverted=scan.reverted, refine_community=config["refine_community"],
             )
             entries.extend(core.missing_patchouli_entries(scan, modids))
+            if config.get("translate_hardcoded", True):
+                pack = Path(config.get("output_dir") or Path(path) / "resourcepacks") / (config.get("pack_name") or core.DEFAULT_CONFIG["pack_name"])
+                entries.extend(core.missing_hardcoded_entries(
+                    core.hardcoded_strings_by_modid(scan, self._hardcoded_cache.get(path) or [], modids),
+                    core.load_hardcoded_translations(pack), modids))
             entries = core.skip_ignored_entries(entries, config)
             total += len(entries)
         return total
@@ -1068,6 +1075,7 @@ class FerryApp(tk.Tk):
         config["fill_community"] = bool(self.fill_var.get())
         config["refine_community"] = bool(self.refine_var.get())
         config["community_enabled"] = bool(self.community_var.get())
+        config["translate_hardcoded"] = bool(self.hardcoded_var.get())
         config["concurrency"] = int(self.concurrency_var.get())
         return config
 
@@ -1483,6 +1491,7 @@ class FerryApp(tk.Tk):
             "F5：重新扫描；Esc：清空搜索。",
             "选中模组后点「查询在线汉化」，可查多个网站有没有现成汉化；查询源在「设置」里自定义。",
             "右键「加入不翻译名单」：此模组完全跳过 AI 翻译（状态列显示 ∅），右键可移出恢复。",
+            "勾选「翻译硬编码文本」后，疑似硬编码的英文会随翻译批一起交给 AI，译文存在资源包旁的 .hardcoded.json，由摆渡桥在游戏里做显示替换。",
         ])
         section("状态符号", [
             "✓ 已完全汉化　◐ 部分翻译　○ 待翻译　◈ 已有人工汉化",
@@ -1510,8 +1519,10 @@ class FerryApp(tk.Tk):
             pack = Path(settings["output_dir"]) / settings["pack_name"]
             ai_by_modid = core.load_pack_translations(pack)
         except (OSError, ValueError):
+            pack = None
             ai_by_modid = {}
-        mapping = core.build_bridge_mapping(scan.english, scan.community, ai_by_modid)
+        mapping = core.build_bridge_mapping(scan.english, scan.community, ai_by_modid,
+                                            hardcoded=core.load_hardcoded_translations(pack) if pack else None)
         if not mapping:
             self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
             return
@@ -1782,7 +1793,7 @@ class FerryApp(tk.Tk):
         else:
             for name, count, samples in self.hardcoded_results:
                 text.insert("end", f"{name}  ——  疑似 {count} 条\n")
-                for sample in samples:
+                for sample in samples[:3]:
                     text.insert("end", f"    {sample}\n")
                 text.insert("end", "\n")
         text.configure(state="disabled")
@@ -2146,9 +2157,9 @@ class FerryApp(tk.Tk):
         self.all_rows = []
         self._render_rows()
         # 路径在主线程读好再传进工作线程，避免工作线程访问 Tk 变量。
-        threading.Thread(target=self._scan_worker, args=(self.fill_var.get(), self.refine_var.get(), self.path_var.get().strip()), daemon=True).start()
+        threading.Thread(target=self._scan_worker, args=(self.fill_var.get(), self.refine_var.get(), self.path_var.get().strip(), self.hardcoded_var.get()), daemon=True).start()
 
-    def _scan_worker(self, fill_community: bool, refine_community: bool, manual: str) -> None:
+    def _scan_worker(self, fill_community: bool, refine_community: bool, manual: str, translate_hardcoded: bool = True) -> None:
         try:
             # 只扫当前实例；未指定时也只取自动发现的第一个，绝不整盘全扫。
             if manual:
@@ -2219,7 +2230,7 @@ class FerryApp(tk.Tk):
                         complete = st.fully_translated and not is_uninstalled and st.modid not in patch_pending and not is_hardcoded
                         coverage = core.translation_coverage_label(st) if complete else ""
                         rows.append(self._make_row(st, label, coverage, instance, is_uninstalled, failed_count, st.modid in patch_pending, is_hardcoded, is_excluded))
-                        if not is_excluded and st.modid not in uninstalled[str(instance)] and ((st.missing > 0 and (not st.has_community or fill_community or refine_community)) or st.modid in patch_pending):
+                        if not is_excluded and st.modid not in uninstalled[str(instance)] and ((st.missing > 0 and (not st.has_community or fill_community or refine_community)) or st.modid in patch_pending or (translate_hardcoded and st.modid in hardcoded_namespaces)):
                             translatable_targets.setdefault(str(instance), set()).add(st.modid)
                 else:
                     rows.append(self._placeholder_row(instance))
@@ -2583,16 +2594,17 @@ class FerryApp(tk.Tk):
             if modids & core.load_uninstalled_ai(pack).keys():
                 messagebox.showinfo("AI 汉化已卸载", "所选模组的 AI 汉化已卸载。请在模组列表中右键选择“重载已卸载的 AI 汉化”。")
                 return
-        cached = [(self.scan_cache.get(path), modids) for path, modids in targets.items()]
-        if all(scan is not None for scan, _ in cached) and not any(
+        cached = [(path, self.scan_cache.get(path), modids) for path, modids in targets.items()]
+        if all(scan is not None for _, scan, _ in cached) and not any(
             core.missing_entries(
                 scan.english, scan.community, scan.ai, set(self.whitelist),
                 fill_community=config["fill_community"], modids=modids,
                 reverted=scan.reverted, refine_community=config["refine_community"],
             ) or core.missing_patchouli_entries(scan, modids)
-            for scan, modids in cached
+            or (config.get("translate_hardcoded", True) and core.has_pending_hardcoded(self._hardcoded_cache.get(path) or [], scan, modids))
+            for path, scan, modids in cached
         ):
-            message = "所选模组没有需要翻译的非空英文 key；已有汉化或 AI 已覆盖全部有效条目。"
+            message = "所选模组没有需要翻译的英文 key 或硬编码文本；已有汉化或 AI 已覆盖全部有效条目。"
             self.status_var.set(message)
             messagebox.showinfo("无需翻译", message)
             return
@@ -2667,6 +2679,7 @@ class FerryApp(tk.Tk):
                 if scan is None:
                     scan = core.scan_inputs(mods, packs if packs.is_dir() else None)
                 settings = core.resolve_translate_settings(config, instance)
+                pack = Path(settings["output_dir"]) / settings["pack_name"]
                 core.yield_to_community(scan, Path(settings["output_dir"]) / settings["pack_name"])
                 if settings["engine"] in core.ENGINES_WITH_KEY and not settings["api_key"]:
                     self.result_queue.put(("error", f"{settings['engine']} 引擎需要 API key。请在下方填入并保存。"))
@@ -2693,6 +2706,14 @@ class FerryApp(tk.Tk):
                 else:
                     baseline_files = []
                 entries.extend(patch_entries)
+                # 硬编码候选（桥接用）：key 是 nbt:<hash>，译文存 sidecar，不写进资源包。
+                hardcoded_entries: list[core.Entry] = []
+                if config.get("translate_hardcoded", True):
+                    existing_hardcoded = core.load_hardcoded_translations(pack)
+                    hardcoded_entries = core.missing_hardcoded_entries(
+                        core.hardcoded_strings_by_modid(scan, self._hardcoded_cache.get(instance_path) or [], modids),
+                        existing_hardcoded, set(modids))
+                entries.extend(hardcoded_entries)
                 entries = core.skip_ignored_entries(entries, config)
                 if not entries and not baseline:
                     continue
@@ -2704,11 +2725,17 @@ class FerryApp(tk.Tk):
                 translations, errors, failed = core.translate_entries(entries, settings, progress=progress, cancel_event=cancel_event, usage=usage, corpus=corpus) if entries else ({}, [], {})
                 all_errors.extend(errors)
                 core.update_progress(translations, failed)
+                if hardcoded_entries:
+                    nbt_pairs = core.hardcoded_pairs_from_entries(hardcoded_entries, translations)
+                    if nbt_pairs:
+                        merged_hardcoded = core.load_hardcoded_translations(pack)
+                        for nbt_modid, pairs in nbt_pairs.items():
+                            merged_hardcoded.setdefault(nbt_modid, {}).update(pairs)
+                        core.save_hardcoded_translations(pack, merged_hardcoded)
                 if translations or baseline:
-                    pack = Path(settings["output_dir"]) / settings["pack_name"]
                     lang_translations = {modid: dict(data) for modid, data in baseline.items()}
                     for modid, data in translations.items():
-                        lang_translations.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith("patchouli:")})
+                        lang_translations.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith(("patchouli:", "nbt:"))})
                     merged = core.merge_pack_translations(pack, lang_translations, scan.community)
                     pages = core.load_pack_patchouli(pack)
                     pages.update(core.translated_patchouli_files(scan, patch_entries, translations))

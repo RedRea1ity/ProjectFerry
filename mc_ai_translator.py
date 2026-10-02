@@ -204,6 +204,8 @@ DEFAULT_CONFIG = {
     "update_last_check": 0,
     # 不翻译名单：这些模组完全跳过 AI 翻译（GUI 右键加入）
     "no_translate_mods": [],
+    # 翻译时顺带处理硬编码文本（存 sidecar，供摆渡桥做显示层替换）
+    "translate_hardcoded": True,
 }
 
 # (版本元组, 资源包格式)，升序排列；取 <= 目标版本的最大一项。
@@ -965,7 +967,7 @@ def reference_examples(batch: list[Entry], corpus: dict[str, tuple[str, str]], l
     return [{"key": key, "en": corpus[key][0], "zh": corpus[key][1]} for key in ranked[:limit]]
 
 
-def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_by_modid: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_by_modid: dict[str, dict[str, str]] | None = None, hardcoded: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
     """汇总 英文原文 -> 中文 的显示映射，供摆渡桥模组做 NBT/硬编码文本替换；人工译文优先于 AI。"""
     en_by_mod: dict[str, dict[str, str]] = {}
     for file in english:
@@ -981,6 +983,10 @@ def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_
         for key, english_text in entries.items():
             zh = zhs.get(key)
             if english_text.strip() and zh and str(zh).strip() and english_text != zh:
+                pairs.setdefault(english_text, str(zh))
+    for modid, entries in (hardcoded or {}).items():
+        for english_text, zh in entries.items():
+            if english_text.strip() and str(zh).strip():
                 pairs.setdefault(english_text, str(zh))
     return pairs
 
@@ -1078,7 +1084,7 @@ def _looks_like_ui_text(text: str) -> bool:
     return True
 
 
-def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5, sample_limit: int = 3) -> list[tuple[str, int, list[str]]]:
+def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5) -> list[tuple[str, int, list[str]]]:
     """扫描 mods 目录，找出疑似含硬编码文本（无法通过资源包汉化）的模组。
 
     返回 [(jar 名, 疑似条数, 样例)]，按条数降序。
@@ -1110,10 +1116,11 @@ def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5, sample_limit: int
                         continue
         except (zipfile.BadZipFile, OSError):
             continue
-        hardcoded = [text for text in dict.fromkeys(constants) if _looks_like_ui_text(text) and text.lower() not in known]
+        hardcoded = sorted(set(constants) - {""}, key=len, reverse=True)
+        hardcoded = [text for text in hardcoded if _looks_like_ui_text(text) and text.lower() not in known]
         if len(hardcoded) >= threshold:
-            samples = sorted(hardcoded, key=len, reverse=True)[:sample_limit]
-            results.append((jar.name, len(hardcoded), samples))
+            # 第三个元素是全量候选（按长度降序）；展示方自己取前几条当样例。
+            results.append((jar.name, len(hardcoded), hardcoded))
     results.sort(key=lambda item: -item[1])
     return results
 
@@ -1126,6 +1133,78 @@ def hardcoded_modids(scan: ScanResult, findings: list[tuple[str, int, list[str]]
         for file in scan.english
         if Path(file.path.split("!", 1)[0]).name in flagged_jars
     }
+
+
+def hardcoded_strings_by_modid(scan: ScanResult, findings: list[tuple[str, int, list[str]]], modids: set[str] | None = None) -> dict[str, list[str]]:
+    """把 jar 级别的疑似硬编码候选按语言命名空间归组（同 hardcoded_modids 的对应逻辑）。"""
+    wanted = {m.lower().replace("-", "_") for m in modids} if modids is not None else None
+    result: dict[str, list[str]] = {}
+    for jar_name, _count, candidates in findings:
+        for file in scan.english:
+            if Path(file.path.split("!", 1)[0]).name != jar_name:
+                continue
+            if wanted is not None and file.modid.lower().replace("-", "_") not in wanted:
+                continue
+            result.setdefault(file.modid, []).extend(candidates)
+    return {modid: list(dict.fromkeys(strings)) for modid, strings in result.items()}
+
+
+def missing_hardcoded_entries(strings_by_modid: dict[str, list[str]], existing: dict[str, dict[str, str]] | None = None, selected: set[str] | None = None) -> list[Entry]:
+    """把疑似硬编码文本包装成可翻译条目（kind="nbt"，key 前缀 nbt:），跳过已有译文的。"""
+    result: list[Entry] = []
+    for modid, strings in strings_by_modid.items():
+        if selected is not None and modid not in selected:
+            continue
+        have = {en for en, zh in (existing or {}).get(modid, {}).items() if str(zh).strip()}
+        for text in dict.fromkeys(strings):
+            if not text or not text.strip() or text.strip() in have:
+                continue
+            key = "nbt:" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+            result.append(Entry(modid, key, text, "hardcoded", "nbt"))
+    return result
+
+
+def has_pending_hardcoded(findings: list[tuple[str, int, list[str]]], scan: ScanResult, modids: set[str] | None = None, existing: dict[str, dict[str, str]] | None = None) -> bool:
+    return bool(missing_hardcoded_entries(hardcoded_strings_by_modid(scan, findings, modids), existing, modids))
+
+
+def hardcoded_pairs_from_entries(entries: list[Entry], translated: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """翻译完成后，把 nbt: 条目的译文按 英文原文 -> 中文 收拢。"""
+    pairs: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        if entry.kind != "nbt":
+            continue
+        zh = translated.get(entry.modid, {}).get(entry.key)
+        if zh and str(zh).strip():
+            pairs.setdefault(entry.modid, {})[entry.english] = str(zh)
+    return pairs
+
+
+def hardcoded_translations_path(pack: Path) -> Path:
+    return pack.with_name(pack.name + ".hardcoded.json")
+
+
+def load_hardcoded_translations(pack: Path) -> dict[str, dict[str, str]]:
+    path = hardcoded_translations_path(pack)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for modid, entries in raw.items():
+        if isinstance(modid, str) and isinstance(entries, dict):
+            clean = {k: str(v) for k, v in entries.items() if isinstance(k, str) and isinstance(v, str) and v.strip()}
+            if clean:
+                result[modid] = clean
+    return result
+
+
+def save_hardcoded_translations(pack: Path, data: dict[str, dict[str, str]]) -> None:
+    path = hardcoded_translations_path(pack)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
 def placeholder_tokens(value: str) -> list[str]:
