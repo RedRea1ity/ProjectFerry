@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -1529,6 +1529,7 @@ class FerryApp(tk.Tk):
         if not groups:
             self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
             return
+        mapping = core.build_bridge_mapping(scan.english, scan.community, ai_by_modid, hardcoded=hardcoded)
         rules_doc, lang_zh, lang_en = core.build_literalbridge_export(groups)
         bridge_config_dir = Path(instance_value) / "config" / "literalbridge"
         try:
@@ -1538,6 +1539,15 @@ class FerryApp(tk.Tk):
             (bridge_config_dir / "ferry.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         except OSError as exc:
             messagebox.showerror("导出桥接映射", f"写入规则文件失败：{exc}")
+            return
+        # tooltip 覆盖靠冻结的摆渡桥（LiteralBridge 的 mixin 不含 tooltip），它吃自己的旧格式
+        try:
+            fb_dir = Path(instance_value) / "config" / "ferrybridge"
+            fb_dir.mkdir(parents=True, exist_ok=True)
+            fb_payload = {"format": 1, "generated": time.strftime("%Y-%m-%d %H:%M:%S"), "count": len(mapping), "map": mapping}
+            (fb_dir / "translations.json").write_text(json.dumps(fb_payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("导出桥接映射", f"写入 tooltip 映射失败：{exc}")
             return
         pack_note = ""
         if pack is not None and lang_zh:
@@ -2351,7 +2361,7 @@ class FerryApp(tk.Tk):
             return
         count = self._pending_count(targets)
         if count <= 0:
-            messagebox.showinfo("无需翻译", "所选模组没有待翻译的 key。")
+            messagebox.showinfo("无需翻译", "所选模组没有待翻译的 key。\n硬编码文本若已翻译过，点「导出桥接映射」更新游戏内规则即可。")
             return
         names = sorted({m for v in targets.values() for m in v})
         label = "、".join(names[:5]) + (" 等" if len(names) > 5 else "")
@@ -2657,7 +2667,12 @@ class FerryApp(tk.Tk):
             or (config.get("translate_hardcoded", True) and core.has_pending_hardcoded(self._hardcoded_cache.get(path) or [], scan, modids))
             for path, scan, modids in cached
         ):
-            message = "所选模组没有需要翻译的英文 key 或硬编码文本；已有汉化或 AI 已覆盖全部有效条目。"
+            done_n = sum(len(data) for data in core.load_hardcoded_translations(
+                Path(config.get("output_dir") or Path(instance_path) / "resourcepacks")
+                / (config.get("pack_name") or core.DEFAULT_CONFIG["pack_name"])).values()) if targets else 0
+            message = "所选模组没有需要翻译的非空英文 key；已有汉化或 AI 已覆盖全部有效条目。"
+            if done_n:
+                message += f" 硬编码文本已翻译过 {done_n} 条——点「导出桥接映射」把最新规则写进游戏即可。"
             self.status_var.set(message)
             messagebox.showinfo("无需翻译", message)
             return
