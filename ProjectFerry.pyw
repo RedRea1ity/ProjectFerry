@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -285,6 +285,7 @@ class FerryApp(tk.Tk):
         self.whitelist: set[str] = self._load_whitelist()
         self.config: dict = core.load_config()
         self.no_translate: set[str] = set(self.config.get("no_translate_mods") or [])
+        self._nbt_candidates: dict[str, dict[str, list[str]]] = {}
         self._last_engine: str = str(self.config.get("engine", "mymemory"))
         self._build_ui()
         self._apply_geometry()
