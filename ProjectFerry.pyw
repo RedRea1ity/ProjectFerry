@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -2126,8 +2126,11 @@ class FerryApp(tk.Tk):
     def refresh_instances(self) -> None:
         if self._closing:
             return
+        # 记住当前选的实例：刷新后优先回到它，而不是永远跳回第一个
+        self._previous_instance = self.path_var.get().strip() or str(self.config.get("last_instance") or "")
         self.status_var.set("正在探测本机 Minecraft 实例……")
         self._hardcoded_cache.clear()
+        self._nbt_candidates.clear()
         self._set_instance_options([])
         self.instance_combo.set("正在探测实例……")
         threading.Thread(target=self._discover_worker, daemon=True).start()
@@ -2142,6 +2145,8 @@ class FerryApp(tk.Tk):
         index = self.instance_combo.current()
         if 0 <= index < len(self.instance_paths):
             self.path_var.set(str(self.instance_paths[index]))
+            self.config["last_instance"] = str(self.instance_paths[index])
+            core.save_config(self.config)
             self.start_scan()
 
     def choose_path(self) -> None:
@@ -2149,6 +2154,8 @@ class FerryApp(tk.Tk):
         if path:
             selected = Path(path)
             self.path_var.set(str(selected))
+            self.config["last_instance"] = str(selected)
+            core.save_config(self.config)
             if selected in self.instance_paths:
                 index = self.instance_paths.index(selected)
                 self._set_instance_options(self.instance_paths, select=index)
@@ -2604,6 +2611,22 @@ class FerryApp(tk.Tk):
         config = self._snapshot_config()
         if not self._confirm_community_lookup(config):
             return
+        if config.get("translate_hardcoded", True):
+            # 硬编码检测是扫描后在后台跑的：翻译目标列表构建时它多半还没回来。
+            # 点翻译的此刻重新并入“只剩硬编码候选”的模组，否则它们会被静默跳过。
+            for instance_path in list(targets):
+                scan = self.scan_cache.get(instance_path)
+                if scan is None:
+                    continue
+                entries = core.missing_hardcoded_entries(
+                    core.hardcoded_strings_by_modid(scan, self._hardcoded_cache.get(instance_path) or []),
+                    core.load_hardcoded_translations(
+                        Path(config.get("output_dir") or Path(instance_path) / "resourcepacks")
+                        / (config.get("pack_name") or core.DEFAULT_CONFIG["pack_name"])),
+                )
+                pending = {entry.modid for entry in entries if entry.modid not in self.no_translate}
+                if pending:
+                    targets.setdefault(instance_path, set()).update(pending)
         for instance_path in targets:
             if not self._ensure_pack_format(Path(instance_path), config):
                 return
@@ -2791,9 +2814,11 @@ class FerryApp(tk.Tk):
             self.status_var.set(str(payload))
         elif kind == "instances":
             self.scanning = False
-            self._set_instance_options(list(payload), select=0 if payload else None)
+            previous = getattr(self, "_previous_instance", "")
+            select = next((index for index, path in enumerate(self.instance_paths) if str(path) == previous), 0 if self.instance_paths else None)
+            self._set_instance_options(list(payload), select=select)
             if self.instance_paths:
-                self.path_var.set(str(self.instance_paths[0]))
+                self.path_var.set(str(self.instance_paths[select if select is not None else 0]))
                 self.status_var.set(f"检测到 {len(self.instance_paths)} 个 Minecraft 实例，正在扫描当前实例……")
                 self.start_scan()
             else:
