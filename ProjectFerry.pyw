@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -2602,7 +2602,26 @@ class FerryApp(tk.Tk):
         if self.scanning:
             messagebox.showinfo("提示", "正在扫描实例，请扫描完成后再开始翻译。")
             return
-        targets = self.translatable_targets
+        # 拷贝一份再改，别污染 translatable_targets 本体。
+        targets = {path: set(modids) for path, modids in self.translatable_targets.items()}
+        if self.hardcoded_var.get():
+            # 硬编码检测是扫描后在后台跑的，「翻译全部」在此刻把只剩硬编码候选的模组补进来。
+            for instance_path in list(targets):
+                scan = self.scan_cache.get(instance_path)
+                if scan is None:
+                    continue
+                try:
+                    settings = core.resolve_translate_settings(self.config, Path(instance_path))
+                except ValueError:
+                    continue
+                sidecar = core.load_hardcoded_translations(Path(settings["output_dir"]) / settings["pack_name"])
+                entries = core.missing_hardcoded_entries(
+                    core.hardcoded_strings_by_modid(scan, self._hardcoded_cache.get(instance_path) or []),
+                    sidecar,
+                )
+                pending = {entry.modid for entry in entries if entry.modid not in self.no_translate}
+                if pending:
+                    targets.setdefault(instance_path, set()).update(pending)
         if not targets:
             messagebox.showinfo("提示", "没有待 AI 翻译的模组。")
             return
@@ -2612,22 +2631,6 @@ class FerryApp(tk.Tk):
         config = self._snapshot_config()
         if not self._confirm_community_lookup(config):
             return
-        if config.get("translate_hardcoded", True):
-            # 硬编码检测是扫描后在后台跑的：翻译目标列表构建时它多半还没回来。
-            # 点翻译的此刻重新并入“只剩硬编码候选”的模组，否则它们会被静默跳过。
-            for instance_path in list(targets):
-                scan = self.scan_cache.get(instance_path)
-                if scan is None:
-                    continue
-                entries = core.missing_hardcoded_entries(
-                    core.hardcoded_strings_by_modid(scan, self._hardcoded_cache.get(instance_path) or []),
-                    core.load_hardcoded_translations(
-                        Path(config.get("output_dir") or Path(instance_path) / "resourcepacks")
-                        / (config.get("pack_name") or core.DEFAULT_CONFIG["pack_name"])),
-                )
-                pending = {entry.modid for entry in entries if entry.modid not in self.no_translate}
-                if pending:
-                    targets.setdefault(instance_path, set()).update(pending)
         for instance_path in targets:
             if not self._ensure_pack_format(Path(instance_path), config):
                 return
