@@ -967,8 +967,8 @@ def reference_examples(batch: list[Entry], corpus: dict[str, tuple[str, str]], l
     return [{"key": key, "en": corpus[key][0], "zh": corpus[key][1]} for key in ranked[:limit]]
 
 
-def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_by_modid: dict[str, dict[str, str]] | None = None, hardcoded: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
-    """汇总 英文原文 -> 中文 的显示映射，供摆渡桥模组做 NBT/硬编码文本替换；人工译文优先于 AI。"""
+def build_bridge_groups(english: list[LangFile], community: list[LangFile], ai_by_modid: dict[str, dict[str, str]] | None = None, hardcoded: dict[str, dict[str, str]] | None = None) -> dict[str, dict[str, str]]:
+    """按 modid 汇总 英文原文 -> 中文 显示映射；人工译文优先于 AI，硬编码译文并入。"""
     en_by_mod: dict[str, dict[str, str]] = {}
     for file in english:
         en_by_mod.setdefault(file.modid, {}).update(file.data)
@@ -977,18 +977,98 @@ def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_
         zh_by_mod.setdefault(modid, {}).update({k: v for k, v in data.items() if v and str(v).strip()})
     for file in community:
         zh_by_mod.setdefault(file.modid, {}).update({k: v for k, v in file.data.items() if v and str(v).strip()})
-    pairs: dict[str, str] = {}
+    groups: dict[str, dict[str, str]] = {}
     for modid, entries in en_by_mod.items():
         zhs = zh_by_mod.get(modid, {})
+        pairs: dict[str, str] = {}
         for key, english_text in entries.items():
             zh = zhs.get(key)
             if english_text.strip() and zh and str(zh).strip() and english_text != zh:
                 pairs.setdefault(english_text, str(zh))
-    for modid, entries in (hardcoded or {}).items():
-        for english_text, zh in entries.items():
+        for english_text, zh in (hardcoded or {}).get(modid, {}).items():
             if english_text.strip() and str(zh).strip():
                 pairs.setdefault(english_text, str(zh))
+        if pairs:
+            groups[modid] = pairs
+    # 只有硬编码候选、连 en_us key 都没有的模组（少见但存在）
+    for modid, entries in (hardcoded or {}).items():
+        if modid in groups:
+            continue
+        pairs = {en: zh for en, zh in entries.items() if en.strip() and str(zh).strip()}
+        if pairs:
+            groups[modid] = pairs
+    return groups
+
+
+def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_by_modid: dict[str, dict[str, str]] | None = None, hardcoded: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+    """扁平化的 英文原文 -> 中文 映射（build_bridge_groups 的合并视图）。"""
+    pairs: dict[str, str] = {}
+    for data in build_bridge_groups(english, community, ai_by_modid, hardcoded).values():
+        pairs.update(data)
     return pairs
+
+
+LITERALBRIDGE_PAGE = "https://github.com/Losketch/LiteralBridge"
+
+
+def build_literalbridge_export(groups: dict[str, dict[str, str]]) -> tuple[dict[str, dict], dict[str, str], dict[str, str]]:
+    """把映射组转成 LiteralBridge 外部规则文件结构 + 资源包 lang 条目。
+
+    返回 (规则文档, {translationKey: 中文}, {translationKey: 英文原文})。
+    """
+    rules_doc: dict[str, dict] = {}
+    lang_zh: dict[str, str] = {}
+    lang_en: dict[str, str] = {}
+    for modid, pairs in groups.items():
+        safe = re.sub(r"[^a-z0-9_.-]", "_", modid.lower())
+        rules: list[dict[str, str]] = []
+        for english_text, chinese in pairs.items():
+            key = "text.ferrybridge." + safe + ".r_" + hashlib.sha1(english_text.encode("utf-8")).hexdigest()[:12]
+            rules.append({"original": english_text, "translationKey": key, "exactMatch": True})
+            lang_zh[key] = chinese
+            lang_en[key] = english_text
+        rules_doc[modid] = {"name": modid, "targetMod": modid, "enabled": True, "rules": rules}
+    return rules_doc, lang_zh, lang_en
+
+
+def merge_bridge_lang(pack: Path, zh: dict[str, str], en: dict[str, str]) -> Path:
+    """把 text.ferrybridge.* 的 key 合并进资源包的 assets/literalbridge/lang/，供 LiteralBridge 查表。"""
+    langs = {
+        "assets/literalbridge/lang/zh_cn.json": dict(zh),
+        "assets/literalbridge/lang/en_us.json": dict(en),
+    }
+    entries: dict[str, bytes] = {}
+    if pack.is_file():
+        try:
+            with zipfile.ZipFile(pack) as zf:
+                for name in zf.namelist():
+                    if name.endswith("/"):
+                        continue
+                    try:
+                        entries[name] = zf.read(name)
+                    except (OSError, KeyError, zipfile.BadZipFile):
+                        continue
+        except (zipfile.BadZipFile, OSError):
+            pass
+    for name, extra in langs.items():
+        if not extra:
+            continue
+        merged: dict[str, str] = {}
+        if name in entries:
+            try:
+                loaded = json.loads(entries[name].decode("utf-8-sig"))
+                if isinstance(loaded, dict):
+                    merged = loaded
+            except (ValueError, UnicodeDecodeError):
+                merged = {}
+        merged.update(extra)
+        entries[name] = json.dumps(merged, ensure_ascii=False, indent=1).encode("utf-8")
+    tmp = pack.with_name(pack.name + ".bridge.part")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    tmp.replace(pack)
+    return pack
 
 
 def _normalize_reverted(reverted: dict[str, set[str]] | None) -> dict[str, set[str]]:

@@ -111,6 +111,31 @@ class VersionDetectionTests(unittest.TestCase):
         self.assertNotIn("Same", mapping, "译文等于原文的键没有价值")
         self.assertNotIn("Blank", mapping, "空译文不导出")
 
+    def test_literalbridge_export_and_lang_merge(self):
+        groups = {
+            "jei": {"Hello world": "你好世界", "Exit": "退出"},
+            "hard_only": {"Only hardcoded text here": "只有硬编码"},
+        }
+        rules_doc, lang_zh, lang_en = core.build_literalbridge_export(groups)
+        self.assertEqual(set(rules_doc), {"jei", "hard_only"})
+        jei_rules = rules_doc["jei"]["rules"]
+        self.assertTrue(all(rule["exactMatch"] and rule["translationKey"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
+        self.assertEqual(len(lang_zh), 3)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = Path(tmp) / "AI_Translation_LowPriority.zip"
+            core.write_pack(pack, {"demo": {"item.x": "你好"}}, 15)
+            before = set(zipfile.ZipFile(pack).namelist())
+            core.merge_bridge_lang(pack, lang_zh, lang_en)
+            with zipfile.ZipFile(pack) as zf:
+                after = set(zipfile.ZipFile(pack).namelist())
+                merged = json.loads(zf.read("assets/literalbridge/lang/zh_cn.json"))
+                merged_en = json.loads(zf.read("assets/literalbridge/lang/en_us.json"))
+            self.assertIn("assets/literalbridge/lang/zh_cn.json", after - before)
+            self.assertIn("assets/demo/lang/zh_cn.json", after, "原有内容不丢")
+            self.assertTrue(all("中文" in v or v for v in merged.values()))
+            self.assertEqual(merged_en["text.ferrybridge.jei.r_" + __import__("hashlib").sha1(b"Exit").hexdigest()[:12]], "Exit")
+
     def test_hardcoded_nbt_pipeline(self):
         import json as json_module
 

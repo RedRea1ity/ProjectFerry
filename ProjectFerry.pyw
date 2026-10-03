@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.8.0"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -1492,7 +1492,8 @@ class FerryApp(tk.Tk):
             "F5：重新扫描；Esc：清空搜索。",
             "选中模组后点「查询在线汉化」，可查多个网站有没有现成汉化；查询源在「设置」里自定义。",
             "右键「加入不翻译名单」：此模组完全跳过 AI 翻译（状态列显示 ∅），右键可移出恢复。",
-            "勾选「翻译硬编码文本」后，疑似硬编码的英文会随翻译批一起交给 AI，译文存在资源包旁的 .hardcoded.json，由摆渡桥在游戏里做显示替换。",
+            "勾选「翻译硬编码文本」后，疑似硬编码的英文会随翻译批一起交给 AI，译文存进资源包旁的 .hardcoded.json。",
+            "「导出桥接映射」：按 LiteralBridge 的格式把规则写进实例 config、语言补丁并入资源包；装上 LiteralBridge 后进游戏即可替换 NBT / 硬编码显示。",
         ])
         section("状态符号", [
             "✓ 已完全汉化　◐ 部分翻译　○ 待翻译　◈ 已有人工汉化",
@@ -1506,7 +1507,7 @@ class FerryApp(tk.Tk):
         self._center_over(window, 580, 500)
 
     def export_bridge_mapping(self) -> None:
-        """把扫描到的英文原文 + 已有中文译文导出成摆渡桥的映射表。"""
+        """把映射导出成 LiteralBridge 的外部规则文件 + 资源包语言补丁。"""
         if self.scanning:
             messagebox.showinfo("提示", "正在扫描，请稍候再导出。")
             return
@@ -1522,21 +1523,44 @@ class FerryApp(tk.Tk):
         except (OSError, ValueError):
             pack = None
             ai_by_modid = {}
-        mapping = core.build_bridge_mapping(scan.english, scan.community, ai_by_modid,
-                                            hardcoded=core.load_hardcoded_translations(pack) if pack else None)
-        if not mapping:
+        hardcoded = core.load_hardcoded_translations(pack) if pack else None
+        groups = core.build_bridge_groups(scan.english, scan.community, ai_by_modid, hardcoded=hardcoded)
+        if not groups:
             self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
             return
-        target_dir = Path(instance_value) / "config" / "ferrybridge"
+        rules_doc, lang_zh, lang_en = core.build_literalbridge_export(groups)
+        bridge_config_dir = Path(instance_value) / "config" / "literalbridge"
         try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            payload = {"format": 1, "generated": time.strftime("%Y-%m-%d %H:%M:%S"), "count": len(mapping), "map": mapping}
-            target = target_dir / "translations.json"
-            target.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+            bridge_config_dir.mkdir(parents=True, exist_ok=True)
+            payload = {"format": 1, "generated": time.strftime("%Y-%m-%d %H:%M:%S"), "source": "ProjectFerry " + APP_VERSION}
+            payload.update(rules_doc)
+            (bridge_config_dir / "ferry.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         except OSError as exc:
-            messagebox.showerror("导出桥接映射", f"写入失败：{exc}")
+            messagebox.showerror("导出桥接映射", f"写入规则文件失败：{exc}")
             return
-        self.status_var.set(f"桥接映射已导出 {len(mapping)} 条 → {target}；装上摆渡桥模组后进游戏按重载键生效。")
+        pack_note = ""
+        if pack is not None and lang_zh:
+            try:
+                fmt = float(settings.get("pack_format") or 15)
+                if not pack.exists():
+                    core.write_pack(pack, {}, fmt)
+                if fmt > 3:
+                    core.merge_bridge_lang(pack, lang_zh, lang_en)
+                    pack_note = "，语言补丁已并入资源包"
+                else:
+                    pack_note = "（旧版资源包格式用不了 LiteralBridge，只导出了规则）"
+            except (OSError, ValueError) as exc:
+                pack_note = f"，语言补丁写入失败：{exc}"
+        mods_dir = Path(instance_value) / "mods"
+        has_bridge = any(item.name.lower().startswith("literalbridge") for item in mods_dir.glob("*.jar")) if mods_dir.is_dir() else False
+        bridge_note = ""
+        if not has_bridge:
+            bridge_note = f" 实例 mods 里没有 LiteralBridge（{core.LITERALBRIDGE_PAGE}），已为你打开项目页。"
+            try:
+                os.startfile(core.LITERALBRIDGE_PAGE)
+            except OSError:
+                pass
+        self.status_var.set(f"桥接规则已导出：{len(rules_doc)} 个模组组、{len(lang_zh)} 条 → config/literalbridge/ferry.json{pack_note}。{bridge_note}")
 
     def start_online_lookup(self) -> None:
         """选中若干模组，逐个查询源探测网上有没有现成汉化。"""
@@ -1835,6 +1859,7 @@ class FerryApp(tk.Tk):
             "1.6.1+ 旧版 .lang 与最新年份版本均支持，资源包格式自动探测",
         ])
         section("数据来源与致谢", [
+            "Losketch / LiteralBridge：硬编码文本的通用显示层桥接，摆渡导出它的规则文件（Apache-2.0）",
             "Minecraft 官方语言文件（Mojang）：术语表数据来源",
             "PandaDevOfficial / Minecraft-All-Lang：Minecraft 语言文件镜像",
             "CFPAOrg / Minecraft-Mod-Language-Package：社区汉化基线（遵守其许可证与署名要求）",
