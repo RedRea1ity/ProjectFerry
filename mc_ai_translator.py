@@ -1147,8 +1147,8 @@ def _class_utf8_constants(data: bytes) -> list[str]:
     return out
 
 
-def _looks_like_ui_text(text: str) -> bool:
-    if len(text) < 14 or len(text) > 160 or " " not in text:
+def _looks_like_ui_text(text: str, min_len: int = 14) -> bool:
+    if len(text) < min_len or len(text) > 160 or " " not in text:
         return False
     if not (text[0].isupper() or text[0].islower() or text[0] in "\"'"):
         return False
@@ -1201,11 +1201,13 @@ def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5) -> list[tuple[str
                         continue
         except (zipfile.BadZipFile, OSError):
             continue
-        hardcoded = sorted(set(constants) - {""}, key=len, reverse=True)
-        hardcoded = [text for text in hardcoded if _looks_like_ui_text(text) and text.lower() not in known]
-        if len(hardcoded) >= threshold:
-            # 第三个元素是全量候选（按长度降序）；展示方自己取前几条当样例。
-            results.append((jar.name, len(hardcoded), hardcoded))
+        all_text = sorted(set(constants) - {""}, key=len, reverse=True)
+        strict = [text for text in all_text if _looks_like_ui_text(text) and text.lower() not in known]
+        relaxed = [text for text in all_text if _looks_like_ui_text(text, min_len=4) and text.lower() not in known]
+        if len(strict) >= threshold or len(relaxed) >= 3:
+            # 第三个元素是全量候选（宽松档，含短聊天句，按长度降序）；
+            # 数量字段用严格档计数，展示方自己取前几条当样例。
+            results.append((jar.name, len(strict), relaxed))
     results.sort(key=lambda item: -item[1])
     return results
 
