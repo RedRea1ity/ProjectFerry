@@ -116,25 +116,27 @@ class VersionDetectionTests(unittest.TestCase):
             "jei": {"Hello world": "你好世界", "Exit": "退出"},
             "hard_only": {"Only hardcoded text here": "只有硬编码"},
         }
-        rules_doc, lang_zh, lang_en = core.build_literalbridge_export(groups)
+        groups["jei"]["N"] = "北"
+        groups["jei"]["Run!"] = "快跑"
+        rules_doc = core.build_literalbridge_export(groups)
         self.assertEqual(set(rules_doc), {"jei", "hard_only"})
         jei_rules = rules_doc["jei"]["rules"]
-        self.assertTrue(all(rule["exactMatch"] and rule["translationKey"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
-        self.assertEqual(len(lang_zh), 3)
+        self.assertNotIn("N", [rule["original"] for rule in jei_rules], "短规则会啃玩家名，不导出")
+        self.assertIn("Run!", [rule["original"] for rule in jei_rules])
+        self.assertTrue(all(rule["translation"] and rule["key"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
+        self.assertEqual([rule["original"] for rule in jei_rules], ["Hello world", "Exit", "Run!"])
 
         with tempfile.TemporaryDirectory() as tmp:
             pack = Path(tmp) / "AI_Translation_LowPriority.zip"
             core.write_pack(pack, {"demo": {"item.x": "你好"}}, 15)
             before = set(zipfile.ZipFile(pack).namelist())
-            core.merge_bridge_lang(pack, lang_zh, lang_en)
+            core.merge_bridge_lang(pack, {"text.ferrybridge.demo.r_x": "中文"}, {"text.ferrybridge.demo.r_x": "Hello world"})
             with zipfile.ZipFile(pack) as zf:
                 after = set(zipfile.ZipFile(pack).namelist())
                 merged = json.loads(zf.read("assets/literalbridge/lang/zh_cn.json"))
-                merged_en = json.loads(zf.read("assets/literalbridge/lang/en_us.json"))
             self.assertIn("assets/literalbridge/lang/zh_cn.json", after - before)
             self.assertIn("assets/demo/lang/zh_cn.json", after, "原有内容不丢")
-            self.assertTrue(all("中文" in v or v for v in merged.values()))
-            self.assertEqual(merged_en["text.ferrybridge.jei.r_" + __import__("hashlib").sha1(b"Exit").hexdigest()[:12]], "Exit")
+            self.assertEqual(merged["text.ferrybridge.demo.r_x"], "中文")
 
     def test_hardcoded_nbt_pipeline(self):
         import json as json_module
