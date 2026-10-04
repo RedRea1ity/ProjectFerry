@@ -118,15 +118,17 @@ class VersionDetectionTests(unittest.TestCase):
         }
         groups["jei"]["N"] = "北"
         groups["jei"]["Run!"] = "快跑"
-        rules_doc = core.build_literalbridge_export(groups)
+        rules_doc, lang_zh, lang_en = core.build_literalbridge_export(groups)
         self.assertEqual(set(rules_doc), {"jei", "hard_only"})
         jei_rules = rules_doc["jei"]["rules"]
-        # 全部锚定为整句正则，短文本 "N" 被长度过滤
-        self.assertTrue(all(rule["regex"] and rule["original"].startswith("^") and rule["original"].endswith("$") for rule in jei_rules))
-        self.assertTrue(any("Run!" in rule["original"] for rule in jei_rules), "整句锚定后仍包含原文")
+        # 短文本 "N" 被长度过滤（子串匹配下会啃玩家名）
+        self.assertNotIn("N", [rule["original"] for rule in jei_rules])
+        self.assertTrue(all(rule["translationKey"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
+        self.assertEqual(len(lang_zh), 4, "jei 3 条 + hard_only 1 条")
+        self.assertEqual(len(lang_en), 4)
+        self.assertIn("Run!", lang_en.values())
         self.assertTrue(all(rule["translation"] and rule["key"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
-        self.assertEqual([rule["original"] for rule in jei_rules],
-                         ["^\QHello world\E$", "^\QExit\E$", "^\QRun!\E$"])
+        self.assertEqual([rule["original"] for rule in jei_rules], ["Hello world", "Exit", "Run!"])
 
         with tempfile.TemporaryDirectory() as tmp:
             pack = Path(tmp) / "AI_Translation_LowPriority.zip"

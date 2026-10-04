@@ -1530,7 +1530,7 @@ class FerryApp(tk.Tk):
         if not groups:
             self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
             return
-        rules_doc = core.build_literalbridge_export(groups)
+        rules_doc, lang_zh, lang_en = core.build_literalbridge_export(groups)
         bridge_config_dir = Path(instance_value) / "config" / "literalbridge"
         try:
             bridge_config_dir.mkdir(parents=True, exist_ok=True)
@@ -1548,12 +1548,25 @@ class FerryApp(tk.Tk):
         except OSError as exc:
             messagebox.showerror("导出桥接映射", f"写入 tooltip 映射失败：{exc}")
             return
-        pack_note = "，LiteralBridge 检测到文件变化后会自动热重载"
+        pack_note = ""
+        if pack is not None and lang_zh:
+            try:
+                fmt = float(settings.get("pack_format") or 15)
+                if not pack.exists():
+                    core.write_pack(pack, {}, fmt)
+                if fmt > 3:
+                    core.merge_bridge_lang(pack, lang_zh, lang_en)
+                    pack_note = "，语言补丁已并入资源包"
+                else:
+                    pack_note = "（旧版资源包格式用不了 LiteralBridge，只导出了规则）"
+            except (OSError, ValueError) as exc:
+                pack_note = f"，语言补丁写入失败：{exc}"
+        pack_note += "，LiteralBridge 检测到规则文件变化后会自动热重载"
         mods_dir = Path(instance_value) / "mods"
         has_bridge = any(item.name.lower().startswith("literalbridge") for item in mods_dir.glob("*.jar")) if mods_dir.is_dir() else False
         total_rules = sum(len(group.get("rules", [])) for group in rules_doc.values())
         summary = (
-            f"规则文件（{len(rules_doc)} 个模组组、{total_rules} 条）：\n"
+            f"规则文件（{len(rules_doc)} 个模组组、{total_rules} 条规则 + {len(lang_zh)} 条翻译）：\n"
             f"{bridge_config_dir / 'ferry.json'}\n"
             f"tooltip 映射（{len(mapping)} 条）：\n"
             f"{fb_dir / 'translations.json'}\n\n"
