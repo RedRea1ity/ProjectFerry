@@ -1147,7 +1147,7 @@ def _class_utf8_constants(data: bytes) -> list[str]:
     return out
 
 
-def _looks_like_ui_text(text: str, min_len: int = 14) -> bool:
+def _looks_like_ui_text(text: str, min_len: int = 14, min_words: int = 3) -> bool:
     if len(text) < min_len or len(text) > 160 or " " not in text:
         return False
     if not (text[0].isupper() or text[0].islower() or text[0] in "\"'"):
@@ -1164,7 +1164,7 @@ def _looks_like_ui_text(text: str, min_len: int = 14) -> bool:
     printable = sum(ch.isalpha() or ch.isspace() or ch in ".,!?'-" for ch in text)
     if printable < len(text) * 0.92:
         return False
-    if len([w for w in text.split() if w]) < 3:
+    if len([w for w in text.split() if w]) < min_words:
         return False
     return True
 
@@ -1203,7 +1203,7 @@ def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5) -> list[tuple[str
             continue
         all_text = sorted(set(constants) - {""}, key=len, reverse=True)
         strict = [text for text in all_text if _looks_like_ui_text(text) and text.lower() not in known]
-        relaxed = [text for text in all_text if _looks_like_ui_text(text, min_len=4) and text.lower() not in known]
+        relaxed = [text for text in all_text if _looks_like_ui_text(text, min_len=4, min_words=2) and text.lower() not in known]
         if len(strict) >= threshold or len(relaxed) >= 3:
             # 第三个元素是全量候选（宽松档，含短聊天句，按长度降序）；
             # 数量字段用严格档计数，展示方自己取前几条当样例。
