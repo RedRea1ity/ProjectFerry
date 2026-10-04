@@ -1014,29 +1014,23 @@ def build_bridge_mapping(english: list[LangFile], community: list[LangFile], ai_
 LITERALBRIDGE_PAGE = "https://github.com/Losketch/LiteralBridge"
 
 
-def build_literalbridge_export(groups: dict[str, dict[str, str]]) -> tuple[dict[str, dict], dict[str, str], dict[str, str]]:
-    """把映射组转成 LiteralBridge 外部规则文件结构 + 资源包语言补丁。
+def build_literalbridge_export(groups: dict[str, dict[str, str]]) -> dict[str, dict]:
+    """把映射组转成 LiteralBridge 外部规则文件结构。
 
-    规则用 original + translationKey（用户实测有效的格式），中文通过
-    资源包的 assets/literalbridge/lang/ 提供。根节点必须是纯组。
-    返回 (规则文档, {translationKey: 中文}, {translationKey: 英文原文})。
+    1.2.0 实测（用户游戏内 A/B）：直填 translation 可用，translationKey 路线不可用。
+    根节点必须是纯组。低于 4 字符的规则不导出（子串匹配会啃玩家名）。
     """
     rules_doc: dict[str, dict] = {}
-    lang_zh: dict[str, str] = {}
-    lang_en: dict[str, str] = {}
     for modid, pairs in groups.items():
         safe = re.sub(r"[^a-z0-9_.-]", "_", modid.lower())
         rules: list[dict[str, str]] = []
         for english_text, chinese in pairs.items():
-            # 子串匹配下过短的规则会啃玩家名和普通单词，低于 4 字符不导出
             if len(english_text.strip()) < 4 or not any(ch.isalpha() for ch in english_text):
                 continue
-            key = "text.ferrybridge." + safe + ".r_" + hashlib.sha1(english_text.encode("utf-8")).hexdigest()[:12]
-            rules.append({"original": english_text, "translationKey": key})
-            lang_zh[key] = chinese
-            lang_en[key] = english_text
-        rules_doc[modid] = {"name": modid, "targetMod": modid, "enabled": True, "rules": rules}
-    return rules_doc, lang_zh, lang_en
+            rules.append({"original": english_text, "translation": chinese})
+        if rules:
+            rules_doc[modid] = {"name": modid, "targetMod": modid, "enabled": True, "rules": rules}
+    return rules_doc
 
 
 def merge_bridge_lang(pack: Path, zh: dict[str, str], en: dict[str, str]) -> Path:

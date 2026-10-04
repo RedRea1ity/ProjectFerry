@@ -118,16 +118,14 @@ class VersionDetectionTests(unittest.TestCase):
         }
         groups["jei"]["N"] = "北"
         groups["jei"]["Run!"] = "快跑"
-        rules_doc, lang_zh, lang_en = core.build_literalbridge_export(groups)
+        rules_doc = core.build_literalbridge_export(groups)
         self.assertEqual(set(rules_doc), {"jei", "hard_only"})
         jei_rules = rules_doc["jei"]["rules"]
         # 短文本 "N" 被长度过滤（子串匹配下会啃玩家名）
         self.assertNotIn("N", [rule["original"] for rule in jei_rules])
-        self.assertTrue(all(rule["translationKey"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
-        self.assertEqual(len(lang_zh), 4, "jei 3 条 + hard_only 1 条")
-        self.assertEqual(len(lang_en), 4)
-        self.assertIn("Run!", lang_en.values())
-        self.assertTrue(all(rule["translation"] and rule["key"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
+        by_original = {rule["original"]: rule["translation"] for rule in jei_rules}
+        self.assertEqual(by_original.get("Hello world"), "你好世界")
+        self.assertEqual(by_original.get("Run!"), "快跑")
         self.assertEqual([rule["original"] for rule in jei_rules], ["Hello world", "Exit", "Run!"])
 
         with tempfile.TemporaryDirectory() as tmp:
