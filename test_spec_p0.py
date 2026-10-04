@@ -121,10 +121,12 @@ class VersionDetectionTests(unittest.TestCase):
         rules_doc = core.build_literalbridge_export(groups)
         self.assertEqual(set(rules_doc), {"jei", "hard_only"})
         jei_rules = rules_doc["jei"]["rules"]
-        self.assertNotIn("N", [rule["original"] for rule in jei_rules], "短规则会啃玩家名，不导出")
-        self.assertIn("Run!", [rule["original"] for rule in jei_rules])
+        # 全部锚定为整句正则，短文本 "N" 被长度过滤
+        self.assertTrue(all(rule["regex"] and rule["original"].startswith("^") and rule["original"].endswith("$") for rule in jei_rules))
+        self.assertTrue(any("Run!" in rule["original"] for rule in jei_rules), "整句锚定后仍包含原文")
         self.assertTrue(all(rule["translation"] and rule["key"].startswith("text.ferrybridge.jei.r_") for rule in jei_rules))
-        self.assertEqual([rule["original"] for rule in jei_rules], ["Hello world", "Exit", "Run!"])
+        self.assertEqual([rule["original"] for rule in jei_rules],
+                         ["^\QHello world\E$", "^\QExit\E$", "^\QRun!\E$"])
 
         with tempfile.TemporaryDirectory() as tmp:
             pack = Path(tmp) / "AI_Translation_LowPriority.zip"

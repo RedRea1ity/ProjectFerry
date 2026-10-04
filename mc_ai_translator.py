@@ -101,6 +101,7 @@ GLOSSARY_TERM_PREFIXES = ("entity.minecraft.", "enchantment.minecraft.", "effect
 # 默认排除纯前置、库、优化和辅助类模组，避免把没有面向玩家文本的依赖列出来。
 # 这是“默认隐藏”而不是删除：命令行可用 --include-modid 强制纳入。
 DEFAULT_EXCLUDED_MODIDS = {
+    "literalbridge", "ferrybridge",
     "architectury", "cloth_config", "curios", "ftb_library", "geckolib", "kotlinforforge",
     "kurolib", "libipn", "playeranimator", "player_animation_lib",
     "yet_another_config_lib_v3", "memoryleakfix", "starlight", "ferritecore", "entityculling",
@@ -979,6 +980,8 @@ def build_bridge_groups(english: list[LangFile], community: list[LangFile], ai_b
         zh_by_mod.setdefault(file.modid, {}).update({k: v for k, v in file.data.items() if v and str(v).strip()})
     groups: dict[str, dict[str, str]] = {}
     for modid, entries in en_by_mod.items():
+        if is_excluded_mod(modid):
+            continue
         zhs = zh_by_mod.get(modid, {})
         pairs: dict[str, str] = {}
         for key, english_text in entries.items():
@@ -992,7 +995,7 @@ def build_bridge_groups(english: list[LangFile], community: list[LangFile], ai_b
             groups[modid] = pairs
     # 只有硬编码候选、连 en_us key 都没有的模组（少见但存在）
     for modid, entries in (hardcoded or {}).items():
-        if modid in groups:
+        if modid in groups or is_excluded_mod(modid):
             continue
         pairs = {en: zh for en, zh in entries.items() if en.strip() and str(zh).strip()}
         if pairs:
@@ -1014,16 +1017,20 @@ LITERALBRIDGE_PAGE = "https://github.com/Losketch/LiteralBridge"
 def build_literalbridge_export(groups: dict[str, dict[str, str]]) -> dict[str, dict]:
     """把映射组转成 LiteralBridge 外部规则文件结构（根节点必须是纯组，译文直填规则）。"""
     rules_doc: dict[str, dict] = {}
+    quote_start = chr(92) + "Q"
+    quote_end = chr(92) + "E"
     for modid, pairs in groups.items():
         safe = re.sub(r"[^a-z0-9_.-]", "_", modid.lower())
         rules: list[dict[str, str]] = []
         for english_text, chinese in pairs.items():
-            # LiteralBridge 1.2.x 的匹配是子串级的：过短的规则会把玩家名、
-            # 聊天里的普通单词啃掉（"s"→"秒"），低于 4 字符的一律不导出。
+            # 每条规则锚定为整句正则（\Q 原文 \E $）：
+            # LiteralBridge 1.2.x 是子串匹配，"know"→"知道" 会把 he knows 啃成 他知道s，
+            # 锚定后只有整句完全一致才替换，玩家名和普通单词不再被啃。
             if len(english_text.strip()) < 4 or not any(ch.isalpha() for ch in english_text):
                 continue
+            anchored = "^" + quote_start + english_text + quote_end + "$"
             key = "text.ferrybridge." + safe + ".r_" + hashlib.sha1(english_text.encode("utf-8")).hexdigest()[:12]
-            rules.append({"original": english_text, "translation": chinese, "key": key})
+            rules.append({"original": anchored, "regex": True, "translation": chinese, "key": key})
         if rules:
             rules_doc[modid] = {"name": modid, "targetMod": modid, "enabled": True, "rules": rules}
     return rules_doc
