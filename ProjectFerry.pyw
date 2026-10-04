@@ -286,6 +286,7 @@ class FerryApp(tk.Tk):
         self.config: dict = core.load_config()
         self.no_translate: set[str] = set(self.config.get("no_translate_mods") or [])
         self._nbt_candidates: dict[str, dict[str, list[str]]] = {}
+        self._last_nbt_count = 0
         self._last_engine: str = str(self.config.get("engine", "mymemory"))
         self._build_ui()
         self._apply_geometry()
@@ -1550,15 +1551,25 @@ class FerryApp(tk.Tk):
         pack_note = "，LiteralBridge 检测到文件变化后会自动热重载"
         mods_dir = Path(instance_value) / "mods"
         has_bridge = any(item.name.lower().startswith("literalbridge") for item in mods_dir.glob("*.jar")) if mods_dir.is_dir() else False
-        bridge_note = ""
+        total_rules = sum(len(group.get("rules", [])) for group in rules_doc.values())
+        summary = (
+            f"规则文件（{len(rules_doc)} 个模组组、{total_rules} 条）：\n"
+            f"{bridge_config_dir / 'ferry.json'}\n"
+            f"tooltip 映射（{len(mapping)} 条）：\n"
+            f"{fb_dir / 'translations.json'}\n\n"
+            "进游戏生效方式：\n"
+            "· 聊天 / 实体名 / 动作栏：LiteralBridge 自动热重载，无需重启；\n"
+            "· 物品 tooltip：重启游戏后生效。\n"
+            "并确认资源包列表里摆渡包处于启用状态。"
+        )
         if not has_bridge:
-            bridge_note = f" 实例 mods 里没有 LiteralBridge（{core.LITERALBRIDGE_PAGE}），已为你打开项目页。"
+            summary += f"\n\n注意：实例 mods 里没有 LiteralBridge（{core.LITERALBRIDGE_PAGE}），已为你打开项目页。"
             try:
                 os.startfile(core.LITERALBRIDGE_PAGE)
             except OSError:
                 pass
-        total_rules = sum(len(group.get("rules", [])) for group in rules_doc.values())
-        self.status_var.set(f"桥接规则已导出：{len(rules_doc)} 个模组组、{total_rules} 条 → config/literalbridge/ferry.json{pack_note}。{bridge_note}")
+        messagebox.showinfo("桥接映射已导出", summary)
+        self.status_var.set(f"桥接规则已导出：{len(rules_doc)} 个模组组、{total_rules} 条，详见弹窗。")
 
     def start_online_lookup(self) -> None:
         """选中若干模组，逐个查询源探测网上有没有现成汉化。"""
@@ -2704,7 +2715,12 @@ class FerryApp(tk.Tk):
                 lines.append("\n".join("· " + e for e in errors[:10]))
             if cancelled:
                 lines.append("\n翻译已停止，这是不完整的包（只含已翻译的部分）。")
-            self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}，写入 {len(packs)} 个资源包。")
+            if self._last_nbt_count:
+                lines.append(f"\n另翻译了 {self._last_nbt_count} 条硬编码文本（桥接显示用）——点「导出桥接映射」写进游戏。")
+                self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}：{len(packs)} 个资源包 + {self._last_nbt_count} 条硬编码文本。")
+                self._last_nbt_count = 0
+            else:
+                self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}，写入 {len(packs)} 个资源包。")
             if messagebox.askyesno("已停止" if cancelled else "完成", "\n".join(lines) + "\n\n是否打开所在目录？"):
                 try:
                     os.startfile(str(Path(packs[0]).parent))
@@ -2717,6 +2733,9 @@ class FerryApp(tk.Tk):
             self.status_var.set("已停止，未翻译任何内容，未生成资源包。")
         else:
             self.status_var.set("没有需要翻译的 key（可能已由人工汉化覆盖，或已翻译完成）。")
+            if self._last_nbt_count:
+                lines.append(f"\n另翻译了 {self._last_nbt_count} 条硬编码文本（桥接显示用）——点「导出桥接映射」写进游戏。")
+                self._last_nbt_count = 0
         # 只有真正产生了变化（写包 / 有失败）时才自动重扫，避免“点翻译却只是在重扫”的错觉。
         if packs or errors:
             self.start_scan()
@@ -2787,6 +2806,7 @@ class FerryApp(tk.Tk):
                         for nbt_modid, pairs in nbt_pairs.items():
                             merged_hardcoded.setdefault(nbt_modid, {}).update(pairs)
                         core.save_hardcoded_translations(pack, merged_hardcoded)
+                        self.result_queue.put(("nbt_translated", sum(len(p) for p in nbt_pairs.values())))
                 if translations or baseline:
                     lang_translations = {modid: dict(data) for modid, data in baseline.items()}
                     for modid, data in translations.items():
@@ -2949,6 +2969,8 @@ class FerryApp(tk.Tk):
             self.lookup_button.configure(state="normal")
             self.progress.configure(value=0)
             self._show_lookup_results(payload)
+        elif kind == "nbt_translated":
+            self._last_nbt_count += int(payload)
         elif kind == "pack_progress":
             done, total = payload
             self.progress.configure(maximum=max(1, total), value=done)
