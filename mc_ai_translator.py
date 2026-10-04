@@ -1147,10 +1147,10 @@ def _class_utf8_constants(data: bytes) -> list[str]:
     return out
 
 
-def _looks_like_ui_text(text: str, min_len: int = 14, min_words: int = 3) -> bool:
-    if len(text) < min_len or len(text) > 160 or " " not in text:
+def _looks_like_ui_text(text: str, min_len: int = 14, min_words: int = 3, max_len: int = 160) -> bool:
+    if len(text) < min_len or len(text) > max_len or " " not in text:
         return False
-    if not (text[0].isupper() or text[0].islower() or text[0] in "\"'"):
+    if not (text[0].isupper() or text[0].islower() or text[0] in "\"'“”‘’«»"):
         return False
     low = text.lower()
     if any(low.startswith(word) for word in _HARDCODED_TECH_START):
@@ -1161,7 +1161,7 @@ def _looks_like_ui_text(text: str, min_len: int = 14, min_words: int = 3) -> boo
         return False
     if re.search(r"[a-z][A-Z]", text):
         return False
-    printable = sum(ch.isalpha() or ch.isspace() or ch in ".,!?'-" for ch in text)
+    printable = sum(ch.isalpha() or ch.isspace() or ch in ".,!?'-\"“”‘’…—«»" for ch in text)
     if printable < len(text) * 0.92:
         return False
     if len([w for w in text.split() if w]) < min_words:
@@ -1169,7 +1169,7 @@ def _looks_like_ui_text(text: str, min_len: int = 14, min_words: int = 3) -> boo
     return True
 
 
-def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5) -> list[tuple[str, int, list[str]]]:
+def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5, candidate_min_len: int = 4, candidate_min_words: int = 2, candidate_max_len: int = 400) -> list[tuple[str, int, list[str]]]:
     """扫描 mods 目录，找出疑似含硬编码文本（无法通过资源包汉化）的模组。
 
     返回 [(jar 名, 疑似条数, 样例)]，按条数降序。
@@ -1201,9 +1201,11 @@ def detect_hardcoded_texts(mods_dir: Path, threshold: int = 5) -> list[tuple[str
                         continue
         except (zipfile.BadZipFile, OSError):
             continue
-        all_text = sorted(set(constants) - {""}, key=len, reverse=True)
+        # 剥掉 § 格式码再比对：桥接匹配时游戏侧也会剥码，两侧口径一致
+        code_stripper = re.compile(chr(167) + ".")
+        all_text = sorted({code_stripper.sub("", text).strip() for text in constants if text.strip()}, key=len, reverse=True)
         strict = [text for text in all_text if _looks_like_ui_text(text) and text.lower() not in known]
-        relaxed = [text for text in all_text if _looks_like_ui_text(text, min_len=4, min_words=2) and text.lower() not in known]
+        relaxed = [text for text in all_text if _looks_like_ui_text(text, min_len=4, min_words=2, max_len=candidate_max_len) and text.lower() not in known]
         if len(strict) >= threshold or len(relaxed) >= 3:
             # 第三个元素是全量候选（宽松档，含短聊天句，按长度降序）；
             # 数量字段用严格档计数，展示方自己取前几条当样例。
