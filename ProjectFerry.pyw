@@ -23,7 +23,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "1.8.5"
+APP_VERSION = "1.9.0"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -271,6 +271,11 @@ class FerryApp(tk.Tk):
         self.looking_up = False
         self.checking_update = False
         self.cancel_event = threading.Event()
+        self._tx_phase: tuple[int, int, str] | None = None
+        self._tx_stats: dict | None = None
+        self._progress_value = 0.0
+        self._progress_cap = 1.0
+        self._progress_tick_after: str | None = None
         self.translatable_targets: dict[str, set[str]] = {}
         self.hardcoded_results: list[tuple[str, int, list[str]]] = []
         self.row_targets: dict[str, str] = {}
@@ -281,6 +286,7 @@ class FerryApp(tk.Tk):
         self.coverage_tip: tk.Toplevel | None = None
         self.coverage_hover_item = ""
         self.scan_cache: dict[str, core.ScanResult] = {}
+        self.yield_reports: dict[str, core.YieldReport] = {}
         self._hardcoded_cache: dict[str, list[tuple[str, int, list[str]]]] = {}
         self.whitelist: set[str] = self._load_whitelist()
         self.config: dict = core.load_config()
@@ -929,6 +935,8 @@ class FerryApp(tk.Tk):
             pass
 
     def _on_close(self) -> None:
+        if self.translating:
+            self.cancel_event.set()
         self._closing = True
         for after_id in [getattr(self, "_drain_after", None), *getattr(self, "_initial_afters", [])]:
             if after_id:
@@ -1373,7 +1381,7 @@ class FerryApp(tk.Tk):
                     count, errors = core.retranslate_pack_keys(scan, pack, keys, settings)
                     self.result_queue.put(("qc_retranslated", (count, errors)))
                 except Exception as exc:
-                    self.result_queue.put(("error", f"重翻失败：{exc}"))
+                    self.result_queue.put(("error", ("translate", f"重翻失败：{core.redact_secrets(str(exc))}")))
             threading.Thread(target=work, daemon=True).start()
         ttk.Button(buttons, text="删除选中", command=delete).pack(side="left")
         ttk.Button(buttons, text="重翻选中", command=retranslate).pack(side="left", padx=6)
@@ -1390,7 +1398,7 @@ class FerryApp(tk.Tk):
             self.start_scan()
 
     def _update_glossary(self) -> None:
-        if self.updating_glossary:
+        if self.updating_glossary or self.translating:
             return
         self.updating_glossary = True
         self.glossary_button.configure(state="disabled")
@@ -1403,7 +1411,7 @@ class FerryApp(tk.Tk):
             core.USER_GLOSSARY_FILE.write_text(json.dumps(glossary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             self.result_queue.put(("glossary_updated", len(glossary)))
         except Exception as exc:
-            self.result_queue.put(("error", f"术语表更新失败：{exc}"))
+            self.result_queue.put(("error", ("glossary", f"术语表更新失败：{core.redact_secrets(str(exc))}")))
 
     def _security_check(self) -> None:
         if self._closing:
@@ -1530,6 +1538,7 @@ class FerryApp(tk.Tk):
         if not groups:
             self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
             return
+        mapping = core.build_bridge_mapping(scan.english, scan.community, ai_by_modid, hardcoded=hardcoded)
         rules_doc = core.build_literalbridge_export(groups)
         bridge_config_dir = Path(instance_value) / "config" / "literalbridge"
         try:
@@ -1573,7 +1582,7 @@ class FerryApp(tk.Tk):
 
     def start_online_lookup(self) -> None:
         """选中若干模组，逐个查询源探测网上有没有现成汉化。"""
-        if self.looking_up or self.scanning:
+        if self.looking_up or self.scanning or self.translating:
             return
         modids = sorted({modid for mods in self._selected_targets().values() for modid in mods})
         if not modids:
@@ -1599,7 +1608,7 @@ class FerryApp(tk.Tk):
             )
             self.result_queue.put(("lookup_done", results))
         except Exception as exc:
-            self.result_queue.put(("error", f"在线汉化查询失败：{core.redact_secrets(str(exc))}"))
+            self.result_queue.put(("error", ("lookup", f"在线汉化查询失败：{core.redact_secrets(str(exc))}")))
 
     def _show_lookup_results(self, results: list[dict[str, str]]) -> None:
         found = sum(1 for item in results if item["status"] == "found")
@@ -1862,6 +1871,7 @@ class FerryApp(tk.Tk):
 
         section("功能要点", [
             "资源包式临时汉化：只补缺口，绝不覆盖人工 / 官方 / 社区译文",
+            "汉化组后续补上的译文，摆渡会自动撤回自己此前生成的那几条并在状态栏播报",
             "多模型并发：可接入多个自建 API，按字符量平摊资费",
             "社区汉化基线：命中优先采用，AI 只补剩余缺口",
             "硬编码文本检测、质量检查、按条重翻 / 锁定 / 跳过",
@@ -2133,7 +2143,7 @@ class FerryApp(tk.Tk):
             self.instance_combo.set("没有找到实例，点「浏览…」手动选择")
 
     def refresh_instances(self) -> None:
-        if self._closing:
+        if self._closing or self.scanning or self.translating or self.managing_pack:
             return
         # 记住当前选的实例：刷新后优先回到它，而不是永远跳回第一个
         self._previous_instance = self.path_var.get().strip() or str(self.config.get("last_instance") or "")
@@ -2148,7 +2158,7 @@ class FerryApp(tk.Tk):
         try:
             self.result_queue.put(("instances", core.find_instance_dirs()))
         except Exception as exc:
-            self.result_queue.put(("error", f"实例探测失败：{exc}"))
+            self.result_queue.put(("error", ("discovery", f"实例探测失败：{core.redact_secrets(str(exc))}")))
 
     def _instance_selected(self, _event: object = None) -> None:
         index = self.instance_combo.current()
@@ -2177,7 +2187,7 @@ class FerryApp(tk.Tk):
         os.startfile(str(Path(__file__).parent))
 
     def start_scan(self) -> None:
-        if self.scanning or self.managing_pack:
+        if self.scanning or self.managing_pack or self.translating:
             return
         # 没选实例时不能把所有自动发现的实例全扫一遍（大整合包会卡很久），改为刷新并只扫第一个。
         if not self.path_var.get().strip():
@@ -2221,10 +2231,11 @@ class FerryApp(tk.Tk):
             whitelist = set(self.whitelist)
             scan_cache: dict[str, core.ScanResult] = {}
             uninstalled: dict[str, set[str]] = {}
+            yield_reports: list[tuple[str, core.YieldReport]] = []
             for instance in instances:
                 mods = instance / "mods"
                 packs = instance / "resourcepacks"
-                scan = core.scan_inputs(mods, packs if packs.is_dir() else None)
+                scan = core.scan_inputs(mods, packs if packs.is_dir() else None, instance)
                 output_dir = Path(self.config.get("output_dir") or packs)
                 pack_name = self.config.get("pack_name") or core.DEFAULT_CONFIG["pack_name"]
                 pack = output_dir / pack_name
@@ -2234,8 +2245,10 @@ class FerryApp(tk.Tk):
                 except ValueError:
                     legacy = False
                 if legacy and core.migrate_legacy_pack(pack, core.pack_format_for_version(version)):
-                    scan = core.scan_inputs(mods, packs if packs.is_dir() else None)
-                core.yield_to_community(scan, pack)
+                    scan = core.scan_inputs(mods, packs if packs.is_dir() else None, instance)
+                core_report = core.yield_to_community(scan, pack)
+                if core_report:
+                    yield_reports.append((str(instance), core_report))
                 uninstalled[str(instance)] = set(core.load_uninstalled_ai(output_dir / pack_name))
                 scan_cache[str(instance)] = scan
                 provenance = core.load_pack_sources(output_dir / pack_name)
@@ -2277,7 +2290,7 @@ class FerryApp(tk.Tk):
                 else:
                     rows.append(self._placeholder_row(instance))
             # 先把列表发出去（秒出），再做最慢的硬编码检测，完成后单独补标记。
-            self.result_queue.put(("rows", (rows, translatable_targets, failed_modids, hardcoded_findings, scan_cache, uninstalled)))
+            self.result_queue.put(("rows", (rows, translatable_targets, failed_modids, hardcoded_findings, scan_cache, uninstalled, yield_reports)))
             for instance_path, mods_dir in pending_detection:
                 self.result_queue.put(("status", f"后台检测硬编码文本：{Path(instance_path).name}……"))
                 try:
@@ -2289,7 +2302,7 @@ class FerryApp(tk.Tk):
                 namespaces = sorted(core.hardcoded_modids(scan, found)) if scan else []
                 self.result_queue.put(("hardcoded", (instance_path, namespaces, found)))
         except Exception as exc:
-            self.result_queue.put(("error", f"扫描失败：{core.redact_secrets(str(exc))}"))
+            self.result_queue.put(("error", ("scan", f"扫描失败：{core.redact_secrets(str(exc))}")))
 
     def _selected_targets(self) -> dict[str, set[str]]:
         targets: dict[str, set[str]] = {}
@@ -2524,7 +2537,7 @@ class FerryApp(tk.Tk):
                 count, errors = core.retranslate_pack_keys(scan, pack, {modid: keys}, settings)
                 self.result_queue.put(("qc_retranslated", (count, errors)))
             except Exception as exc:
-                self.result_queue.put(("error", f"重翻失败：{core.redact_secrets(str(exc))}"))
+                self.result_queue.put(("error", ("translate", f"重翻失败：{core.redact_secrets(str(exc))}")))
         threading.Thread(target=work, daemon=True).start()
 
     def _skip_mod_key(self) -> None:
@@ -2551,7 +2564,7 @@ class FerryApp(tk.Tk):
                 scan = self.scan_cache.get(instance_path)
                 if scan is None:
                     packs = instance / "resourcepacks"
-                    scan = core.scan_inputs(instance / "mods", packs if packs.is_dir() else None)
+                    scan = core.scan_inputs(instance / "mods", packs if packs.is_dir() else None, instance)
                 pack = Path(settings["output_dir"]) / settings["pack_name"]
                 restored.extend(core.reload_ai_translations(pack, modids, scan, settings["pack_format"]))
             self.result_queue.put(("reloaded", restored))
@@ -2572,7 +2585,7 @@ class FerryApp(tk.Tk):
                     scan = self.scan_cache.get(instance_path)
                     if scan is None:
                         packs = instance / "resourcepacks"
-                        scan = core.scan_inputs(instance / "mods", packs if packs.is_dir() else None)
+                        scan = core.scan_inputs(instance / "mods", packs if packs.is_dir() else None, instance)
                     english = core.english_map_for(scan.english, set(modids))
                     for modid in modids:
                         if modid not in english:
@@ -2683,17 +2696,22 @@ class FerryApp(tk.Tk):
         core.save_config(config)
         self.translating = True
         self.cancel_event = threading.Event()
+        self._tx_phase = None
+        self._tx_stats = None
+        self._progress_value = 0.0
+        self._progress_cap = 1.0
         self.progress.configure(value=0, maximum=1)
         self.progress_text_var.set("准备翻译……")
         self.status_var.set("开始翻译……")
         self._set_translating_ui(True)
+        self._start_progress_tick()
         threading.Thread(target=self._translate_worker, args=(targets, config, self.cancel_event), daemon=True).start()
 
     def _stop_translate(self) -> None:
         if self.translating:
             self.cancel_event.set()
             self.stop_button.configure(state="disabled")
-            self.status_var.set("正在停止…… 当前条目完成后打包已翻译内容。")
+            self.status_var.set("正在停止…… 已翻译的内容会被写进资源包；若翻译其实已经完成，则只是老实打包。")
 
     def _set_translating_ui(self, active: bool) -> None:
         state = "disabled" if active else "normal"
@@ -2706,8 +2724,11 @@ class FerryApp(tk.Tk):
         self._set_translating_ui(False)
         self.progress.configure(value=0)
         self.progress_text_var.set("")
+        nbt_count = self._last_nbt_count
+        self._last_nbt_count = 0
+        lines: list[str] = []
         if packs:
-            lines = ["已生成：" + "\n".join(packs)]
+            lines.append("已生成：" + "\n".join(packs))
             if usage_text:
                 lines.append("\n各模型用量（按字符量平摊）：\n" + usage_text)
             if errors:
@@ -2715,10 +2736,9 @@ class FerryApp(tk.Tk):
                 lines.append("\n".join("· " + e for e in errors[:10]))
             if cancelled:
                 lines.append("\n翻译已停止，这是不完整的包（只含已翻译的部分）。")
-            if self._last_nbt_count:
-                lines.append(f"\n另翻译了 {self._last_nbt_count} 条硬编码文本（桥接显示用）——点「导出桥接映射」写进游戏。")
-                self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}：{len(packs)} 个资源包 + {self._last_nbt_count} 条硬编码文本。")
-                self._last_nbt_count = 0
+            if nbt_count:
+                lines.append(f"\n另翻译了 {nbt_count} 条硬编码文本（桥接显示用）——点「导出桥接映射」写进游戏。")
+                self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}：{len(packs)} 个资源包 + {nbt_count} 条硬编码文本。")
             else:
                 self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}，写入 {len(packs)} 个资源包。")
             if messagebox.askyesno("已停止" if cancelled else "完成", "\n".join(lines) + "\n\n是否打开所在目录？"):
@@ -2733,30 +2753,97 @@ class FerryApp(tk.Tk):
             self.status_var.set("已停止，未翻译任何内容，未生成资源包。")
         else:
             self.status_var.set("没有需要翻译的 key（可能已由人工汉化覆盖，或已翻译完成）。")
-            if self._last_nbt_count:
-                lines.append(f"\n另翻译了 {self._last_nbt_count} 条硬编码文本（桥接显示用）——点「导出桥接映射」写进游戏。")
-                self._last_nbt_count = 0
+            if nbt_count:
+                self.status_var.set(f"另翻译了 {nbt_count} 条硬编码文本；点「导出桥接映射」写进游戏。")
         # 只有真正产生了变化（写包 / 有失败）时才自动重扫，避免“点翻译却只是在重扫”的错觉。
         if packs or errors:
             self.start_scan()
+
+    def _start_progress_tick(self) -> None:
+        # 250ms 一跳的轻量循环：批次 API 调用期间没有事件，靠插值让进度条别死在半路。
+        if self._progress_tick_after is None:
+            self._progress_tick_after = self.after(250, self._progress_tick)
+
+    def _progress_tick(self) -> None:
+        self._progress_tick_after = None
+        if not self.translating:
+            return
+        st = self._tx_stats
+        if st and st.get("mode") == "translate":
+            batches_total = st["batches_total"]
+            inflight = st["inflight"]
+            if batches_total > 0 and inflight > 0 and st["avg"] > 0:
+                # 在飞的批次没有事件可收，按平均批耗时的 90% 匀速推进，封顶在「完成+在飞」。
+                rate = inflight / batches_total * 0.25 / (st["avg"] * 0.9)
+                self._progress_value = min(self._progress_cap, self._progress_value + rate)
+                self.progress.configure(value=self._progress_value)
+            self._update_translate_status()
+        self._progress_tick_after = self.after(250, self._progress_tick)
+
+    def _progress_exact(self, fraction: float) -> None:
+        # 准确进度只进不退；封顶在「已完成 + 在飞」批次，避免插值冲过头。
+        if getattr(self, "_tx_stats", None) and self._progress_cap > 0:
+            fraction = min(fraction, self._progress_cap)
+        self._progress_value = max(self._progress_value if self._tx_stats else 0.0, fraction)
+        self.progress.configure(maximum=1, value=self._progress_value)
+
+    def _fmt_seconds(self, seconds: float) -> str:
+        seconds = max(1, int(round(seconds)))
+        minutes, sec = divmod(seconds, 60)
+        if minutes >= 60:
+            hours, minutes = divmod(minutes, 60)
+            return f"{hours} 小时 {minutes} 分"
+        return f"{minutes} 分 {sec} 秒" if minutes else f"{sec} 秒"
+
+    def _update_translate_status(self) -> None:
+        st = self._tx_stats
+        if not st:
+            return
+        parts: list[str] = []
+        phase = self._tx_phase
+        if phase:
+            parts.append(f"阶段 {phase[0]}/{phase[1]} · {phase[2]}")
+        vocab_done, vocab_total = st["entries_done"], st["entries_total"]
+        if vocab_total:
+            pct = int(self._progress_value * 100 if st["batches_total"] else 0)
+            parts.append(f"已翻 {vocab_done}/{vocab_total} 条（{pct}%）")
+        batches_left = st["batches_total"] - st["batches_done"]
+        if batches_left > 0 and st["avg"] > 0:
+            workers = max(1, min(st["concurrency"] or 1, batches_left))
+            parts.append(f"预计还需 {self._fmt_seconds(st['avg'] * batches_left / workers)}")
+        if parts:
+            self.status_var.set(" · ".join(parts))
 
     def _translate_worker(self, targets: dict[str, set[str]], config: dict, cancel_event: threading.Event) -> None:
         try:
             packs_written: list[str] = []
             all_errors: list[str] = []
             usage: dict[str, dict[str, int]] = {}
+            # 批内进度的共享状态：callback 可能来自并发池线程，读写都要过锁。
+            batch_stats = {"lock": threading.Lock(), "started": {}, "completed": 0, "durations": []}
+            batch_push = {"time": 0.0}
+            translate_started = time.monotonic()
+            translation_finished = False
             for instance_path, modids in targets.items():
                 instance = Path(instance_path)
                 mods = instance / "mods"
                 packs = instance / "resourcepacks"
                 scan = self.scan_cache.get(instance_path)
                 if scan is None:
-                    scan = core.scan_inputs(mods, packs if packs.is_dir() else None)
+                    self.result_queue.put(("phase", (1, 3, "扫描输入")))
+                    scanned_here = True
+                    scan = core.scan_inputs(mods, packs if packs.is_dir() else None, instance)
+                else:
+                    scanned_here = False
+                translate_phase, write_phase = ((2, 3) if scanned_here else (1, 2))
                 settings = core.resolve_translate_settings(config, instance)
                 pack = Path(settings["output_dir"]) / settings["pack_name"]
-                core.yield_to_community(scan, Path(settings["output_dir"]) / settings["pack_name"])
+                pack_path = Path(settings["output_dir"]) / settings["pack_name"]
+                translate_report = core.yield_to_community(scan, pack_path)
+                if translate_report:
+                    self.result_queue.put(("status", f"检测到新的人工汉化，摆渡{translate_report.summary()}。"))
                 if settings["engine"] in core.ENGINES_WITH_KEY and not settings["api_key"]:
-                    self.result_queue.put(("error", f"{settings['engine']} 引擎需要 API key。请在下方填入并保存。"))
+                    self.result_queue.put(("error", ("translate", f"{settings['engine']} 引擎需要 API key。请在下方填入并保存。")))
                     return
                 entries = core.missing_entries(
                     scan.english, scan.community, scan.ai, set(self.whitelist),
@@ -2795,51 +2882,106 @@ class FerryApp(tk.Tk):
                 def progress(done: int, total: int, modid: str) -> None:
                     self.result_queue.put(("progress", (done, total, modid)))
 
+                def report_batch(batch_index: int, batch_total: int, entries_total: int, modid: str, in_batch_done: int, in_batch_size: int) -> None:
+                    # 批内进度：批开始/批结束必发；批中按「每 2 条或每 0.3 秒先到者」节流。
+                    with batch_stats["lock"]:
+                        now = time.monotonic()
+                        pending = batch_stats["started"]
+                        if in_batch_done == 0:
+                            pending.setdefault(batch_index, now)
+                        elif in_batch_done >= in_batch_size and batch_index in pending:
+                            started_at = pending.pop(batch_index)
+                            batch_stats["completed"] += 1
+                            batch_stats["durations"] = (batch_stats["durations"] + [now - started_at])[-3:]
+                        durations = batch_stats["durations"]
+                        snapshot = (
+                            batch_stats["completed"], batch_total, len(pending),
+                            sum(durations) / len(durations) if len(durations) >= 2 else 0.0,
+                            modid, in_batch_done, in_batch_size,
+                            max(1, int(settings.get("concurrency", 1) or 1)), entries_total,
+                        )
+                        queue_now = in_batch_done == 0 or in_batch_done >= in_batch_size or in_batch_done % 2 == 0 or now - batch_push["time"] > 0.3
+                        if queue_now:
+                            batch_push["time"] = now
+                    if queue_now:
+                        self.result_queue.put(("batch_progress", snapshot))
+
                 corpus = core.community_corpus(scan.english, scan.community + baseline_files) if settings["refine_community"] else None
-                translations, errors, failed = core.translate_entries(entries, settings, progress=progress, cancel_event=cancel_event, usage=usage, corpus=corpus) if entries else ({}, [], {})
+                if entries:
+                    self.result_queue.put(("phase", (translate_phase, write_phase, "翻译条目")))
+                    translations, errors, failed = core.translate_entries(entries, settings, progress=progress, batch_progress=report_batch, cancel_event=cancel_event, usage=usage, corpus=corpus)
+                    # 翻译一结束就主动宣告结果，别让用户靠「停止」按钮才能猜出完成了。
+                    self.result_queue.put(("translate_done", (len(entries), time.monotonic() - translate_started, cancel_event.is_set())))
+                    translation_finished = not cancel_event.is_set()
+                else:
+                    translations, errors, failed = {}, [], {}
                 all_errors.extend(errors)
-                core.update_progress(translations, failed)
+                nbt_pairs: dict[str, dict[str, str]] = {}
                 if hardcoded_entries:
                     nbt_pairs = core.hardcoded_pairs_from_entries(hardcoded_entries, translations)
-                    if nbt_pairs:
+                if translations or baseline:
+                    lang_translations = {modid: dict(data) for modid, data in baseline.items()}
+                    for modid, data in translations.items():
+                        lang_translations.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith(("patchouli:", "nbt:"))})
+                    self.result_queue.put(("phase", (write_phase, write_phase, "写入资源包")))
+                    def report_pack_write(done: int, total: int, namespace: str) -> None:
+                        # 写 zip 按命名空间上报，避免打包阶段零反馈。
+                        self.result_queue.put(("pack_write", (done, total, namespace)))
+                    merged = core.merge_pack_translations(pack, lang_translations, scan.community)
+                    pages = core.load_pack_patchouli(pack)
+                    pages.update(core.translated_patchouli_files(scan, patch_entries, translations))
+                    sources = {modid: {key: "community" for key in data} for modid, data in baseline.items()}
+                    core.write_pack(pack, merged, settings["pack_format"], core.load_pack_reverted(pack), patchouli=pages, sources=core.merged_sources(pack, merged, sources), pack_progress=report_pack_write)
+                    packs_written.append(str(pack))
+                if nbt_pairs:
+                    try:
                         merged_hardcoded = core.load_hardcoded_translations(pack)
                         for nbt_modid, pairs in nbt_pairs.items():
                             merged_hardcoded.setdefault(nbt_modid, {}).update(pairs)
                         core.save_hardcoded_translations(pack, merged_hardcoded)
                         self.result_queue.put(("nbt_translated", sum(len(p) for p in nbt_pairs.values())))
-                if translations or baseline:
-                    lang_translations = {modid: dict(data) for modid, data in baseline.items()}
-                    for modid, data in translations.items():
-                        lang_translations.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith(("patchouli:", "nbt:"))})
-                    merged = core.merge_pack_translations(pack, lang_translations, scan.community)
-                    pages = core.load_pack_patchouli(pack)
-                    pages.update(core.translated_patchouli_files(scan, patch_entries, translations))
-                    sources = {modid: {key: "community" for key in data} for modid, data in baseline.items()}
-                    core.write_pack(pack, merged, settings["pack_format"], core.load_pack_reverted(pack), patchouli=pages, sources=core.merged_sources(pack, merged, sources))
-                    packs_written.append(str(pack))
+                    except OSError as exc:
+                        core.LOG.warning("Could not save bridge mapping: %s", type(exc).__name__)
+                        all_errors.append("桥接映射保存失败，已生成的资源包不受影响。")
+                try:
+                    core.update_progress(translations, failed)
+                except OSError as exc:
+                    core.LOG.warning("Could not save translation progress: %s", type(exc).__name__)
+                    all_errors.append("失败记录保存失败，已生成的资源包不受影响。")
                 if cancel_event.is_set():
                     break
             usage_text = core.format_usage(usage)
-            if cancel_event.is_set():
-                self.result_queue.put(("cancelled", (packs_written, all_errors, usage_text)))
-            else:
-                self.result_queue.put(("translated", (packs_written, all_errors, usage_text)))
+            # 翻译阶段若已完整跑完，之后才点停止只是打包被打断，包并不是「半截货」。
+            self.result_queue.put(("translated" if translation_finished else "cancelled", (packs_written, all_errors, usage_text)))
         except Exception as exc:
-            self.result_queue.put(("error", f"翻译失败：{core.redact_secrets(str(exc))}"))
+            self.result_queue.put(("error", ("translate", f"翻译失败：{core.redact_secrets(str(exc))}")))
 
     def _drain_queue(self) -> None:
         if self._closing:
             return
         try:
+            self._drain_queue_once()
+        except Exception as exc:
+            core.LOG.error("GUI queue handler failed: %s", type(exc).__name__)
+            self.status_var.set("处理后台结果时出错，请查看日志。")
+        finally:
+            if not self._closing:
+                self._drain_after = self.after(100, self._drain_queue)
+
+    def _drain_queue_once(self) -> None:
+        if self._closing:
+            return
+        try:
             kind, payload = self.result_queue.get_nowait()
         except queue.Empty:
-            self._drain_after = self.after(100, self._drain_queue)
             return
         if kind == "status":
             # 扫描过程中的进度提示；绝不能在这里重置 scanning，否则可重复触发并发扫描。
             self.status_var.set(str(payload))
         elif kind == "instances":
-            self.scanning = False
+            if self.scanning or self.translating:
+                core.LOG.debug("Ignored stale instance-discovery result while busy")
+                return
             previous = getattr(self, "_previous_instance", "")
             select = next((index for index, path in enumerate(self.instance_paths) if str(path) == previous), 0 if self.instance_paths else None)
             self._set_instance_options(list(payload), select=select)
@@ -2851,7 +2993,8 @@ class FerryApp(tk.Tk):
                 self.status_var.set("没有自动找到 Minecraft 实例。你可以点击“浏览”手动选择。")
         elif kind == "rows":
             self.scanning = False
-            rows, translatable_targets, failed_modids, hardcoded, scan_cache, uninstalled = payload
+            rows, translatable_targets, failed_modids, hardcoded, scan_cache, uninstalled, yield_reports = payload
+            self.yield_reports = {instance: report for instance, report in (yield_reports or [])}
             self.translatable_targets = translatable_targets
             self.hardcoded_results = hardcoded
             self.scan_cache = scan_cache
@@ -2893,6 +3036,8 @@ class FerryApp(tk.Tk):
                 summary = f"扫描完成：{ai_mods} 个模组待 AI 翻译，{pending_community} 个待补人工汉化缺失。"
             else:
                 summary = f"扫描完成：{ai_mods} 个模组缺中文，{com_mods} 个已有人工汉化（自动让位）。"
+            for _instance, report in (yield_reports or []):
+                summary += f" 检测到新的人工汉化，摆渡{report.summary()}。"
             if excluded_n:
                 summary += f" {excluded_n} 个已手动排除（不翻译），右键可移出。"
             if failed_modids:
@@ -2911,11 +3056,63 @@ class FerryApp(tk.Tk):
                 self.hardcoded_results = list(self.hardcoded_results or []) + list(findings)
                 self.limits_button.configure(state="normal")
             self._render_rows()
+        elif kind == "phase":
+            if self.translating:
+                self._tx_phase = payload
+                st = self._tx_stats
+                if st is not None:
+                    st["mode"] = "pack_write" if str(payload[2]).startswith("写入") else "translate"
+                # 切阶段：进度条归零重填，不跨阶段混合百分比。
+                self._progress_value = 0.0
+                self._progress_cap = 1.0
+                self.progress.configure(maximum=1, value=0)
+                self.progress_text_var.set("")
+                self._update_translate_status()
+        elif kind == "batch_progress":
+            if self.translating:
+                batches_done, batches_total, inflight, avg, modid, in_done, in_size, concurrency, entries_total = payload
+                st = self._tx_stats
+                if st is None:
+                    st = self._tx_stats = {"batches_done": 0, "batches_total": 0, "inflight": 0, "avg": 0.0, "entries_done": 0, "entries_total": 0, "concurrency": 1, "mode": "translate"}
+                st.update(batches_done=batches_done, batches_total=batches_total, inflight=inflight, avg=avg, concurrency=concurrency)
+                st["entries_total"] = entries_total or st["entries_total"]
+                if batches_total > 0:
+                    self._progress_exact((batches_done + in_done / max(1, in_size)) / batches_total)
+                    text = f"正在翻译 {modid} · 第 {min(batches_done + 1, batches_total)}/{batches_total} 批 · 本批 {in_done}/{in_size} 条"
+                    if concurrency > 1:
+                        text += f" · {concurrency} 路并发"
+                    if avg > 0:
+                        text += f" · 平均每批 {avg:.0f} 秒"
+                    self.progress_text_var.set(text)
+                self._update_translate_status()
+        elif kind == "translate_done":
+            if self.translating:
+                count, elapsed, cancelled = payload
+                st = self._tx_stats
+                if st is not None:
+                    st["mode"] = "pack_write"
+                result = "翻译完成" if not cancelled else "已记录停止请求"
+                self.status_var.set(f"{result} · {count} 条 · 耗时 {self._fmt_seconds(elapsed)} —— 正在写入资源包…")
+        elif kind == "pack_write":
+            if self.translating:
+                done, total, namespace = payload
+                self.progress.configure(maximum=max(1, total), value=done)
+                self.progress_text_var.set(f"写入资源包 · {done}/{total} · {namespace}")
+                phase = self._tx_phase
+                self.status_var.set((f"阶段 {phase[0]}/{phase[1]} · " if phase else "") + f"写入资源包 · {done}/{total}")
         elif kind == "progress":
             done, total, modid = payload
-            self.progress.configure(maximum=total, value=done)
-            self.progress_text_var.set(f"正在翻译 {modid}（{done}/{total} 条）")
-            self.status_var.set(f"翻译中：{modid} 已翻 {done}/{total} 条")
+            st = self._tx_stats
+            if st is not None and self.translating:
+                st["entries_done"], st["entries_total"] = done, total
+                if st["batches_total"] > 0:
+                    self._progress_exact(st["batches_done"] / st["batches_total"])
+                self.progress_text_var.set(f"正在翻译 {modid} · 已翻 {done}/{total} 条")
+                self._update_translate_status()
+            else:
+                self.progress.configure(maximum=total, value=done)
+                self.progress_text_var.set(f"正在翻译 {modid}（{done}/{total} 条）")
+                self.status_var.set(f"翻译中：{modid} 已翻 {done}/{total} 条")
         elif kind == "translated":
             packs, errors, usage_text = payload
             self._finish_translate(packs, errors, cancelled=False, usage_text=usage_text)
@@ -2991,19 +3188,25 @@ class FerryApp(tk.Tk):
             self._apply_update_swap(payload)
         elif kind == "update_failed":
             self.status_var.set(f"更新下载失败：{payload}。可到发布页手动下载。")
-        else:
-            self.scanning = False
-            self.translating = False
-            self.updating_glossary = False
-            self.looking_up = False
-            self.checking_update = False
-            self.glossary_button.configure(state="normal")
-            self.lookup_button.configure(state="normal")
-            self._set_translating_ui(False)
-            self.progress.configure(value=0)
+        elif kind == "error":
+            source, message = payload if isinstance(payload, tuple) and len(payload) == 2 else ("unknown", str(payload))
+            if source == "translate":
+                self.translating = False
+                self._last_nbt_count = 0
+                self._set_translating_ui(False)
+                self.progress.configure(value=0)
+            elif source == "glossary":
+                self.updating_glossary = False
+                self.glossary_button.configure(state="normal")
+            elif source == "lookup":
+                self.looking_up = False
+                self.lookup_button.configure(state="normal")
+            elif source == "scan":
+                self.scanning = False
             self.status_var.set("出错了，详情见弹窗。")
-            messagebox.showerror("摆渡计划错误", str(payload))
-        self._drain_after = self.after(100, self._drain_queue)
+            messagebox.showerror("摆渡计划错误", core.redact_secrets(str(message)))
+        else:
+            core.LOG.warning("Unknown GUI queue message kind: %s", kind)
 
 
 if __name__ == "__main__":

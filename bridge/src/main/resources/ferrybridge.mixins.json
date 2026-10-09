@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.redreality.ferrybridge.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "ferrybridge.refmap.json",
+  "client": [
+    "ComponentMixin",
+    "ChatComponentMixin"
+  ]
+}

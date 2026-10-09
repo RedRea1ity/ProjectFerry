@@ -1,7 +1,10 @@
 plugins {
     id 'eclipse'
     id 'idea'
-    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    // 版本必须钉死，不能用 [6.0,6.2) 动态范围：
+    // 动态范围要求 Gradle 向每个仓库拉 maven-metadata.xml 再比对，
+    // 走镜像时多仓库的 metadata 会互相干扰，导致插件解析失败。
+    id 'net.minecraftforge.gradle' version '6.0.24'
 }
 
 version = '1.0.0'
@@ -17,10 +20,19 @@ minecraft {
 
 dependencies {
     minecraft 'net.minecraftforge:forge:1.20.1-47.3.0'
+    // 编译期只需要 mixin 注解类，运行时由 Forge 提供。
+    compileOnly 'org.spongepowered:mixin:0.8.5'
+
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    options.compilerArgs += [
+        '-AoutRefMapFile=ferrybridge.refmap.json',
+        // 全局默认 require=0：注入点因版本差异失效时静默跳过，而不是让游戏崩溃。
+        // 与各 @Inject(require = 0) 注解级声明并存，两层都设最稳。
+        '-AdefaultRequire=0'
+    ]
 }
 
 jar {
@@ -29,8 +41,25 @@ jar {
             'Specification-Title'   : 'ferrybridge',
             'Specification-Version' : '1',
             'Implementation-Title'  : 'FerryBridge',
-            'Implementation-Version': project.version
+            'Implementation-Version': project.version,
+            // Forge 从这里读取 mixin 配置；Fabric 版改走 fabric.mod.json。
+            'MixinConfigs'           : 'ferrybridge.mixins.json'
         ])
     }
     finalizedBy 'reobfJar'
+}
+// ───────────────────────────────────────────────────────────────
+// 诊断用：打印 compileJava 实际的注解处理器路径。
+// 确认「显式声明的那份」和「ForgeGradle 自动加的那份」是不是同一个文件。
+// 若打印结果里mixin 只出现一次，说明去重逻辑写对了。
+tasks.register("showAp") {
+    doLast {
+        def t = tasks.named("compileJava").get()
+        println("=== annotationProcessorPath ===")
+        t.options.annotationProcessorPath.files.each { f ->
+            println("  " + f.name)
+        }
+        println("=== compilerArgs ===")
+        t.options.compilerArgs.each { println("  " + it) }
+    }
 }

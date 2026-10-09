@@ -24,3 +24,8 @@ displayTest="IGNORE_ALL_VERSION"
     versionRange="[1.20.1,1.21)"
     ordering="NONE"
     side="CLIENT"
+
+# 文本替换由 mixin 完成，不依赖任何 Forge 事件。
+# 同一份 ferrybridge.mixins.json 会被 Fabric 版复用，这是跨加载器的关键。
+[[mixins]]
+    config="ferrybridge.mixins.json"

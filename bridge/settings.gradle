@@ -1,7 +1,30 @@
+// 仓库顺序 = 解析优先级，从左到右逐个尝试：
+//
+//  1. FerryLocal  本地预置仓库（D:\Temp\forge-prefetch\m2）
+//     BMCLAPI 虽然缓存了 modlauncher 10.x 的文件，但 maven-metadata.xml 索引没更新，
+//     导致 `cpw.mods:modlauncher:10.0.+` 这类动态版本解析不出来。
+//     tools/prefetch-forge-deps.sh 会手工生成 metadata 补上这个缺口。
+//
+//  2. BMCLAPI  国内镜像，1.5 MB/s（Forge 官方源只有 20 KB/s，慢 74 倍）
+//
+//  3. MinecraftForge / MavenCentral  官方兜底
+//
+// 镜像缺件时自动落到下一个，行为与"只用官方源"完全一致，只是快得多。
+//
+// 注意：pluginManagement {} 必须是脚本的第一条语句，
+// 前面连变量声明都不能有，否则报
+// "The pluginManagement {} block must appear before any other statements"。
+
 pluginManagement {
     repositories {
+        maven {
+            name = 'FerryLocal'
+            url = uri('D:/Temp/forge-prefetch/m2')
+        }
+        maven { name = 'BMCLAPI'; url = 'https://bmclapi2.bangbang93.com/maven' }
         gradlePluginPortal()
         maven { name = 'MinecraftForge'; url = 'https://maven.minecraftforge.net/' }
+        mavenCentral()
     }
 }
 plugins {

@@ -366,6 +366,28 @@ class VersionDetectionTests(unittest.TestCase):
         core.validate_engine_network("local", "http://127.0.0.1:11434/v1")
         core.validate_engine_network("openai", "https://api.example.com/v1")
 
+    def test_placeholder_masks_percent_and_named_formats_without_swallowing_text(self):
+        for source in ("50%% off today", "Deal 100%% sure", "%-10s", "%+d", "%08.2f", "%(name)s grows", "§x§f§f§0§0§0§0Hello"):
+            masked, replacements = core.mask_placeholders(source)
+            restored = masked
+            for token, original in replacements.items():
+                restored = restored.replace(token, original)
+            self.assertEqual(restored, source)
+        masked, replacements = core.mask_placeholders("50%% off today")
+        self.assertIn("off today", masked)
+        self.assertEqual(list(replacements.values()), ["%%"])
+        self.assertIn("%(name)s", core.placeholder_tokens("%(name)s grows"))
+        self.assertIn("§x", core.placeholder_tokens("§x§f§f§0§0§0§0Hello"))
+
+    def test_duplicate_placeholder_reordering_is_rejected(self):
+        source = "Gains %s then %s"
+        masked, replacements = core.mask_placeholders(source)
+        self.assertEqual(list(replacements), ["__MC_PH_0__", "__MC_PH_1__"])
+        swapped = "获得 __MC_PH_1__ 然后 __MC_PH_0__"
+        self.assertIsNone(core.restore_and_validate(source, swapped, {}, set()))
+        correct = "获得 __MC_PH_0__ 然后 __MC_PH_1__"
+        self.assertEqual(core.restore_and_validate(source, correct, {}, set()), "获得 %s 然后 %s")
+
 
 class ScannerTests(unittest.TestCase):
     @staticmethod

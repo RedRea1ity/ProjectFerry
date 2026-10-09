@@ -13,7 +13,29 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    # 秒级门禁：Mixin 注入点签名错一步就要等 20 分钟编译才暴露，这里先拦掉。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch Mojang official mappings
+        run: |
+          mkdir -p .mappings
+          curl -sSL -o .mappings/client_mappings.txt \
+            https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
+          VER=$(python3 -c "import json;print(json.load(open('.mappings/client_mappings.txt'))['versions'][0]['url'])")
+          curl -sSL -o .mappings/version.json "$VER"
+          URL=$(python3 -c "import json;print(json.load(open('.mappings/version.json'))['downloads']['client_mappings']['url'])")
+          curl -sSL -o .mappings/client_mappings.txt "$URL"
+          ls -la .mappings/
+      - name: Verify mixin injection signatures
+        run: python3 bridge/tools/verify_mixin_signatures.py
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

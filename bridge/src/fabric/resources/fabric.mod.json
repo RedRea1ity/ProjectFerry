@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "ferrybridge",
+  "version": "1.0.0",
+  "name": "摆渡桥 FerryBridge",
+  "description": "摆渡计划的 NBT / 硬编码文本显示层桥接：按英文原文精确替换渲染文本，不改存档、不改模组文件，删掉即还原。",
+  "authors": [
+    "红现实"
+  ],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.redreality.ferrybridge.fabric.FerryBridgeFabricClient"
+    ]
+  },
+  "mixins": [
+    "ferrybridge.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "1.20.1",
+    "java": ">=17"
+  }
+}

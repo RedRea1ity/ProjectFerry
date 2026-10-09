@@ -3,6 +3,7 @@
 import json
 import io
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -161,6 +162,63 @@ class CorpusTranslationTests(unittest.TestCase):
         b = core.cache_key(entries, "openai", "deepseek-chat", base_url="https://other.example/v1")
         c = core.cache_key(entries, "openai", "deepseek-chat", base_url="https://api.deepseek.com/v1", term_hints={"Redstone": "红石"})
         self.assertEqual(len({a, b, c}), 3)
+
+    def test_corrupt_cache_and_unexpected_batch_error_do_not_abort_other_batches(self):
+        entries = [core.Entry("demo", f"key{i}", f"Value {i}", "test") for i in range(3)]
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            settings = {
+                "cache_dir": tmp, "batch_size": 1, "concurrency": 2, "glossary": {},
+                "keep": set(), "delay": 0, "timeout": 5, "engine": "openai",
+                "model": "test", "base_url": "https://api.example.test/v1", "api_key": "test",
+            }
+            key = core.cache_key([entries[0]], "openai", "test", {}, core.modid_keep_words("demo"), base_url=settings["base_url"])
+            (cache_dir / f"{key}.json").write_text('{"key0": "半截', encoding="utf-8")
+
+            def fake_translate(_engine, masked, _settings, cancel_event=None):
+                if "key1" in masked:
+                    raise ValueError("simulated malformed model response")
+                return {name: "译文 " + value for name, value in masked.items()}
+
+            with patch.object(core, "_translate_batch_with_retry", side_effect=fake_translate):
+                translated, errors, failed = core.translate_entries(entries, settings)
+            self.assertEqual(set(translated["demo"]), {"key0", "key2"})
+            self.assertIn("key1", failed["demo"])
+            self.assertEqual(len(errors), 1)
+            self.assertEqual(json.loads((cache_dir / f"{key}.json").read_text(encoding="utf-8"))["key0"], "译文 Value 0")
+
+    def test_pack_write_failure_keeps_old_zip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = Path(tmp) / "ai.zip"
+            core.write_pack(pack, {"demo": {"before": "旧译文"}}, 15)
+            previous = pack.read_bytes()
+            with patch.object(core, "_write_pack_file", side_effect=OSError("simulated full disk")):
+                with self.assertRaises(OSError):
+                    core.write_pack(pack, {"demo": {"after": "新译文"}}, 15)
+            self.assertEqual(pack.read_bytes(), previous)
+
+    def test_invalid_single_key_does_not_discard_other_keys(self):
+        entries = [core.Entry("demo", name, "Hello", "test") for name in ("bad", "good")]
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = {"cache_dir": tmp, "batch_size": 2, "concurrency": 1, "glossary": {}, "keep": set(), "delay": 0,
+                        "engine": "openai", "model": "test", "base_url": "https://example.test/v1"}
+            with patch.object(core, "_translate_batch_with_retry", return_value={"bad": ["not text"], "good": "你好"}):
+                translated, errors, failed = core.translate_entries(entries, settings)
+            self.assertEqual(translated, {"demo": {"good": "你好"}})
+            self.assertEqual(failed, {"demo": ["bad"]})
+            self.assertEqual(errors, [])
+
+    def test_model_json_keeps_only_string_values(self):
+        parsed = core._parse_ai_json('{"bad": ["not a translation"], "good": "中文"}')
+        self.assertEqual(parsed, {"good": "中文"})
+
+    def test_cancelled_queued_batch_never_calls_engine(self):
+        event = threading.Event()
+        event.set()
+        with patch.object(core, "translate_batch") as translate:
+            with self.assertRaisesRegex(RuntimeError, "取消"):
+                core._translate_batch_with_retry("openai", {"key": "Hello"}, {}, cancel_event=event)
+            translate.assert_not_called()
 
     def test_glossary_hints_are_sent_as_context_to_openai_compatible_model(self):
         with tempfile.TemporaryDirectory() as tmp:

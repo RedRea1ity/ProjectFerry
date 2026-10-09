@@ -273,9 +273,10 @@ def is_excluded_mod(modid: str, extra: set[str] | None = None) -> bool:
 
 
 PLACEHOLDER_RE = re.compile(
-    r"%(?:\d+\$)?[-+#0 ]*(?:\d+)?(?:\.\d+)?[a-zA-Z]"
+    r"%%"
+    r"|%(?:\([A-Za-z_][A-Za-z0-9_]*\))?(?:\d+\$)?[-+#0]*(?:\d+)?(?:\.\d+)?(?:[hlLzjt])?[a-zA-Z]"
     r"|\$\{[^}]+\}|\{\d+\}|\{[A-Za-z_][A-Za-z0-9_.-]*\}"
-    r"|§[0-9a-fk-or]|\$\([^\s)]*\)",
+    r"|§[0-9a-fk-orx]|\$\([^\s)]*\)",
     re.IGNORECASE,
 )
 
@@ -341,6 +342,63 @@ class ScanResult:
     patchouli_community: list[PatchouliFile] = field(default_factory=list)
     patchouli_ai: list[PatchouliFile] = field(default_factory=list)
     community_baseline: dict[str, dict[str, str]] = field(default_factory=dict)
+    # 存在于 resourcepacks 目录、但未在 options.txt 中启用的包里的人工汉化。
+    # 它们不抵扣缺口（游戏里并未生效），但作为术语语料喂给 AI。
+    # 这是「最尊重汉化组」的关键：没启用的译文仍被参考，只是不能冒充已生效。
+    reference_only: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+def enabled_resource_packs(instance: Path | None) -> set[str] | None:
+    """读 options.txt 的 resourcePacks 列表，返回真正启用的包标识。
+
+    返回 None 表示读不到（首次启动 / 文件不存在 / 格式异常），
+    此时调用方应退回"全部视为启用"的旧行为，避免误判导致漏翻。
+    """
+    if instance is None:
+        return None
+    options = instance / "options.txt"
+    try:
+        text = options.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    match = re.search(r"^resourcePacks:\[(.*?)\]", text, re.MULTILINE | re.DOTALL)
+    if not match:
+        return None
+    names = set()
+    for raw in match.group(1).split(","):
+        name = raw.strip().strip('"')
+        if not name:
+            continue
+        # 条目形如 file/Foo.zip 或 vanilla / mod_resources
+        names.add(name.replace("\\", "/").rsplit("/", 1)[-1].lower())
+    return names
+
+
+def is_resource_pack_enabled(pack: Path, resourcepacks_dir: Path, enabled: set[str]) -> bool:
+    """判断某个资源包目录项是否在 options.txt 的启用列表里。
+
+    匹配时忽略大小写与路径分隔符差异；用户手动删掉条目即视为不启用，
+    这样玩家随时可以在游戏里开关任何包，摆渡下次运行就会跟上。
+    """
+    return pack.name.lower() in enabled
+
+
+def _promote_disabled_packs(scan: ScanResult) -> int:
+    """把未启用包里的译文提升为"人工汉化"（--trust-disabled-packs）。
+
+    玩家主动选择推翻默认判断时使用：那些包里的译文从此抵扣缺口，
+    摆渡不会重译。返回被提升的 key 数量，便于向用户报告。
+    """
+    promoted = 0
+    for modid, data in list(scan.reference_only.items()):
+        if not data:
+            continue
+        scan.community.append(LangFile(modid, "zh_cn", "disabled-pack-promoted", dict(data)))
+        promoted += len(data)
+    scan.reference_only.clear()
+    if promoted:
+        print(f"[--trust-disabled-packs] 已把未启用资源包里的 {promoted} 条译文算作人工汉化")
+    return promoted
 
 
 @dataclass
@@ -731,6 +789,7 @@ def scan_inputs(mods_dir: Path, resourcepacks_dir: Path | None, instance: Path |
             file = LangFile(lang.parent.parent.name, match.group(1).lower(), str(lang), data)
             (result.english if file.locale == "en_us" else result.community).append(file)
     if resourcepacks_dir and resourcepacks_dir.is_dir():
+        enabled = enabled_resource_packs(instance or resourcepacks_dir.parent)
         for pack in sorted(resourcepacks_dir.iterdir()):
             try:
                 if pack.is_file() and pack.suffix.lower() in {".zip", ".jar"}:
@@ -753,10 +812,22 @@ def scan_inputs(mods_dir: Path, resourcepacks_dir: Path | None, instance: Path |
             except (zipfile.BadZipFile, OSError) as exc:
                 print(f"[跳过] 无法读取资源包 {pack}: {exc}", file=sys.stderr)
                 continue
+            # 只有真正在 options.txt 里启用的包才算「已生效的人工汉化」。
+            # 未启用的包里同样可能有汉化组的成果（玩家为了测试而临时关掉很常见），
+            # 那些译文**不属于**已生效汉化，不能拿来抵扣缺口 —— 否则摆渡会
+            # 报「缺 0 / 已补全」而玩家实际看到英文。
+            # 但它们也不该被忘掉：降级进 reference_only，喂给 AI 当术语参考，
+            # 这正是「最尊重汉化组」的正确含义。
+            # 用户可随时在 options.txt 里启用该包，或用 --trust-disabled-packs
+            # 把它们重新算作人工汉化。
+            is_enabled = enabled is None or is_resource_pack_enabled(pack, resourcepacks_dir, enabled)
             for file in files:
                 if file.locale != "zh_cn":
                     continue
-                (result.ai if file.is_ai_generated else result.community).append(file)
+                if is_enabled:
+                    (result.ai if file.is_ai_generated else result.community).append(file)
+                else:
+                    result.reference_only.setdefault(file.modid, {}).update(file.data)
             for modid, keys in load_revert_marker(pack).items():
                 if keys:
                     result.reverted.setdefault(modid, set()).update(keys)
@@ -949,7 +1020,17 @@ def fetch_community_baseline(scan: ScanResult, config: dict[str, Any], cache_dir
     return result
 
 
-def community_corpus(english: list[LangFile], community: list[LangFile]) -> dict[str, dict[str, tuple[str, str]]]:
+def community_corpus(english: list[LangFile], community: list[LangFile],
+                     reference_only: dict[str, dict[str, str]] | None = None) -> dict[str, dict[str, tuple[str, str]]]:
+    """构建「英文原文 -> 人工译文」语料，供 AI 参考。
+
+    reference_only 是"存在于 resourcepacks 目录但未启用"的包里的人工译文。
+    它们不抵扣缺口（游戏里未生效），但**必须**进入语料——
+    否则摆渡会把汉化组的心血当空气，重新用通用译法去译同一个词。
+
+    实测：boh 的"后室 / 抱脸虫 / 无眼杰克"等专名术语全部来自这些未启用的包。
+    没有它们，摆渡会把 backrooms 译成"后面的房间"。
+    """
     english_values: dict[str, dict[str, str]] = {}
     for file in english:
         english_values.setdefault(file.modid, {}).update(file.data)
@@ -959,6 +1040,13 @@ def community_corpus(english: list[LangFile], community: list[LangFile]) -> dict
             original = english_values.get(file.modid, {}).get(key)
             if original and chinese.strip():
                 corpus.setdefault(file.modid, {})[key] = (original, chinese)
+    for modid, data in (reference_only or {}).items():
+        bucket = corpus.setdefault(modid, {})
+        for key, chinese in data.items():
+            original = english_values.get(modid, {}).get(key)
+            # 已生效的人工汉化优先，不被参考语料覆盖。
+            if original and chinese.strip() and key not in bucket:
+                bucket[key] = (original, chinese)
     return corpus
 
 
@@ -1289,8 +1377,21 @@ def load_hardcoded_translations(pack: Path) -> dict[str, dict[str, str]]:
 
 def save_hardcoded_translations(pack: Path, data: dict[str, dict[str, str]]) -> None:
     path = hardcoded_translations_path(pack)
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=1) + "\n")
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """先写同目录临时文件，完整写入后再替换，避免留下半截 JSON。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def placeholder_tokens(value: str) -> list[str]:
@@ -1367,6 +1468,11 @@ def restore_and_validate(source: str, translated: str, glossary: dict[str, str],
     _, source_map = mask_all(source, glossary, keep)
     expected = list(source_map)
     if any(token not in translated for token in expected):
+        return None
+    # 同形占位符（例如两个 %s）对应的是有顺序的参数；token 被交换也必须拒收。
+    expected_placeholders = [token for token in expected if token.startswith("__MC_PH_")]
+    translated_order = re.findall(r"__MC_PH_\d+__", translated)
+    if translated_order != expected_placeholders:
         return None
     restored = translated
     for token, original in source_map.items():
@@ -1470,7 +1576,7 @@ def _system_prompt(settings: dict[str, Any]) -> str:
 
 def _parse_ai_json(content: Any) -> dict[str, str]:
     if isinstance(content, dict):
-        return {str(k): str(v) for k, v in content.items()}
+        return {str(k): v for k, v in content.items() if isinstance(v, str)}
     if not isinstance(content, str):
         raise RuntimeError("AI 返回内容不是文本")
     stripped = content.strip()
@@ -1483,7 +1589,7 @@ def _parse_ai_json(content: Any) -> dict[str, str]:
         raise RuntimeError(f"AI 返回的不是合法 JSON: {stripped[:200]}") from exc
     if not isinstance(value, dict):
         raise RuntimeError("AI 返回的不是 JSON 对象")
-    return {str(k): str(v) for k, v in value.items()}
+    return {str(k): v for k, v in value.items() if isinstance(v, str)}
 
 
 def _http_error_detail(code: int) -> str:
@@ -1668,19 +1774,27 @@ def translate_batch(engine: str, masked: dict[str, str], settings: dict[str, Any
 def _translate_batch_with_retry(engine: str, masked: dict[str, str], settings: dict[str, Any], retries: int = 2, cancel_event=None) -> dict[str, str]:
     last_exc: Exception | None = None
     for attempt in range(retries + 1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("翻译已取消")
         try:
             return translate_batch(engine, masked, settings, cancel_event)
         except RuntimeError as exc:
             last_exc = exc
             if attempt < retries:
-                time.sleep(1.5 * (attempt + 1))
+                delay = 1.5 * (attempt + 1)
+                if cancel_event is not None:
+                    if cancel_event.wait(delay):
+                        raise RuntimeError("翻译已取消") from exc
+                else:
+                    time.sleep(delay)
     assert last_exc is not None
     raise last_exc
 
 
-def write_pack(output: Path, translations: dict[str, dict[str, str]], pack_format: int | float, reverted: dict[str, set[str]] | None = None, version_unconfirmed: bool = False, patchouli: dict[str, dict[str, Any]] | None = None, sources: dict[str, dict[str, str]] | None = None) -> None:
+def _write_pack_file(output: Path, translations: dict[str, dict[str, str]], pack_format: int | float, reverted: dict[str, set[str]] | None = None, version_unconfirmed: bool = False, patchouli: dict[str, dict[str, Any]] | None = None, sources: dict[str, dict[str, str]] | None = None, yield_history: list[str] | None = None, pack_progress=None) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     clean_reverted = {modid: sorted(keys) for modid, keys in _normalize_reverted(reverted).items() if keys}
+    yield_history = yield_history or []
     number = clean_pack_format(pack_format)
     pack_meta: dict[str, Any] = {"description": "摆渡计划 · AI 临时汉化（低优先级，占位稿）"}
     if uses_min_max_format(float(pack_format)):
@@ -1693,10 +1807,24 @@ def write_pack(output: Path, translations: dict[str, dict[str, str]], pack_forma
         pack_meta["pack_format"] = number
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("pack.mcmeta", json.dumps({"pack": pack_meta}, ensure_ascii=False, indent=2))
-        zf.writestr(AI_MARKER, "摆渡计划 / ProjectFerry —— 人无语言则茫然无依，故有摆渡。\n本资源包仅补人工汉化未覆盖的 en_us key；可选模式读取人工译文作为参考语料，不覆盖已有人工译文。\n检测到人工/官方汉化时自动让位（摆渡到岸即离）。\n")
+        zf.writestr(AI_MARKER, "摆渡计划 / ProjectFerry —— 人无语言则茫然无依，故有摆渡。\n本资源包仅补人工汉化未覆盖的 en_us key；可选模式读取人工译文作为参考语料，不覆盖已有人工译文。\n检测到人工/官方汉化时自动让位（摆渡到岸即离）。\n\n"
+            + ("摆渡退场记录（这些都是摆渡主动撤回的，不是翻译失败）：\n" + "\n".join(f"  · {line}" for line in yield_history) + "\n" if yield_history else ""))
         if version_unconfirmed:
             zf.writestr("README_VERSION_UNCONFIRMED.txt", "版本未确认：pack_format 15 仅为 --yes 强制回退。请核对 Minecraft 版本，可能无法加载本资源包。\n")
+        write_total = len(translations) + len(patchouli or {})
+        write_done = 0
+
+        def emit_pack_progress(name: str) -> None:
+            # 写包进度回调：按命名空间上报，UI 显示「写入资源包 · n/N · ns」。
+            if pack_progress:
+                try:
+                    pack_progress(write_done, write_total, name)
+                except Exception as exc:
+                    LOG.warning("pack_progress callback failed: %s", type(exc).__name__)
+
         for modid, data in sorted(translations.items()):
+            emit_pack_progress(modid)
+            write_done += 1
             if pack_format <= 3:
                 if any("\n" in key or "\r" in key for key in data):
                     raise ValueError(f"{modid} 的语言 key 包含换行，无法写入旧版 .lang")
@@ -1709,6 +1837,8 @@ def write_pack(output: Path, translations: dict[str, dict[str, str]], pack_forma
             else:
                 zf.writestr(f"assets/{modid}/lang/zh_cn.json", json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         for path, data in sorted((patchouli or {}).items()):
+            emit_pack_progress(path)
+            write_done += 1
             if not PATCHOULI_RE.fullmatch(path) or "/zh_cn/" not in path.lower():
                 raise ValueError(f"Invalid Patchouli output path: {path}")
             zf.writestr(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
@@ -1719,6 +1849,19 @@ def write_pack(output: Path, translations: dict[str, dict[str, str]], pack_forma
         zf.writestr(SOURCES_MARKER, json.dumps(sources, ensure_ascii=False, indent=2) + "\n")
         if any("community" in entries.values() for entries in sources.values()):
             zf.writestr(COMMUNITY_NOTICE, "部分译文来源：CFPAOrg/Minecraft-Mod-Language-Package 社区汉化项目。原作者保留其版权；请遵守原项目许可证与署名要求。\nhttps://github.com/CFPAOrg/Minecraft-Mod-Language-Package\n")
+
+
+def write_pack(output: Path, translations: dict[str, dict[str, str]], pack_format: int | float, reverted: dict[str, set[str]] | None = None, version_unconfirmed: bool = False, patchouli: dict[str, dict[str, Any]] | None = None, sources: dict[str, dict[str, str]] | None = None, yield_history: list[str] | None = None, pack_progress=None) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=output.parent, prefix=output.name + ".", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+        _write_pack_file(temporary, translations, pack_format, reverted, version_unconfirmed, patchouli, sources, yield_history, pack_progress=pack_progress)
+        os.replace(temporary, output)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def load_pack_reverted(output: Path) -> dict[str, set[str]]:
@@ -1845,7 +1988,7 @@ def quality_issues(scan: ScanResult, pack: Path, locks_path: Path = LOCKS_FILE) 
                 issue = "译文等于原文"
             elif sorted(placeholder_tokens(source)) != sorted(placeholder_tokens(target)):
                 issue = "占位符丢失或错乱"
-            elif re.search(r"§(?![0-9a-fk-or])", target, re.IGNORECASE):
+            elif re.search(r"§(?![0-9a-fk-orx])", target, re.IGNORECASE):
                 issue = "格式码错乱"
             elif not re.search(r"[\u3400-\u9fff]", target) and len(source) > 15:
                 issue, severity = "疑似残留英文", "警告"
@@ -1959,16 +2102,86 @@ def merge_pack_translations(output: Path, new_translations: dict[str, dict[str, 
     return merged
 
 
-def yield_to_community(scan: ScanResult, pack: Path) -> bool:
+class YieldReport:
+    """一次「摆渡到岸即离」的结果记录：撤了多少条、撤了哪些、包还在不在。
+
+    定义 __bool__ 让旧的 `assertTrue(yield_to_community(...))` 断言继续成立。
+    """
+
+    def __init__(self, keys: dict[str, int] | None = None, pages: int = 0, pack_removed: bool = False):
+        self.keys: dict[str, int] = keys or {}
+        self.pages = pages
+        self.pack_removed = pack_removed
+
+    def __bool__(self) -> bool:
+        return bool(self.keys) or bool(self.pages)
+
+    @property
+    def key_count(self) -> int:
+        return sum(self.keys.values())
+
+    @property
+    def modids(self) -> list[str]:
+        return sorted(self.keys)
+
+    def merge(self, other: "YieldReport") -> "YieldReport":
+        """一次操作扫过多个实例时合并报告。"""
+        merged: dict[str, int] = dict(self.keys)
+        for modid, count in other.keys.items():
+            merged[modid] = merged.get(modid, 0) + count
+        return YieldReport(merged, self.pages + other.pages, self.pack_removed or other.pack_removed)
+
+    def summary(self) -> str:
+        """给状态栏用的一句人话，说清楚摆渡刚才撤了什么。"""
+        parts = [f"撤回自己此前生成的 {self.key_count} 条译文"]
+        if self.pages:
+            parts.append(f"含 {self.pages} 页手册")
+        detail = "、".join(parts)
+        if self.pack_removed:
+            return f"{detail}，摆渡包已空并删除"
+        if self.modids:
+            if len(self.modids) <= 3:
+                detail += f"（{'、'.join(self.modids)}）"
+            else:
+                detail += f"（{'、'.join(self.modids[:3])} 等 {len(self.modids)} 个模组）"
+        return detail
+
+
+def load_yield_history(output: Path) -> list[str]:
+    """读回摆渡包内已记录的退场历史（每次退场追加一行，最新在最后）。"""
+    try:
+        with zipfile.ZipFile(output) as zf:
+            if AI_MARKER not in zf.namelist():
+                return []
+            notice = zf.read(AI_MARKER).decode("utf-8", "replace")
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return []
+    lines: list[str] = []
+    in_section = False
+    for line in notice.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("摆渡退场记录"):
+            in_section = True
+            continue
+        if in_section:
+            if stripped.startswith("·"):
+                lines.append(stripped.lstrip("· "))
+            elif stripped:
+                in_section = False
+    return lines
+
+
+def yield_to_community(scan: ScanResult, pack: Path) -> YieldReport:
     """Remove this tool's overrides when human translations appear for the same keys."""
+    empty = YieldReport()
     if not pack.is_file():
-        return False
+        return empty
     try:
         with zipfile.ZipFile(pack) as zf:
             if AI_MARKER not in zf.namelist():
-                return False
+                return empty
     except (zipfile.BadZipFile, OSError):
-        return False
+        return empty
     translations = load_pack_translations(pack)
     original_sources = load_pack_sources(pack)
     patchouli = load_pack_patchouli(pack)
@@ -1994,11 +2207,23 @@ def yield_to_community(scan: ScanResult, pack: Path) -> bool:
             if not reverted[modid]:
                 del reverted[modid]
     if not removed and not removed_pages:
-        return False
+        return empty
+    pack_removed = False
+    report = YieldReport(
+        keys={modid: len(keys) for modid, keys in removed.items()},
+        pages=len(removed_pages),
+        pack_removed=pack_removed,
+    )
     if translations or reverted or patchouli:
-        write_pack(pack, translations, read_pack_format(pack) or 15, reverted, patchouli=patchouli, sources=original_sources)
+        # 退场历史累积：读出包里已有的记录，把这次追加进去再写回。
+        history = load_yield_history(pack)
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        history.append(f"[{stamp}] {report.summary()}")
+        write_pack(pack, translations, read_pack_format(pack) or 15, reverted, patchouli=patchouli, sources=original_sources, yield_history=history[-20:])
     else:
         pack.unlink()
+        pack_removed = True
+        report.pack_removed = True
     for file in scan.ai:
         if file.path.startswith(f"{pack}!"):
             for key in removed.get(file.modid, set()):
@@ -2008,7 +2233,11 @@ def yield_to_community(scan: ScanResult, pack: Path) -> bool:
     for modid, keys in removed.items():
         if modid in scan.reverted:
             scan.reverted[modid].difference_update(keys)
-    return True
+    return YieldReport(
+        keys={modid: len(keys) for modid, keys in removed.items()},
+        pages=len(removed_pages),
+        pack_removed=pack_removed,
+    )
 
 
 def read_pack_format(output: Path) -> float | None:
@@ -2613,7 +2842,10 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def save_config(config: dict[str, Any], path: Path = CONFIG_FILE) -> None:
-    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        atomic_write_text(path, json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    except OSError as exc:
+        raise OSError(f"保存配置失败：{path}（{exc.strerror or type(exc).__name__}）") from exc
 
 
 def load_progress(path: Path = PROGRESS_FILE) -> dict[str, list[str]]:
@@ -2629,7 +2861,10 @@ def load_progress(path: Path = PROGRESS_FILE) -> dict[str, list[str]]:
 
 
 def save_progress(failed: dict[str, list[str]], path: Path = PROGRESS_FILE) -> None:
-    path.write_text(json.dumps({"failed": failed}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        atomic_write_text(path, json.dumps({"failed": failed}, ensure_ascii=False, indent=2) + "\n")
+    except OSError as exc:
+        raise OSError(f"保存失败记录失败：{path}（{exc.strerror or type(exc).__name__}）") from exc
 
 
 def load_user_glossary(path: Path = USER_GLOSSARY_FILE) -> dict[str, str]:
@@ -2919,7 +3154,7 @@ def format_usage(usage: dict[str, dict[str, int]]) -> str:
     return "\n".join(lines)
 
 
-def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=None, cancel_event=None, usage: dict[str, dict[str, int]] | None = None, corpus: dict[str, dict[str, tuple[str, str]]] | None = None, bypass_cache: bool = False) -> tuple[dict[str, dict[str, str]], list[str], dict[str, list[str]]]:
+def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=None, cancel_event=None, usage: dict[str, dict[str, int]] | None = None, corpus: dict[str, dict[str, tuple[str, str]]] | None = None, bypass_cache: bool = False, batch_progress=None) -> tuple[dict[str, dict[str, str]], list[str], dict[str, list[str]]]:
     cache_dir = Path(settings["cache_dir"])
     cache_dir.mkdir(parents=True, exist_ok=True)
     glossary = settings.get("glossary", {})
@@ -2932,9 +3167,25 @@ def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=N
         raise ValueError("人工汉化精加工需要 OpenAI / Anthropic / Gemini / 本地模型；请更换引擎或关闭精加工。")
     usage_lock = threading.Lock()
 
-    def process_batch(batch: list[Entry], engine_settings: dict[str, Any]) -> tuple[dict[str, dict[str, str]], list[str], dict[str, list[str]]]:
+    all_translations: dict[str, dict[str, str]] = {}
+    errors: list[str] = []
+    failed_keys: dict[str, set[str]] = {}
+    done = 0
+    assignments = assign_batches(groups, engines)
+    batch_total = len(assignments)
+
+    def emit_batch_progress(batch_index: int, modid: str, size: int, in_batch_done: int) -> None:
+        # 批内进度回调：批开始 / 每条 / 批结束各推一次，UI 线程侧再做节流。
+        if batch_progress:
+            try:
+                batch_progress(batch_index, batch_total, total, modid, min(in_batch_done, size), size)
+            except Exception as exc:
+                LOG.warning("batch_progress callback failed: %s", type(exc).__name__)
+
+    def process_batch(batch: list[Entry], engine_settings: dict[str, Any], batch_index: int = -1) -> tuple[dict[str, dict[str, str]], list[str], dict[str, list[str]]]:
         started = time.monotonic()
         modid = batch[0].modid
+        emit_batch_progress(batch_index, modid, len(batch), 0)
         keep = set(base_keep) | modid_keep_words(modid)
         refining = bool(settings.get("refine_community") and (corpus or {}).get(modid))
         references = reference_examples(batch, (corpus or {})[modid]) if refining else None
@@ -2944,9 +3195,17 @@ def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=N
             references, engine_settings.get("base_url", ""), hints,
         )
         cache_file = cache_dir / f"{cache_key_value}.json"
+        raw = None
         if cache_file.exists() and not bypass_cache:
-            raw = json.loads(cache_file.read_text(encoding="utf-8"))
-        else:
+            try:
+                cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                if isinstance(cached, dict):
+                    raw = cached
+                else:
+                    LOG.warning("Ignoring invalid translation cache: %s", cache_file)
+            except (OSError, ValueError, UnicodeError) as exc:
+                LOG.warning("Ignoring unreadable translation cache %s: %s", cache_file, type(exc).__name__)
+        if raw is None:
             masked = {entry.key: mask_all(entry.english, glossary, keep)[0] for entry in batch}
             try:
                 request_settings = {
@@ -2956,30 +3215,41 @@ def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=N
                     "term_hints": hints,
                 }
                 raw = _translate_batch_with_retry(engine_settings["engine"], masked, request_settings, cancel_event=cancel_event)
-            except RuntimeError as exc:
-                message = f"{modid}（{len(batch)} 条）：{exc}"
+                if not isinstance(raw, dict):
+                    raise RuntimeError("模型返回内容不是 JSON 对象")
+            except Exception as exc:
+                message = f"{modid}（{len(batch)} 条）：{redact_secrets(str(exc))}"
                 LOG.warning("batch failed: engine=%s mod=%s count=%d duration=%.2fs reason=%s", engine_settings["engine"], modid, len(batch), time.monotonic() - started, redact_secrets(str(exc)))
                 print(f"  [失败，跳过本批] {message}", file=sys.stderr)
+                emit_batch_progress(batch_index, modid, len(batch), len(batch))
                 return {}, [message], {modid: [entry.key for entry in batch]}
             if all(entry.key in raw for entry in batch):
-                cache_file.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                try:
+                    atomic_write_text(cache_file, json.dumps(raw, ensure_ascii=False, indent=2) + "\n")
+                except OSError as exc:
+                    LOG.warning("Could not save translation cache %s: %s", cache_file, type(exc).__name__)
             else:
                 print(f"  [不缓存] 结果不完整，下次重试", file=sys.stderr)
             time.sleep(engine_settings["delay"])
         batch_translations: dict[str, dict[str, str]] = {}
         batch_failed: dict[str, list[str]] = {}
-        for entry in batch:
+        for position, entry in enumerate(batch):
             value = raw.get(entry.key)
             if value is None:
                 print(f"  [保留英文] 引擎缺少 key: {entry.modid}:{entry.key}", file=sys.stderr)
                 batch_failed.setdefault(entry.modid, []).append(entry.key)
             else:
-                valid = restore_and_validate(entry.english, value, glossary, keep)
+                try:
+                    valid = restore_and_validate(entry.english, value, glossary, keep) if isinstance(value, str) else None
+                except (TypeError, ValueError, AttributeError) as exc:
+                    LOG.warning("Invalid translation value for %s:%s: %s", entry.modid, entry.key, type(exc).__name__)
+                    valid = None
                 if valid is None:
                     print(f"  [保留英文] 占位符校验失败: {entry.modid}:{entry.key}", file=sys.stderr)
                     batch_failed.setdefault(entry.modid, []).append(entry.key)
                 else:
                     batch_translations.setdefault(entry.modid, {})[entry.key] = valid
+            emit_batch_progress(batch_index, modid, len(batch), position + 1)
         if usage is not None:
             count = sum(len(data) for data in batch_translations.values())
             if count:
@@ -2992,11 +3262,6 @@ def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=N
         LOG.info("batch completed: engine=%s mod=%s count=%d translated=%d duration=%.2fs", engine_settings["engine"], modid, len(batch), sum(map(len, batch_translations.values())), time.monotonic() - started)
         return batch_translations, [], batch_failed
 
-    all_translations: dict[str, dict[str, str]] = {}
-    errors: list[str] = []
-    failed_keys: dict[str, set[str]] = {}
-    done = 0
-
     def merge(batch_translations: dict[str, dict[str, str]], batch_errors: list[str], batch_failed: dict[str, list[str]]) -> None:
         for modid, data in batch_translations.items():
             all_translations.setdefault(modid, {}).update(data)
@@ -3004,22 +3269,30 @@ def translate_entries(entries: list[Entry], settings: dict[str, Any], progress=N
         for modid, keys in batch_failed.items():
             failed_keys.setdefault(modid, set()).update(keys)
 
-    assignments = assign_batches(groups, engines)
+    def safe_process_batch(batch: list[Entry], engine_settings: dict[str, Any], batch_index: int = -1):
+        try:
+            return process_batch(batch, engine_settings, batch_index)
+        except Exception as exc:
+            message = f"{batch[0].modid}（{len(batch)} 条）：{type(exc).__name__}"
+            LOG.warning("Unexpected batch failure: %s", message)
+            emit_batch_progress(batch_index, batch[0].modid, len(batch), len(batch))
+            return {}, [message], {batch[0].modid: [entry.key for entry in batch]}
+
     if concurrency <= 1:
-        for batch, engine_settings in assignments:
+        for batch_index, (batch, engine_settings) in enumerate(assignments):
             if cancel_event is not None and cancel_event.is_set():
                 break
-            merge(*process_batch(batch, engine_settings))
+            merge(*safe_process_batch(batch, engine_settings, batch_index))
             done += len(batch)
             if progress:
                 progress(done, total, batch[0].modid)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
             futures: dict[concurrent.futures.Future, list[Entry]] = {}
-            for batch, engine_settings in assignments:
+            for batch_index, (batch, engine_settings) in enumerate(assignments):
                 if cancel_event is not None and cancel_event.is_set():
                     break
-                futures[executor.submit(process_batch, batch, engine_settings)] = batch
+                futures[executor.submit(safe_process_batch, batch, engine_settings, batch_index)] = batch
             for future in concurrent.futures.as_completed(futures):
                 batch = futures[future]
                 merge(*future.result())
@@ -3146,9 +3419,21 @@ def command_translate(args: argparse.Namespace) -> int:
     if settings["engine"] in ENGINES_WITH_KEY and not settings["api_key"]:
         print(f"{settings['engine']} 引擎需要 API key：请在 ferry_config.json 配置对应字段，或用 --api-key 传入。", file=sys.stderr)
         return 2
-    scan = scan_inputs(mods, resourcepacks)
+    # 传入 instance 是必需的：scan_inputs 需要读 options.txt 判断哪些资源包
+    # 真正启用。未启用包里的译文不抵扣缺口（否则会误报"已补全"而玩家看到英文），
+    # 但会进 reference_only 当术语语料。
+    # --trust-disabled-packs 让玩家手动推翻这一判断：把未启用的包也算人工汉化。
+    scan = scan_inputs(mods, resourcepacks, instance)
+    if getattr(args, "trust_disabled_packs", None):
+        _promote_disabled_packs(scan)
+    if getattr(args, "ignore_disabled_packs", None):
+        scan.reference_only.clear()
     if migrate_legacy_pack(Path(settings["output_dir"]) / settings["pack_name"], settings["pack_format"]):
-        scan = scan_inputs(mods, resourcepacks)
+        scan = scan_inputs(mods, resourcepacks, instance)
+        if getattr(args, "trust_disabled_packs", None):
+            _promote_disabled_packs(scan)
+        if getattr(args, "ignore_disabled_packs", None):
+            scan.reference_only.clear()
     yield_to_community(scan, Path(settings["output_dir"]) / settings["pack_name"])
     requested = only_modids_from_args(args)
     eligible = {file.modid for file in scan.english if (not requested or file.modid.lower().replace("-", "_") in requested) and file.modid not in load_uninstalled_ai(Path(settings["output_dir"]) / settings["pack_name"])}
@@ -3164,7 +3449,7 @@ def command_translate(args: argparse.Namespace) -> int:
         print("没有需要翻译的 key（可能已由人工汉化覆盖、AI 汉化已卸载，或没有缺失）。不生成资源包。")
         return 0
     usage: dict[str, dict[str, int]] = {}
-    all_translations, errors, failed = translate_entries(entries, settings, usage=usage, corpus=community_corpus(scan.english, scan.community + baseline_files) if settings["refine_community"] else None) if entries else ({}, [], {})
+    all_translations, errors, failed = translate_entries(entries, settings, usage=usage, corpus=community_corpus(scan.english, scan.community + baseline_files, scan.reference_only) if settings["refine_community"] else None) if entries else ({}, [], {})
     update_progress(all_translations, failed)
     usage_text = format_usage(usage)
     if usage_text:
@@ -3270,6 +3555,20 @@ def build_parser() -> argparse.ArgumentParser:
     translate.add_argument("--yes", action="store_true", help="版本无法识别时强制按 pack_format 15 生成，并在包内标记版本未确认")
     translate.add_argument("--fill-community", action="store_true", default=None, help="检测到人工汉化时仍用 AI 补缺失 key")
     translate.add_argument("--refine-community", action="store_true", default=None, help="用人工汉化作参考语料，仅补缺失 key，不覆盖已有译文（需支持上下文的模型）")
+    translate.add_argument(
+        "--trust-disabled-packs",
+        action="store_true",
+        default=None,
+        help="把『在 resourcepacks 目录里但未在 options.txt 中启用』的资源包"
+             "也算作人工汉化（抵扣缺口）。默认不启用：未启用的包在游戏里并不生效，"
+             "抵扣会让摆渡误报『已补全』而玩家看到英文。",
+    )
+    translate.add_argument(
+        "--ignore-disabled-packs",
+        action="store_true",
+        default=None,
+        help="彻底忽略未启用的资源包，连术语语料也不参考。",
+    )
     translate.set_defaults(func=command_translate)
     return parser
 

@@ -1,0 +1,63 @@
+/*
+ * 最小化 init script —— 只修 EnvironmentChecks 硬编码自检，不碰任何仓库。
+ *
+ * 用途：判定 ForgeGradle 依赖解析失败到底是"网络/镜像问题"还是"我们改仓库改坏了"。
+ * 用法：gradle build -I gradle/minimal.init.gradle
+ *
+ * 背景：UserDevPlugin.apply() 里 EnvironmentChecks.checkEnvironment() 会硬编码对
+ *   https://maven.minecraftforge.net/ 和 https://libraries.minecraft.net/
+ * 发 HEAD，走 HttpsURLConnection（默认无超时），不经过 Gradle 仓库体系。
+ * 这是"改仓库地址完全无效"的真正原因（5 分钟零输出、CPU 只烧 20 秒的元凶）。
+ * 开关由 ENABLE_CERTIFICATE_CHECK 控制。
+ *
+ * 此外不设任何镜像、不改仓库顺序 —— 标准 MDK 工程该是什么样就什么样。
+ */
+gradle.projectsLoaded {
+    System.setProperty('net.minecraftforge.gradle.check.certs', 'false')
+    System.setProperty('sun.net.client.defaultConnectTimeout', '15000')
+    System.setProperty('sun.net.client.defaultReadTimeout', '15000')
+}
+
+gradle.settingsEvaluated {
+    System.setProperty('net.minecraftforge.gradle.check.certs', 'false')
+}
+
+gradle.beforeProject {
+    System.setProperty('net.minecraftforge.gradle.check.certs', 'false')
+}
+
+// ───────────────────────────────────────────────────────────────
+// 只做一件事：把本地预置仓库加到最前面。
+//
+// 为什么需要：ForgeGradle 有一批写死成动态版本的工具依赖
+//（ForgeAutoRenamingTool:1.+ / binarypatcher:1.+ / Srg2Source:8.+ /
+//  JarCompatibilityChecker:0.1.+ / modlauncher:10.0.+）。
+// Gradle 默认把"某动态版本有哪些可选版本"缓存 24 小时，早期某轮解析到了
+// 不完整列表后，即使本地已补上 1.1.2 也照样解析不出来。
+//
+// 而 mirror.init.gradle 之所以不能用：它会replace/remove 仓库、打乱顺序，
+// 把ForgeGradle 自己的 artifactural 仓库体系搞坏，导致
+//   forge:1.20.1-47.3.0_mapped_official_1.20.1 解析失败。
+// 实测：不加任何仓库改动时构建能跑通（反编译产出 173 MB）。
+//
+// 所以这里只"加"，绝不"改/删/换顺序"。
+def LOCAL_M2 = 'D:/Temp/forge-prefetch/m2'
+
+gradle.allprojects { project ->
+    project.afterEvaluate {
+        if (!file(LOCAL_M2).exists()) return
+        if (project.repositories.findByName('FerryLocal') != null) return
+        def local = project.repositories.maven { r ->
+            r.name = 'FerryLocal'
+            r.url = uri(LOCAL_M2)
+            r.metadataSources {
+                mavenPom()
+                artifact()      // Forge 的 fatjar 常常没有 pom，必须开这个
+            }
+        }
+        // maven{} 总是加到末尾，这里移到最前——顺序很关键：
+        // 本地仓库在最前，动态版本才能立刻在这里解析掉，不去碰网络。
+        project.repositories.remove(local)
+        project.repositories.addFirst(local)
+    }
+}

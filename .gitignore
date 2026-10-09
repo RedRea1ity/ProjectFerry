@@ -48,6 +48,24 @@ _patch.py
 task_plan.md
 findings.md
 progress.md
+PLAN_GENERATED_BRIDGE_MOD.md
 PROMPT_opencode_UI.md
+PROMPT_opencode_bugfix.md
 _tmp_*.txt
 _tmp_*.py
+
+# bridge/：验证过 mirror.init.gradle 会破坏 ForgeGradle 的仓库体系
+#（导致 forge:..._mapped_official 解析失败），不要误提交后被复用
+bridge/gradle/mirror.init.gradle
+bridge/gradle/mirror/
+
+# 从他人 mod jar 提取的中间产物，可由 bridge/tools/gen_hardcoded_map.py 重新生成
+bridge/boh_tooltip_raw.json
+
+# 内部工作笔记 / 规格草案：只留 README，过程文档不上传仓库
+_bridge_handoff.md
+docs/BRIDGE_PLAN.md
+docs/PLAN_LEGACY_RESOURCE_PACK.md
+docs/SPEC_P0P1.md
+PROMPT_UI_translate_progress.md
+PROMPT_*.md
