@@ -67,9 +67,17 @@ public interface ComponentMixin {
      * 对原方法零侵入，也不必 {@code setReturnValue}。
      *
      * <p>{@code index = 0}：静态方法没有 {@code this}，slot 0 就是 String 参数。
+     * <p><b>方法必须是 {@code public}，别改回 private。</b>
+     *
+     * <p>Mixin 0.8.5 对 {@code interface} mixin 有硬性校验
+     * （{@code MixinPreProcessorInterface.prepareMethod}）：接口里出现非 public 方法
+     * 会抛 {@code InvalidInterfaceMixinException}，并在类加载阶段就把<b>整个注入点丢弃</b>，
+     * 日志只留一条 ERROR，游戏照常启动 —— 症状是「聊天框能汉化、tooltip 完全不汉化」，
+     * 极具迷惑性。{@code ChatComponentMixin} 声明为 {@code abstract class}，不受此校验
+     * 影响，于是两个注入点变成一个活着、一个被丢掉。
      */
     @ModifyVariable(method = "a", at = @At("HEAD"), index = 0, ordinal = 0, require = 0)
-    private static String ferrybridge$translateLiteral(String text) {
+    public static String ferrybridge$translateLiteral(String text) {
         if (text == null || text.isEmpty() || FerryBridgeAccess.IN_TRANSLATION.get()) {
             return text;
         }

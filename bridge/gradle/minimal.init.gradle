@@ -43,6 +43,40 @@ gradle.beforeProject {
 // 所以这里只"加"，绝不"改/删/换顺序"。
 def LOCAL_M2 = 'D:/Temp/forge-prefetch/m2'
 
+// 关键：必须在 beforeEvaluate 注入，不能用 afterEvaluate。
+//
+// 现象（2026-10-10 实测）：compileJava 报
+//   "Cannot resolve external dependency net.minecraftforge:ForgeAutoRenamingTool:1.+
+//    because no repositories are defined"
+// 日志里同一个异常在文件最开头就出现了一次，栈是
+//   MavenArtifactDownloader._gradle ← JarExec.lambda$new$0 ← <init>
+// 说明 ForgeGradle 在**插件 apply 阶段**就触发 JarExec 去下载
+// ForgeAutoRenamingTool / binarypatcher / Srg2Source 等一批动态版本工具。
+// 而 build.gradle 里没有 repositories{} 块（MDK 靠插件自己注入），
+// 于是在它注入之前，这些下载找不到任何仓库 → 解析失败。
+//
+// afterEvaluate 太晚：那时插件已经尝试下载过了。
+// beforeEvaluate 才能保证仓库在插件 apply 前就位。
+gradle.beforeProject { project ->
+    project.repositories.maven { r ->
+        r.name = 'FerryLocal'
+        r.url = project.uri(LOCAL_M2)
+        r.metadataSources {
+            mavenPom()
+            artifact()      // Forge 的 fatjar 常常没有 pom，必须开这个
+        }
+    }
+    project.repositories.maven { r ->
+        r.name = 'BMCLAPI'
+        r.url = project.uri('https://bmclapi2.bangbang93.com/maven')
+    }
+    project.repositories.maven { r ->
+        r.name = 'MinecraftForge'
+        r.url = project.uri('https://maven.minecraftforge.net/')
+    }
+    project.repositories.mavenCentral()
+}
+
 gradle.allprojects { project ->
     project.afterEvaluate {
         if (!file(LOCAL_M2).exists()) return
@@ -52,7 +86,7 @@ gradle.allprojects { project ->
             r.url = uri(LOCAL_M2)
             r.metadataSources {
                 mavenPom()
-                artifact()      // Forge 的 fatjar 常常没有 pom，必须开这个
+                artifact()
             }
         }
         // maven{} 总是加到末尾，这里移到最前——顺序很关键：
