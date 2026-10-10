@@ -1,4 +1,6 @@
 {
   "key.categories.ferrybridge": "摆渡桥",
-  "key.ferrybridge.reload": "重载翻译映射"
+  "key.ferrybridge.reload": "重载翻译映射",
+  "key.ferrybridge.toggle_hud": "切换实时状态浮层",
+  "key.ferrybridge.toggle_inject": "切换注入开关（安全模式）"
 }

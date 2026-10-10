@@ -29,3 +29,10 @@ displayTest="IGNORE_ALL_VERSION"
 # 同一份 ferrybridge.mixins.json 会被 Fabric 版复用，这是跨加载器的关键。
 [[mixins]]
     config="ferrybridge.mixins.json"
+
+# 游戏内实时状态浮层（F9 切换 / F10 切换注入开关）。纯客户端专属，故标 clientSideOnly。
+[[mods]]
+    modId="ferrybridge"
+    parent="ferrybridge"
+    displayTest="IGNORE_ALL_VERSION"
+    clientSideOnly=true

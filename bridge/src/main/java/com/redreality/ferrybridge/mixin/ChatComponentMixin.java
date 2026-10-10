@@ -1,6 +1,7 @@
 package com.redreality.ferrybridge.mixin;
 
 import com.redreality.ferrybridge.core.FerryBridgeDiag;
+import com.redreality.ferrybridge.core.FerryBridgeLive;
 import com.redreality.ferrybridge.core.TranslationStore;
 import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.network.chat.Component;
@@ -93,6 +94,7 @@ public abstract class ChatComponentMixin {
         // 同时在这里挂开关：关掉后方法照常执行、只是不改文本，
         // 游戏保证能启动 —— 用于排查版本兼容问题时不必拿崩溃试错。
         FerryBridgeDiag.markInjectorLive("ChatComponentMixin#addMessage");
+        FerryBridgeLive.markInjectorLive("ChatComponentMixin#addMessage");
         if (!FerryBridgeDiag.isInjectionEnabled()) {
             return null;
         }
@@ -108,11 +110,16 @@ public abstract class ChatComponentMixin {
             }
             String mapped = store.lookup(plain);
             if (mapped == null || mapped.equals(plain)) {
+                // 未命中：计数上升。命中 0 而 miss 巨大，说明映射表没覆盖到实际内容，
+                // 这是排查覆盖率问题的第一手实时数据（看 HUD 即可）。
+                FerryBridgeLive.recordMiss();
                 return null;
             }
             // 保留原样式（颜色、斜体等），只换文本。
             MutableComponent result = Component.literal(mapped);
             result.setStyle(message.getStyle());
+            // 记录一次成功替换，HUD 会实时显示次数与最近命中的文本。
+            FerryBridgeLive.recordHit(plain, mapped);
             return result;
         } finally {
             FerryBridgeAccess.IN_TRANSLATION.set(Boolean.FALSE);

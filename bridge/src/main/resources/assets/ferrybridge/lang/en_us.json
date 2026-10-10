@@ -1,4 +1,6 @@
 {
   "key.categories.ferrybridge": "FerryBridge",
-  "key.ferrybridge.reload": "Reload translation mapping"
+  "key.ferrybridge.reload": "Reload translation mapping",
+  "key.ferrybridge.toggle_hud": "Toggle live status overlay",
+  "key.ferrybridge.toggle_inject": "Toggle injection (safe mode)"
 }

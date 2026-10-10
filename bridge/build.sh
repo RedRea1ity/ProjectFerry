@@ -12,6 +12,9 @@
 # 2. build.gradle 不要再手写 annotationProcessor '...mixin:processor'
 #    ——ForgeGradle 已自动注册，重复注册会让 refmap 被写两次抛 FilerException。
 # 3. compileJava 失败后重跑前要清 build/classes，否则残留 refmap 会干扰。
+# 4. 必须加 --offline：ForgeGradle 在联网状态解析 artifactural 依赖时会静默卡死
+#    （跑 10 分钟零任务输出，且根本没有 java 进程）。
+#    加 --offline 后走本地缓存，构建时间 46 秒。别去掉这个参数。
 
 set -u
 
@@ -31,7 +34,7 @@ if [ "${1:-}" = "clean" ]; then
 fi
 
 echo "[build] 开始，输出见 $LOG"
-"$GRADLE" build -I gradle/minimal.init.gradle --no-daemon --console=plain > "$LOG" 2>&1
+"$GRADLE" build -I gradle/minimal.init.gradle --offline --no-daemon --console=plain > "$LOG" 2>&1
 rc=$?
 
 echo "[build] exit=$rc"
