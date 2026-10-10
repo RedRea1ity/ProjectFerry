@@ -6,7 +6,37 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 
 /**
- * 在 {@code Component.literal(String)} 的入口做精确替换。
+ * <h2>⚠ 已停用 —— 本注入点当前无法工作，请勿放回 mixins.json</h2>
+ *
+ * <p><b>状态</b>：源码保留但<b>未在 {@code ferrybridge.mixins.json} 中启用</b>。
+ * 强行启用会让游戏 FATAL 启动失败（2026-10-10 三次实测确认）。
+ *
+ * <p><b>根因</b>：目标类 {@code Component} 是 interface，而 Mixin 0.8.5 下
+ * 向 interface 注入 {@code @ModifyVariable} 无解 —— 三条约束互相锁死：
+ *
+ * <ol>
+ *   <li>interface mixin 的方法必须 public（{@code MixinPreProcessorInterface.prepareMethod}），
+ *       违反 → 注入点被<b>静默丢弃</b>，游戏照常启动；</li>
+ *   <li>注入方法必须 private（{@code MixinApplicatorStandard.checkMethodVisibility}），
+ *       违反 → <b>FATAL</b>；与第 1 条互斥；</li>
+ *   <li>Mixin 类形态必须与目标类一致（{@code MixinInfo$SubType.validateTarget}），
+ *       违反 → <b>FATAL</b>。目标类是 interface，故Mixin 类只能是 interface。</li>
+ * </ol>
+ *
+ * Mixin 文档提到的 {@code INJECTORS_IN_INTERFACE_MIXINS} 开关在0.8.5
+ * <b>不存在</b>（{@code featureset} 包为空），那是 Fabric fork 0.8.9+ 才引入的。
+ *
+ * <p><b>下一步</b>：换目标类 —— {@code MutableComponent} 或 {@code LiteralContents}
+ * 都是具体类，上述三条约束全不适用。见 README『已知限制』。
+ *
+ * <p><b>为什么留着这份文件</b>：下面完整记录了三个方向的坑，
+ * 换目标类时这些结论可以直接复用，不必重新踩。
+ *
+ * <hr>
+ *
+ * <h2>以下为原始设计（目标类 Component 走不通，仅作设计存档）</h2>
+ *
+ * <p>在 {@code Component.literal(String)} 的入口做精确替换。
  *
  * <h2>为什么拦这里（而不是 getString / visit）</h2>
  *
@@ -49,7 +79,7 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
  * <p>若查表返回的中文恰好也在映射表键里（玩家自建包），没有守卫会死循环。
  */
 @Mixin(Component.class)
-public abstract class ComponentMixin {
+public interface ComponentMixin {
 
     /**
      * {@code Component.literal(String)}，obf = {@code a(Ljava/lang/String;)...}。

@@ -5,7 +5,22 @@
   "compatibilityLevel": "JAVA_17",
   "refmap": "ferrybridge.refmap.json",
   "client": [
-    "ComponentMixin",
     "ChatComponentMixin"
+  ],
+  "_说明_ComponentMixin为何被摘除": [
+    "ComponentMixin 已从 client 列表移除 —— 它当前是『一装就崩』的状态。",
+    "",
+    "2026-10-10 实测确认：目标类 Component 是 interface，而 Mixin 0.8.5 下",
+    "向 interface 注入 @ModifyVariable 无解。三条约束互相锁死：",
+    "  1. interface mixin 的方法必须 public   (MixinPreProcessorInterface.prepareMethod)",
+    "  2. 注入方法必须 private                  (MixinApplicatorStandard.checkMethodVisibility)",
+    "  3. Mixin 类形态必须与目标类一致         (MixinInfo$SubType.validateTarget)",
+    "1 与 2 互斥；3 又锁死了形态。",
+    "Mixin 文档提到的 INJECTORS_IN_INTERFACE_MIXINS 开关在 0.8.5 不存在",
+    "（featureset 包为空），那是 Fabric fork 0.8.9+ 才有的。",
+    "",
+    "因此保留源码但不启用：源码里的 javadoc 完整记录了三个方向的坑，",
+    "等找到可行的目标类（如 MutableComponent / LiteralContents）后再复用这些结论。",
+    "详见 ComponentMixin.java 顶部注释与 README『已知限制』章节。"
   ]
 }

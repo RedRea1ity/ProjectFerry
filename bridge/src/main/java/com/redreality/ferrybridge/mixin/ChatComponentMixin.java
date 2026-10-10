@@ -1,5 +1,6 @@
 package com.redreality.ferrybridge.mixin;
 
+import com.redreality.ferrybridge.core.FerryBridgeDiag;
 import com.redreality.ferrybridge.core.TranslationStore;
 import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.network.chat.Component;
@@ -84,6 +85,15 @@ public abstract class ChatComponentMixin {
      */
     private static Component ferrybridge$replace(Component message) {
         if (message == null || FerryBridgeAccess.IN_TRANSLATION.get()) {
+            return null;
+        }
+        // ── 可观测性 + 安全模式 ────────────────────────────────────
+        // 走到这里说明这个 @Inject 真的被应用了（而不是被 Mixin 静默丢弃）。
+        // 这是"哪些路径活着"的唯一可靠信号，诊断报告靠它统计。
+        // 同时在这里挂开关：关掉后方法照常执行、只是不改文本，
+        // 游戏保证能启动 —— 用于排查版本兼容问题时不必拿崩溃试错。
+        FerryBridgeDiag.markInjectorLive("ChatComponentMixin#addMessage");
+        if (!FerryBridgeDiag.isInjectionEnabled()) {
             return null;
         }
         TranslationStore store = TranslationStore.get();

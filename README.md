@@ -56,6 +56,29 @@
 
 自研的摆渡桥模组在 `bridge/` 目录里冻结着，作为 LiteralBridge 没覆盖到的版本和加载器的兜底，方案在 [docs/BRIDGE_PLAN.md](docs/BRIDGE_PLAN.md)。冻结不是废弃呃，万一哪天 LiteralBridge 弃坑了还得靠它顶。
 
+### 自研桥当前能做什么、不能做什么（2026-10-10 实测）
+
+| 路径 | 状态 |
+|---|---|
+| 聊天栏文本 | ✅ 能汉化 |
+| 物品tooltip / Shift 技能说明 | ❌ 未生效 |
+
+原因是 Mixin 0.8.5 下无法向 `Component` 注入——**它是 interface**，
+而 interface mixin 有三条互锁约束（方法必须 public / 注入方法必须 private /
+Mixin 类形态必须与目标类一致），前两条直接互斥。
+源码保留在 `bridge/src/main/java/.../ComponentMixin.java`，
+但**已从 `ferrybridge.mixins.json` 中移除**，强行启用会让游戏启动失败。
+下一步要换具体类目标（`MutableComponent` 或 `LiteralContents`）。
+
+**日常排查用自检模式**，游戏保证能启动、不做任何替换：
+
+- 临时：启动参数加 `-Dferrybridge.safe=true`
+- 长期：在游戏目录建 `ferrybridge.json`，内容 `{"enabled": false}`
+
+无论开关如何，桥都会在游戏目录生成 `ferrybridge-diagnostic.txt`，
+用人话写清「映射多少条 / 几个注入点活着 / 坏了该修什么」，
+不用再去翻 `latest.log` 猜 Java 堆栈。
+
 ## 默认会过滤掉的模组
 
 纯前置、库、性能优化、底层修复类的模组默认不翻，比如 Architectury、Cloth Config、GeckoLib、KuroLib、内存泄漏修复、星光、FerriteCore、Entity Culling、ModernFix 之类。翻这些纯属烧钱，翻完了玩家也看不见呃。
