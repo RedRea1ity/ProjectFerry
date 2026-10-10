@@ -75,6 +75,50 @@ gradle.beforeProject { project ->
         r.url = project.uri('https://maven.minecraftforge.net/')
     }
     project.repositories.mavenCentral()
+
+    // ───────────────────────────────────────────────────────────
+    // 把 ForgeGradle 写死的动态版本全部钉死到本地已预置的具体版本。
+    //
+    // 为什么必须做（2026-10-10 21:45 实测踩坑）：
+    // ForgeGradle 在插件 apply 阶段就 JarExec 下载一批「动态版本」工具：
+    //   ForgeAutoRenamingTool:1.+ / binarypatcher:1.+ / Srg2Source:8.+ /
+    //   JarCompatibilityChecker:0.1.+ / modlauncher:10.0.+
+    // Gradle 对动态版本「有哪些可选版本」有 24 小时缓存 TTL。TTL 一过，
+    // 离线构建就会挂：
+    //   Could not resolve all files for configuration
+    //   ':mavenDownloader_net.minecraftforge_ForgeAutoRenamingTool_1.+_all_1'
+    // 明明本地 m2 里 jar 和 pom 都在，照样解析不出来——因为它要的是
+    // 「1.+ 的可选版本列表」，而这个列表得联网拉 maven-metadata.xml。
+    //
+    // force() 直接跳过列表查询，让版本解析变成确定性的。
+    // 下面的版本号**逐一核对过本地 m2 的实际内容**，别凭印象改：
+    //   ForgeAutoRenamingTool → 1.1.2
+    //   binarypatcher          → 1.1.1
+    //   Srg2Source             → 8.2.0
+    //   JarCompatibilityChecker→ 0.1.28
+    //   modlauncher            → 10.0.9
+    project.configurations.all { cfg ->
+        cfg.resolutionStrategy.eachDependency { details ->
+            def id = details.requested
+            if (id.group == 'net.minecraftforge') {
+                if (id.name == 'ForgeAutoRenamingTool' && id.version == '1.+') {
+                    details.useVersion '1.1.2'
+                }
+                if (id.name == 'binarypatcher' && id.version == '1.+') {
+                    details.useVersion '1.1.1'
+                }
+                if (id.name == 'Srg2Source' && id.version == '8.+') {
+                    details.useVersion '8.2.0'
+                }
+            }
+            if (id.name == 'JarCompatibilityChecker' && id.version == '0.1.+') {
+                details.useVersion '0.1.28'
+            }
+            if (id.name == 'modlauncher' && id.version == '10.0.+') {
+                details.useVersion '10.0.9'
+            }
+        }
+    }
 }
 
 gradle.allprojects { project ->

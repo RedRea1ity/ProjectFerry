@@ -30,9 +30,9 @@ displayTest="IGNORE_ALL_VERSION"
 [[mixins]]
     config="ferrybridge.mixins.json"
 
-# 游戏内实时状态浮层（F9 切换 / F10 切换注入开关）。纯客户端专属，故标 clientSideOnly。
-[[mods]]
-    modId="ferrybridge"
-    parent="ferrybridge"
-    displayTest="IGNORE_ALL_VERSION"
-    clientSideOnly=true
+# 注意：**不要**为了声明「客户端专属」再加第二个 [[mods]] 块。
+# 2026-10-10 踩过：重复声明同一个 modId 会让 Forge 在扫描阶段直接报
+#     Found duplicate mods: Mod ID: 'ferrybridge'
+# 然后 Failed to find system mod: minecraft，游戏完全起不来。
+# 客户端专属是靠上面 dependencies 里的 side="CLIENT" 表达的，
+# 而 1.20.1 的 mods.toml 压根没有 clientSideOnly 这个字段。
