@@ -9,8 +9,11 @@
 # 1. 只用 minimal.init.gradle —— **不要**用 mirror.init.gradle
 #    实测改仓库顺序会把 ForgeGradle 的 artifactural 仓库体系搞坏，
 #    导致 forge:..._mapped_official 解析失败。真正需要的只有 EnvironmentChecks 开关。
-# 2. build.gradle 不要再手写 annotationProcessor '...mixin:processor'
-#    ——ForgeGradle 已自动注册，重复注册会让 refmap 被写两次抛 FilerException。
+# 2. build.gradle 里**要**手写 annotationProcessor 指向 mixin jar。
+#    （早先注释写"不要写，ForgeGradle 会自动注册"是错的，2026-10-10 已纠正。）
+#    ForgeGradle 6.0.24 并不会自动注册 Mixin AP → refmap 永不生成 →
+#    游戏里注入点静默失效（HUD 显示生效注入点 0）而日志里零 ERROR。
+#    验证：gradle showAp，看 annotationProcessorPath 里有没有 mixin-*.jar。
 # 3. compileJava 失败后重跑前要清 build/classes，否则残留 refmap 会干扰。
 # 4. 必须加 --offline：ForgeGradle 在联网状态解析 artifactural 依赖时会静默卡死
 #    （跑 10 分钟零任务输出，且根本没有 java 进程）。
