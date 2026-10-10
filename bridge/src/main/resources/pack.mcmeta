@@ -1,0 +1,6 @@
+{
+  "pack": {
+    "description": "摆渡桥 FerryBridge 的运行时资源（当前仅用于提供 lang 与映射数据）",
+    "pack_format": 15
+  }
+}

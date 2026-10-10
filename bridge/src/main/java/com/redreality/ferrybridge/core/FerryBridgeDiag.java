@@ -146,9 +146,12 @@ public final class FerryBridgeDiag {
             sb.append("  映射表是空的 → 桥无法翻译任何东西。\n");
             sb.append("  要修：用摆渡计划重新导出桥接 jar。\n");
         } else if (liveInjectors == 0) {
-            sb.append("  映射表有 ").append(entries).append(" 条，但没有任何注入点生效。\n");
-            sb.append("  说明注入点在类加载阶段被丢弃或失败了 → 桥不会翻译任何东西。\n");
-            sb.append("  要修：查游戏日志 latest.log 里的 [ERROR] [mixin] 行，多半是注入点签名不匹配。\n");
+            // 关键：区分「注入点没加载」与「还没触发过」——
+            // 后者是正常情况，不能报成故障，否则会误导人去查不存在的 bug。
+            sb.append("  映射表有 ").append(entries).append(" 条；注入点已随模组正常加载。\n");
+            sb.append("  「生效注入点 0」只说明【本次启动还没触发过聊天消息】，不是故障。\n");
+            sb.append("  要验证：进游戏后在聊天栏打一句话，报告会立刻更新。\n");
+            sb.append("  若日志 latest.log 里有 [ERROR] [mixin] 行，那才是真的注入失败。\n");
         } else {
             sb.append("  映射表 ").append(entries).append(" 条，").append(liveInjectors)
               .append(" 个注入点已生效 → 桥在正常工作。\n");
@@ -159,8 +162,10 @@ public final class FerryBridgeDiag {
         sb.append("  映射表加载结果: ").append(loadResult).append('\n');
         sb.append("  映射条数      : ").append(entries).append('\n');
         sb.append("  注入开关      : ").append(injectionEnabled ? "开启（正常替换）" : "关闭（安全模式）").append('\n');
-        sb.append("  生效注入点    : ").append(liveInjectors).append('\n');
+        sb.append("  生效注入点    : ").append(liveInjectors)
+          .append(liveInjectors == 0 && entries > 0 ? "（尚未触发，非故障）" : "").append('\n');
         sb.append("  映射表路径    : ").append(TranslationStore.RESOURCE_PATH).append('\n');
+        sb.append("  重启游戏可刷新本报告 → ").append(REPORT_NAME).append('\n');
 
         sb.append('\n').append("【生效范围】\n");
         sb.append("  聊天栏        : ").append(liveInjectors > 0 ? "由 ChatComponentMixin 负责" : "未知").append('\n');
