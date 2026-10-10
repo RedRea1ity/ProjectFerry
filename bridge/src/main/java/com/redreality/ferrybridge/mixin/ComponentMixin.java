@@ -49,7 +49,7 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
  * <p>若查表返回的中文恰好也在映射表键里（玩家自建包），没有守卫会死循环。
  */
 @Mixin(Component.class)
-public interface ComponentMixin {
+public abstract class ComponentMixin {
 
     /**
      * {@code Component.literal(String)}，obf = {@code a(Ljava/lang/String;)...}。
@@ -67,17 +67,31 @@ public interface ComponentMixin {
      * 对原方法零侵入，也不必 {@code setReturnValue}。
      *
      * <p>{@code index = 0}：静态方法没有 {@code this}，slot 0 就是 String 参数。
-     * <p><b>方法必须是 {@code public}，别改回 private。</b>
+     * <p><b>本类必须声明为 abstract class，绝不能是 interface。</b>
      *
-     * <p>Mixin 0.8.5 对 {@code interface} mixin 有硬性校验
-     * （{@code MixinPreProcessorInterface.prepareMethod}）：接口里出现非 public 方法
-     * 会抛 {@code InvalidInterfaceMixinException}，并在类加载阶段就把<b>整个注入点丢弃</b>，
-     * 日志只留一条 ERROR，游戏照常启动 —— 症状是「聊天框能汉化、tooltip 完全不汉化」，
-     * 极具迷惑性。{@code ChatComponentMixin} 声明为 {@code abstract class}，不受此校验
-     * 影响，于是两个注入点变成一个活着、一个被丢掉。
+     * <p>目标{@code Component} 确实是接口，但「Mixin 类自身是什么形态」是另一件事，
+     * 两者无关。已踩过两个方向的坑：
+     *
+     * <ol>
+     *   <li><b>{@code interface} + {@code private static}</b> ——
+     *       {@code MixinPreProcessorInterface.prepareMethod} 要求 interface mixin的
+     *       所有方法必须 public，于是抛 {@code InvalidInterfaceMixinException}
+     *       （"Interface mixin contains a non-public method"），
+     *       <b>整个注入点在类加载阶段被丢弃</b>。日志只有一条 ERROR，游戏照常启动，
+     *       症状是「聊天框能汉化、tooltip 完全不汉化」，极具迷惑性 ——
+     *       因为 {@code ChatComponentMixin} 是 {@code abstract class}，不受该校验影响。</li>
+     *   <li><b>改成 {@code public static} 硬碰</b> —— 上一条修好后立刻反向炸：
+     *       {@code MixinApplicatorStandard.checkMethodVisibility} 又要求注入方法
+     *       必须 private，抛 {@code InvalidMixinException}
+     *       （"contains non-private static method"），
+     *       这次是 <b>FATAL，游戏直接启动失败</b>。</li>
+     * </ol>
+     *
+     * <p>结论：public/private 这对互斥要求<b>只作用于 interface 形态的 mixin 类</b>。
+     * 声明为 {@code abstract class} 后两条校验都不再适用，{@code private static} 可正常注入。
      */
     @ModifyVariable(method = "a", at = @At("HEAD"), index = 0, ordinal = 0, require = 0)
-    public static String ferrybridge$translateLiteral(String text) {
+    private static String ferrybridge$translateLiteral(String text) {
         if (text == null || text.isEmpty() || FerryBridgeAccess.IN_TRANSLATION.get()) {
             return text;
         }
