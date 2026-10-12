@@ -124,7 +124,7 @@ mixin 配置 / refmap / 混淆映射那一整套。唯一覆盖缺口是别的�
 - 长期：在游戏目录建 `ferrybridge.json`，内容 `{"enabled": false}`
 
 无论开关如何，桥都会在游戏目录生成 `ferrybridge-diagnostic.txt`，
-用人话写清「映射多少条 / 几个注入点活着 / 坏了该修什么」，
+用人话写清「映射多少条 / 几条替换路径活着 / 坏了该修什么」，
 不用再去翻 `latest.log` 猜 Java 堆栈。
 
 ## 默认会过滤掉的模组
@@ -348,7 +348,7 @@ DPAPI，会退化成明文存（会写进日志提醒），因为摆渡本来就
 - **仓库不再提交 `ProjectFerry.exe`**：那个 13 MB 的二进制跟源码不同步，容易让人
   以为它就是最新版。现在唯一来源是 `.github/workflows/release.yml` —— 打 `v*` tag
   时在 CI 上构建、测过、挂到 Release；也在 workflow_dispatch 下产出构建产物用于验证。
-- **代码完成模块化**：`mc_ai_translator.py` 从 3809 行拆到 **57 行的薄壳**，实现
+- **代码完成模块化**：`mc_ai_translator.py` 从 3809 行拆到 **58 行的薄壳**，实现
   全部下沉到 `ferrycore/` 的 19 个模块（自底向上：base / models / text / secrets /
   net / config / diagnose / versions / glossary / scan / hardcoded / bridge / update /
   community / literalbridge / online / engine / packio / cli）。对外 API 一个字没变
@@ -444,10 +444,10 @@ DPAPI，会退化成明文存（会写进日志提醒），因为摆渡本来就
 python -m unittest -v test_spec_p0 test_refine
 ```
 
-- CI 在 `.github/workflows/tests.yml`，push 和 PR 时在 Python 3.11、3.12 上跑上面这些测试。目前 99 个全绿，绿的每一行都是修过之后才绿的呃。
+- CI 在 `.github/workflows/tests.yml`，push 和 PR 时在 Python 3.11、3.12 上跑上面这些测试。目前 105 个全绿，绿的每一行都是修过之后才绿的呃。
 - 桥接模组在 `bridge/`，1.20.1 Forge，`.github/workflows/bridge.yml` 会构建它；自研桥已解冻并在跑，和 LiteralBridge 供数路线并行（前者管 tooltip / 聊天，后者管 NBT 显示层）。
 - 本地构建桥（改完 Java 想自己出 jar）：`cd bridge && ./build.sh`。离线优先，缓存缺件会自动联网补一次；新机器先跑 `bash tools/prefetch-forge-deps.sh` 生成 `.forge-prefetch/m2`。产物是 `bridge/build/libs/ferrybridge-1.0.0.jar`。
-- **代码结构**见 `docs/ARCHITECTURE.md`：`mc_ai_translator.py` 是 57 行的薄壳（重新导出 `ferrycore` 的名字 + 转交 CLI），实现在 `ferrycore/` 的 19 个模块里，依赖单向分层。动代码前先读那份文档 —— 尤其「`mock.patch.object(core, "X")` 跨模块会静默失效」那一节，那是拆分时最容易踩的坑。
+- **代码结构**见 `docs/ARCHITECTURE.md`：`mc_ai_translator.py` 是 58 行的薄壳（重新导出 `ferrycore` 的名字 + 转交 CLI），实现在 `ferrycore/` 的 19 个模块里，依赖单向分层。动代码前先读那份文档 —— 尤其「`mock.patch.object(core, "X")` 跨模块会静默失效」那一节，那是拆分时最容易踩的坑。
 - 设计文档在 `docs/`：`ARCHITECTURE.md` 是代码结构与拆分路线，`PLAN_SCALE_UP.md` 是规模化路线（大批量翻译 / 去 Mixin / 多加载器 / 多版本），`TEST_DESKTOP_ONESTEP.md` 是桌面「一步到位」流程的测试清单，`TEST_COLLECT_ROUND1.md` 是游戏内采集（开发者补漏）的测试清单。
 - 自己打包 exe（**平时用不着** —— 打 tag 时 CI 会自动构建并发到 Release）：
 
