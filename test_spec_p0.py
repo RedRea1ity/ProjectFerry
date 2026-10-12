@@ -7,11 +7,21 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
+import urllib.request
+import time
 import urllib.error
 from types import SimpleNamespace
 from pathlib import Path
 
 import mc_ai_translator as core
+from ferrycore import cli as ferrycli
+from ferrycore import config as ferryconfig
+from ferrycore import literalbridge as ferryliteralbridge
+from ferrycore import online as ferryonline
+from ferrycore import packio as ferrypackio
+from ferrycore import secrets as secretbox
+from ferrycore import update as ferryupdate
+from ferrycore import versions as ferryversions
 
 
 class VersionDetectionTests(unittest.TestCase):
@@ -64,16 +74,16 @@ class VersionDetectionTests(unittest.TestCase):
                 "fetched_at": time_module.time(),
                 "formats": {"26.5": 100.0, "1.20.1": 15, "junk": "x"},
             }), encoding="utf-8")
-            with mock.patch.object(core, "_fetch_json", side_effect=AssertionError("缓存命中不该联网")):
+            with mock.patch.object(ferryversions, "_fetch_json", side_effect=AssertionError("缓存命中不该联网")):
                 self.assertEqual(core.pack_format_for_version_remote("26.5", cache_dir=cache, online=True), 100.0)
                 self.assertEqual(core.pack_format_for_version_remote("1.20.1", cache_dir=cache, online=True), 15)
 
             stale = Path(tmp) / "stale"
             stale.mkdir()
             (stale / "pack_formats.json").write_text(json.dumps({"fetched_at": 0, "formats": {"26.4": 99.0}}), encoding="utf-8")
-            with mock.patch.object(core, "_fetch_json", side_effect=OSError("offline")):
+            with mock.patch.object(ferryversions, "_fetch_json", side_effect=OSError("offline")):
                 self.assertEqual(core.pack_format_for_version_remote("26.4", cache_dir=stale), 99.0)
-            with mock.patch.object(core, "_fetch_json", return_value={"formats": {"26.4": 100.5, "bad": "oops"}}):
+            with mock.patch.object(ferryversions, "_fetch_json", return_value={"formats": {"26.4": 100.5, "bad": "oops"}}):
                 self.assertEqual(core.pack_format_for_version_remote("26.4", cache_dir=stale), 100.5)
                 saved = json.loads((stale / "pack_formats.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved["formats"], {"26.4": 100.5})
@@ -91,11 +101,11 @@ class VersionDetectionTests(unittest.TestCase):
                 return instance
 
             old_instance = make_instance("old", "1.20.1")
-            with mock.patch.object(core, "_fetch_json", side_effect=AssertionError("表内版本不该联网")):
+            with mock.patch.object(ferryversions, "_fetch_json", side_effect=AssertionError("表内版本不该联网")):
                 self.assertEqual(core.detect_pack_format(old_instance, cache_dir=Path(tmp), online=True), 15)
 
             new_instance = make_instance("new", "26.4")
-            with mock.patch.object(core, "_fetch_json", return_value={"formats": {"26.4": 100.5}}):
+            with mock.patch.object(ferryversions, "_fetch_json", return_value={"formats": {"26.4": 100.5}}):
                 self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c1", online=True), 100.5)
             self.assertEqual(core.detect_pack_format(new_instance, cache_dir=Path(tmp) / "c2", online=False), 99.0)
 
@@ -192,17 +202,156 @@ class VersionDetectionTests(unittest.TestCase):
             mapping = core.build_bridge_mapping(scan.english, [], {}, hardcoded=pairs)
             self.assertEqual(mapping, {text: "译" for text in strings})
 
+    def test_pending_hardcoded_modids_counts_only_untranslated(self):
+        """状态列的「已完成 vs ⚠ 待翻N」靠它：全翻完的 modid 不该再出现。"""
+        def class_with(text: str) -> bytes:
+            raw = text.encode("utf-8")
+            magic = bytes((0xCA, 0xFE, 0xBA, 0xBE))
+            return (magic + (0).to_bytes(2, "big") + (61).to_bytes(2, "big")
+                    + (2).to_bytes(2, "big") + bytes((1,)) + len(raw).to_bytes(2, "big") + raw)
+        strings = [
+            "You hear a distant whisper from the ancient ruins at midnight",
+            "The forgotten king guards the silent treasury of dust and sorrow",
+            "A letter from the front line describes the winter campaign",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            with zipfile.ZipFile(mods / "tacz-1.20.1.jar", "w") as zf:
+                zf.writestr("assets/tacz/lang/en_us.json", json.dumps({"item.x": "Hello world"}))
+                for index, text in enumerate(strings):
+                    zf.writestr(f"com/example/C{index}.class", class_with(text))
+            findings = core.detect_hardcoded_texts(mods, threshold=2)
+            scan = core.scan_inputs(mods, None)
+            self.assertEqual([(name, count) for name, count, _ in findings], [("tacz-1.20.1.jar", 3)])
+
+            self.assertEqual(core.pending_hardcoded_modids(findings, scan), {"tacz": 3}, "一条没翻 = 全待翻")
+            self.assertEqual(core.pending_hardcoded_modids(findings, scan, {"tacz": {text: "译" for text in strings}}), {}, "全翻完 = 不再挂 ⚠")
+            self.assertEqual(core.pending_hardcoded_modids(findings, scan, {"tacz": {strings[0]: "译"}}), {"tacz": 2}, "报的是剩余条数")
+            self.assertEqual(core.pending_hardcoded_modids([], scan), {}, "没检出硬编码 = 没有待翻")
+
+    def test_collected_file_to_ferrybridge_external(self):
+        """游戏采集清单 → Entry → 摆渡桥外部映射表（这是「大批量翻译」的接线）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = Path(tmp)
+            collected = instance / core.COLLECTED_NAME
+            collected.write_text(
+                "摆渡桥 FerryBridge · 未命中文本采集\n"
+                "更新时间: 2026-10-12T09:00:00\n"
+                "\n"
+                "【这是什么】\n"
+                "  游戏里出现过、但当前映射表没有对应译文的英文。\n"
+                "\n"
+                "===== 聊天栏（2 条）=====\n"
+                "A favorite of killers\n"
+                "watching you\n"
+                "\n"
+                "===== 物品 tooltip（2 条）=====\n"
+                "Cooldown:\n"
+                "A favorite of killers\n",
+                encoding="utf-8",
+            )
+            buckets = core.parse_collected_file(collected)
+            self.assertEqual(sorted(buckets), ["物品 tooltip", "聊天栏"])
+            self.assertEqual(buckets["聊天栏"], ["A favorite of killers", "watching you"])
+
+            entries = core.collected_entries(buckets)
+            # 「A favorite of killers」两个桶都有 → 去重后只应产生一条 Entry
+            self.assertEqual(len(entries), 3)
+            self.assertTrue(all(entry.modid == core.COLLECTED_MODID for entry in entries))
+            self.assertEqual(
+                {entry.english for entry in entries},
+                {"A favorite of killers", "watching you", "Cooldown:"},
+            )
+
+            target = core.write_ferrybridge_external(instance, {"Cooldown:": "冷却时间："})
+            self.assertEqual(target, instance / core.FERRYBRIDGE_EXTERNAL_NAME)
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["map"], {"Cooldown:": "冷却时间："})
+            self.assertEqual(payload["count"], 1)
+
+    def test_parse_collected_file_missing_or_empty(self):
+        """清单不存在 / 没有分组时返回空 dict，绝不抛异常。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(core.parse_collected_file(Path(tmp) / "nope.txt"), {})
+            empty = Path(tmp) / core.COLLECTED_NAME
+            empty.write_text("摆渡桥 FerryBridge · 未命中文本采集\n更新时间: now\n", encoding="utf-8")
+            self.assertEqual(core.parse_collected_file(empty), {})
+
+    def test_parse_collected_file_bom_and_crlf(self):
+        """Windows 记事本会加 BOM、写 CRLF：两种都要能吃下。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / core.COLLECTED_NAME
+            path.write_bytes("===== 聊天栏（1 条）=====\r\nHello there\r\n".encode("utf-8-sig"))
+            self.assertEqual(core.parse_collected_file(path), {"聊天栏": ["Hello there"]})
+
+    def test_hardcoded_text_keeps_long_sentence_with_log_keyword(self):
+        """长句即便含日志关键词也必须保留。
+
+        实测：The God 右键生命卷轴的那句长聊天文本含 "already"，被日志关键词整句误杀，
+        导致纯桌面静态扫描漏掉它，只能靠游戏内采集补回来。
+        """
+        sentence = (
+            "He's watching you, he knows everything you do, behave yourself and he'll be nice to you. "
+            "But maybe it's just a mistake? Maybe it's not God at all, no one knows. "
+            "You came into this world to stop God, but will you? He's already angry."
+        )
+        self.assertTrue(core.looks_like_hardcoded_text(sentence))
+        # 短串仍受日志关键词过滤保护
+        self.assertFalse(core.looks_like_hardcoded_text("config already loaded"))
+
+    def test_default_config_auto_export_bridge_on(self):
+        """「译完自动导出桥映射」默认开启 —— 这是「扫描→翻译→一步到位」的最后一环。
+
+        GUI 勾选框读的就是这个默认值，删掉 key 会 KeyError。
+        """
+        self.assertIs(core.DEFAULT_CONFIG["auto_export_bridge"], True)
+
+    def test_default_config_auto_update_literalbridge_on(self):
+        """「自动升级 LiteralBridge」默认开启 —— 已装 LiteralBridge 的实例才会走到这条线。"""
+        self.assertIs(core.DEFAULT_CONFIG["auto_update_literalbridge"], True)
+
+    def test_hardcoded_text_rejects_commands_regardless_of_length(self):
+        """命令串不是显示文本，无论多长都要剔除；说明文字里的 summon 不能误伤。"""
+        for command in (
+            "/execute as @e[type=boh:rat,limit=1,distance=0..2] run spreadplayers ~ ~ 3 3 false @e[type=boh:ratazana]",
+            "spreadplayers ~ ~ 1 4 under 4 true @e[type=boh:Taperecorderbaldi,limit=1,distance=0..3]",
+            "effect give @s kurolib:paranoia 3 0 false",
+            "kick @a You don't deserve to live in this world",
+            "weather rain",
+        ):
+            self.assertFalse(core.looks_like_hardcoded_text(command), command)
+        # 含命令动词、但其实是给人看的说明文本 → 必须保留
+        self.assertTrue(core.looks_like_hardcoded_text("- Used to summon the Specimen 9 bossfight."))
+
+    def test_ferrybridge_external_write_merges_existing(self):
+        """「导出桥接映射」与「导入游戏采集」写的是同一个文件：必须合并，不能互相覆盖。
+
+        历史 bug：两者都是整表覆盖，后点的会把先点的那批全部抹掉。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = Path(tmp)
+            core.write_ferrybridge_external(instance, {"A": "甲", "B": "乙"})
+            core.write_ferrybridge_external(instance, {"B": "乙改", "C": "丙"})
+            self.assertEqual(
+                core.load_ferrybridge_external(instance),
+                {"A": "甲", "B": "乙改", "C": "丙"},
+                "旧条目应保留、同 key 应被新译覆盖、新条目应追加",
+            )
+            core.write_ferrybridge_external(instance, {"Z": "贼"}, merge=False)
+            self.assertEqual(core.load_ferrybridge_external(instance), {"Z": "贼"})
+
     def test_latest_github_release_compares_versions(self):
         import unittest.mock as mock
         release = {"tag_name": "v1.6.0", "body": "更新说明", "html_url": "https://example.com/r",
                    "assets": [{"name": "ProjectFerry.exe", "browser_download_url": "https://example.com/exe", "size": 1024}]}
-        with mock.patch.object(core, "_fetch_json", return_value=release):
+        with mock.patch.object(ferryupdate, "_fetch_json", return_value=release):
             info = core.latest_github_release("1.5.0")
             self.assertEqual(info["version"], "1.6.0")
             self.assertEqual(info["asset_url"], "https://example.com/exe")
             self.assertIsNone(core.latest_github_release("1.6.0"), "相同版本不提示")
             self.assertIsNone(core.latest_github_release("1.7.0"), "本地更新不提示")
-        with mock.patch.object(core, "_fetch_json", side_effect=OSError("offline")):
+        with mock.patch.object(ferryupdate, "_fetch_json", side_effect=OSError("offline")):
             self.assertIsNone(core.latest_github_release("1.5.0"))
 
     def test_check_online_translation_statuses(self):
@@ -230,19 +379,19 @@ class VersionDetectionTests(unittest.TestCase):
         ]
         for body, code, expected in cases:
             if code == 200:
-                with mock.patch.object(core.urllib.request, "urlopen", return_value=FakeResponse(body)):
+                with mock.patch.object(urllib.request, "urlopen", return_value=FakeResponse(body)):
                     self.assertEqual(core.check_online_translation(site, "demo")[0], expected)
             else:
-                with mock.patch.object(core.urllib.request, "urlopen", side_effect=lambda *a, **k: fake_urlopen_error(code)):
+                with mock.patch.object(urllib.request, "urlopen", side_effect=lambda *a, **k: fake_urlopen_error(code)):
                     self.assertEqual(core.check_online_translation(site, "demo")[0], expected)
-        with mock.patch.object(core.urllib.request, "urlopen", side_effect=lambda *a, **k: fake_urlopen_error(500)):
+        with mock.patch.object(urllib.request, "urlopen", side_effect=lambda *a, **k: fake_urlopen_error(500)):
             self.assertEqual(core.check_online_translation(site, "demo")[0], "error")
 
     def test_query_online_translations_fans_out(self):
         import unittest.mock as mock
         def fake_check(site, modid, timeout=6.0):
             return ("found", site.replace("{modid}", modid)) if modid == "jei" else ("miss", site)
-        with mock.patch.object(core, "check_online_translation", side_effect=fake_check):
+        with mock.patch.object(ferryonline, "check_online_translation", side_effect=fake_check):
             results = core.query_online_translations(["a/{modid}", "b/{modid}"], ["jei", "nope"])
         # 无整合包时也包含内置 CFPA 源（2 条 miss）+ 2 源 x 2 模组模板
         self.assertEqual(len(results), 6)
@@ -265,7 +414,7 @@ class VersionDetectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "new.exe"
             marks = []
-            with mock.patch.object(core.urllib.request, "urlopen", return_value=FakeResponse()):
+            with mock.patch.object(urllib.request, "urlopen", return_value=FakeResponse()):
                 core.download_release_asset("https://example.com/exe", dest, progress=lambda d, t: marks.append((d, t)))
             self.assertEqual(dest.read_bytes(), b"1234567890")
             self.assertEqual(marks[-1], (10, 10))
@@ -345,13 +494,16 @@ class VersionDetectionTests(unittest.TestCase):
                 delay=None, concurrency=None, pack_format=None, pack_name=None, output_dir=None,
                 fill_community=None, refine_community=None, include_modid=None, only_modid=None, yes=True)
             config = {**core.DEFAULT_CONFIG, "community_enabled": False, "cache_dir": str(instance / "cache")}
-            with patch.object(core, "load_config", return_value=config):
+            # 注意 patch 目标是 ferrycli（调用者所在的模块），不是薄壳 core：
+            # core.command_translate 内部用的是 ferrycore.cli 里 import 进来的名字，
+            # patch 薄壳不会影响它 —— 那样会真的去读本机 ferry_config.json、真的打网络。
+            with patch.object(ferrycli, "load_config", return_value=config):
                 args.yes = False
                 with self.assertRaisesRegex(ValueError, "未检测到游戏版本"):
                     core.command_translate(args)
                 self.assertFalse((instance / "resourcepacks" / core.DEFAULT_CONFIG["pack_name"]).exists())
                 args.yes = True
-            with patch.object(core, "load_config", return_value=config), patch.object(core, "translate_entries", return_value=({"demo": {"key": "你好"}}, [], {})), patch.object(core, "update_progress"):
+            with patch.object(ferrycli, "load_config", return_value=config), patch.object(ferrycli, "translate_entries", return_value=({"demo": {"key": "你好"}}, [], {})), patch.object(ferrycli, "update_progress"):
                 self.assertEqual(core.command_translate(args), 0)
             pack = instance / "resourcepacks" / core.DEFAULT_CONFIG["pack_name"]
             with zipfile.ZipFile(pack) as zf:
@@ -540,7 +692,7 @@ class CommunityBaselineTests(unittest.TestCase):
             pack_cache = Path(tmp) / "CFPA_Modpack.zip"
             with zipfile.ZipFile(pack_cache, "w") as zf:
                 zf.writestr("assets/demo/lang/zh_cn.json", json.dumps({"a": "不同苹果", "b": "梨"}, ensure_ascii=False))
-            with patch.object(core.urllib.request, "urlopen", side_effect=AssertionError("基线读取不该联网")):
+            with patch.object(urllib.request, "urlopen", side_effect=AssertionError("基线读取不该联网")):
                 baseline = core.fetch_community_baseline(scan, core.DEFAULT_CONFIG, instance)
             self.assertEqual(baseline, {"demo": {"b": "梨"}})
             self.assertEqual(len(core.missing_entries(scan.english, scan.community + [core.LangFile("demo", "zh_cn", "community", baseline["demo"])], [], fill_community=True)), 1)
@@ -562,7 +714,7 @@ class CommunityBaselineTests(unittest.TestCase):
     def test_missing_pack_does_not_interrupt_translation(self):
         with tempfile.TemporaryDirectory() as tmp:
             scan = core.ScanResult(english=[core.LangFile("demo", "en_us", "jar", {"a": "Apple"})])
-            with patch.object(core.urllib.request, "urlopen", side_effect=AssertionError("无整合包时不该联网")):
+            with patch.object(urllib.request, "urlopen", side_effect=AssertionError("无整合包时不该联网")):
                 self.assertEqual(core.fetch_community_baseline(scan, core.DEFAULT_CONFIG, Path(tmp)), {})
             self.assertEqual(len(core.missing_entries(scan.english, scan.community, scan.ai)), 1)
 
@@ -618,7 +770,7 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(core.load_pack_translations(pack), {"demo": {"human": "社区译文"}})
             self.assertEqual(core.load_pack_sources(pack)["demo"]["human"], "community")
             core.lock_translation("demo", "human", "锁定译文", locks)
-            with patch.object(core, "load_locks", return_value=core.load_locks(locks)):
+            with patch.object(ferrypackio, "load_locks", return_value=core.load_locks(locks)):
                 merged = core.merge_pack_translations(pack, {"demo": {"human": "新 AI"}}, [core.LangFile("demo", "zh_cn", "external", {"human": "外部人工"})])
             self.assertEqual(merged["demo"]["human"], "锁定译文")
 
@@ -632,7 +784,7 @@ class QualityTests(unittest.TestCase):
                 "concurrency": 2, "glossary": {}, "keep": set(), "pack_format": 15,
                 "engines": [{"engine": "openai", "model": "pooled", "weight": 1}],
             }
-            with patch.object(core, "translate_entries", return_value=({"demo": {"key": "新译文"}}, [], {})) as translate:
+            with patch.object(ferrypackio, "translate_entries", return_value=({"demo": {"key": "新译文"}}, [], {})) as translate:
                 count, errors = core.retranslate_pack_keys(scan, pack, {"demo": {"key"}}, settings)
             self.assertEqual((count, errors), (1, []))
             self.assertTrue(translate.call_args.kwargs["bypass_cache"])
@@ -655,13 +807,13 @@ class QualityTests(unittest.TestCase):
             config.write_text(json.dumps({"openai_api_key": "sk-test-placeholder"}), encoding="utf-8")
             self.assertIsNone(core.config_secret_risk(config))
             (project / ".git").mkdir()
-            with patch.object(core, "is_git_ignored", return_value=False):
+            with patch.object(ferryconfig, "is_git_ignored", return_value=False):
                 warning = core.config_secret_risk(config)
             self.assertIn("泄漏", warning or "")
-            with patch.object(core, "is_git_ignored", return_value=True):
+            with patch.object(ferryconfig, "is_git_ignored", return_value=True):
                 self.assertIsNone(core.config_secret_risk(config))
             config.write_text(json.dumps({"openai_api_key": ""}), encoding="utf-8")
-            with patch.object(core, "is_git_ignored", return_value=False):
+            with patch.object(ferryconfig, "is_git_ignored", return_value=False):
                 self.assertIsNone(core.config_secret_risk(config))
 
     def test_public_config_redacts_nested_api_keys(self):
@@ -669,6 +821,405 @@ class QualityTests(unittest.TestCase):
         shown = core.public_config({"openai_api_key": secret, "model_pool": [{"api_key": secret}]})
         self.assertEqual(shown["openai_api_key"], "sk-***")
         self.assertEqual(shown["model_pool"][0]["api_key"], "sk-***")
+
+
+class ApiKeyProtectionTests(unittest.TestCase):
+    """API Key 落盘保护：Windows 用 DPAPI 加密，其它平台原样存（不假装安全）。
+
+    CI 跑在 ubuntu，DPAPI 不可用 → 涉及密文的用例自动跳过；
+    与平台无关的用例（不改入参、往返不丢值）两边都要过。
+    """
+
+    CONFIG = {
+        "engine": "openai",
+        "openai_api_key": "sk-top-secret-value",
+        "anthropic_api_key": "",
+        "model_pool": [{"api_key": "sk-pool-secret", "model": "x"}],
+        "custom_profiles": {"p": {"provider": "openai", "api_key": "sk-profile-secret"}},
+        "mymemory_email": "me@example.com",
+        "glossary": {"a": "b"},
+    }
+
+    def test_secret_field_detection(self):
+        self.assertTrue(secretbox.is_secret_field("openai_api_key"))
+        self.assertTrue(secretbox.is_secret_field("api_key"))
+        self.assertTrue(secretbox.is_secret_field("API_KEY"))
+        self.assertFalse(secretbox.is_secret_field("mymemory_email"))
+        self.assertFalse(secretbox.is_secret_field("openai_model"))
+
+    def test_protect_config_does_not_mutate_input(self):
+        original = json.loads(json.dumps(self.CONFIG))
+        secretbox.protect_config(self.CONFIG)
+        self.assertEqual(self.CONFIG, original)
+        secretbox.unprotect_config(self.CONFIG)
+        self.assertEqual(self.CONFIG, original)
+
+    def test_config_roundtrip_keeps_every_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ferry_config.json"
+            core.save_config(self.CONFIG, path)
+            back = core.load_config(path)
+            self.assertEqual(back["openai_api_key"], "sk-top-secret-value")
+            self.assertEqual(back["model_pool"][0]["api_key"], "sk-pool-secret")
+            self.assertEqual(back["custom_profiles"]["p"]["api_key"], "sk-profile-secret")
+            self.assertEqual(back["anthropic_api_key"], "")
+            # 非密钥字段不该被碰
+            self.assertEqual(back["mymemory_email"], "me@example.com")
+            self.assertEqual(back["glossary"], {"a": "b"})
+            # 内存里的那份不能被替换成密文
+            self.assertEqual(self.CONFIG["openai_api_key"], "sk-top-secret-value")
+
+    @unittest.skipUnless(secretbox.available(), "仅 Windows DPAPI 可用")
+    def test_api_keys_are_not_plaintext_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ferry_config.json"
+            core.save_config(self.CONFIG, path)
+            raw = path.read_text(encoding="utf-8")
+            for secret in ("sk-top-secret-value", "sk-pool-secret", "sk-profile-secret"):
+                self.assertNotIn(secret, raw)
+            self.assertIn(secretbox.ENC_PREFIX, raw)
+
+    @unittest.skipUnless(secretbox.available(), "仅 Windows DPAPI 可用")
+    def test_encrypted_config_is_not_flagged_as_leak(self):
+        """密文即使被提交也解不开，不该再弹「密钥泄漏」把真警报淹了。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / ".git").mkdir()
+            path = project / "ferry_config.json"
+            core.save_config(self.CONFIG, path)
+            with patch.object(ferryconfig, "is_git_ignored", return_value=False):
+                self.assertIsNone(core.config_secret_risk(path))
+
+    @unittest.skipUnless(secretbox.available(), "仅 Windows DPAPI 可用")
+    def test_undecryptable_blob_degrades_to_empty(self):
+        self.assertEqual(secretbox.unprotect("dpapi:bm90LXJlYWxseS1kcGFwaQ=="), "")
+        self.assertEqual(secretbox.unprotect("dpapi:!!!not-base64!!!"), "")
+
+    @unittest.skipUnless(secretbox.available(), "仅 Windows DPAPI 可用")
+    def test_protect_is_idempotent(self):
+        once = secretbox.protect("sk-once")
+        self.assertEqual(secretbox.protect(once), once)
+        self.assertEqual(secretbox.unprotect(once), "sk-once")
+
+    @unittest.skipUnless(secretbox.available(), "仅 Windows DPAPI 可用")
+    def test_load_config_migrates_plaintext_keys_in_place(self):
+        """升级上来的老配置：第一次读取就地把明文密钥换成密文，语义不变。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ferry_config.json"
+            path.write_text(json.dumps(self.CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.assertIn("sk-top-secret-value", path.read_text(encoding="utf-8"))
+            back = core.load_config(path)
+            raw = path.read_text(encoding="utf-8")
+            for secret in ("sk-top-secret-value", "sk-pool-secret", "sk-profile-secret"):
+                self.assertNotIn(secret, raw)
+            self.assertIn(secretbox.ENC_PREFIX, raw)
+            # 迁移只改存储形态，不该改语义
+            self.assertEqual(back["openai_api_key"], "sk-top-secret-value")
+            self.assertEqual(back["model_pool"][0]["api_key"], "sk-pool-secret")
+            self.assertEqual(back["custom_profiles"]["p"]["api_key"], "sk-profile-secret")
+            self.assertEqual(back["mymemory_email"], "me@example.com")
+            self.assertEqual(back["glossary"], {"a": "b"})
+
+    def test_load_config_does_not_rewrite_secret_free_file(self):
+        """没有明文密钥时不碰文件 —— 免得每次启动都无谓写盘。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ferry_config.json"
+            path.write_text('{\n  "engine": "mymemory",\n  "openai_api_key": ""\n}\n', encoding="utf-8")
+            before = path.read_bytes()
+            core.load_config(path)
+            self.assertEqual(path.read_bytes(), before)
+
+    @unittest.skipUnless(secretbox.available(), "仅 Windows DPAPI 可用")
+    def test_migration_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ferry_config.json"
+            path.write_text(json.dumps(self.CONFIG, ensure_ascii=False), encoding="utf-8")
+            core.load_config(path)
+            once = path.read_bytes()
+            core.load_config(path)
+            self.assertEqual(path.read_bytes(), once)
+
+    def test_no_dpapi_keeps_plaintext_file_untouched(self):
+        """DPAPI 不可用（非 Windows）时绝不写盘：写不出密文就别动用户的文件。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ferry_config.json"
+            path.write_text(json.dumps({"openai_api_key": "sk-plain"}), encoding="utf-8")
+            before = path.read_bytes()
+            with patch.object(secretbox, "available", return_value=False):
+                back = core.load_config(path)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(back["openai_api_key"], "sk-plain")
+
+
+class LiteralBridgeFetchTests(unittest.TestCase):
+    """LiteralBridge 自动获取：版本区间判定、附件挑选、下载后复核。
+
+    全部离线：不碰网络，用临时 jar 造元数据。真实的 Release 查询只靠手工验证。
+    """
+
+    def test_mc_range_allows_handles_common_forge_ranges(self):
+        self.assertTrue(core.mc_range_allows("[1.20.1,1.21)", "1.20.1"))
+        self.assertTrue(core.mc_range_allows("[1.20.1,1.21)", "1.20.6"))
+        self.assertFalse(core.mc_range_allows("[1.20.1,1.21)", "1.21.10"))
+        self.assertTrue(core.mc_range_allows("[1.20.1,)", "1.21.10"))
+        self.assertFalse(core.mc_range_allows("[1.21,)", "1.20.1"))
+        self.assertTrue(core.mc_range_allows("[1.20,1.21]", "1.21.0"))
+        self.assertTrue(core.mc_range_allows("1.20.1", "1.20.1"))
+        self.assertTrue(core.mc_range_allows("*", "9.9.9"))
+        # 解析不出来的写法一律放行，不能误拒
+        self.assertTrue(core.mc_range_allows("这不是版本号", "1.20.1"))
+
+    def _make_mod_jar(self, path: Path, *, loader: str, mc_range: str, version: str = "9.9.9") -> Path:
+        entry = "META-INF/neoforge.mods.toml" if loader == "neoforge" else "META-INF/mods.toml"
+        toml = (
+            'modLoader="javafml"\n'
+            '[[mods]]\n'
+            'modId="literalbridge"\n'
+            f'version="{version}"\n'
+            '[[dependencies.literalbridge]]\n'
+            'modId="minecraft"\n'
+            f'versionRange="{mc_range}"\n'
+        )
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr(entry, toml)
+        return path
+
+    def test_read_mod_jar_info_extracts_loader_and_mc_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jar = self._make_mod_jar(Path(tmp) / "lb.jar", loader="forge", mc_range="[1.20.1,1.21)")
+            info = core.read_mod_jar_info(jar)
+            self.assertEqual(info["modid"], "literalbridge")
+            self.assertEqual(info["version"], "9.9.9")
+            self.assertEqual(info["loaders"], ["forge"])
+            self.assertEqual(info["mc_ranges"], ["[1.20.1,1.21)"])
+
+    def test_read_mod_jar_info_returns_empty_for_garbage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bogus = Path(tmp) / "not-a-jar.jar"
+            bogus.write_bytes(b"definitely not a zip")
+            self.assertEqual(core.read_mod_jar_info(bogus), {})
+
+    def test_pick_literalbridge_asset_prefers_loader_and_version_in_name(self):
+        release = {
+            "assets": [
+                {"name": "literalbridge-1.3.0.jar", "url": "u1", "size": 10},
+                {"name": "literalbridge-forge-1.20.1-1.2.0.jar", "url": "u2", "size": 10},
+                {"name": "literalbridge-1.3.0-sources.jar", "url": "u3", "size": 10},
+            ]
+        }
+        picked = core.pick_literalbridge_asset(release, "forge", "1.20.1")
+        self.assertEqual(picked["name"], "literalbridge-forge-1.20.1-1.2.0.jar")
+
+    def test_pick_literalbridge_asset_falls_back_to_generic_name(self):
+        release = {"assets": [{"name": "literalbridge-1.3.0.jar", "url": "u1", "size": 10}]}
+        picked = core.pick_literalbridge_asset(release, "forge", "1.20.1")
+        self.assertEqual(picked["name"], "literalbridge-1.3.0.jar")
+
+    def test_pick_literalbridge_asset_rejects_sources_and_javadoc(self):
+        release = {
+            "assets": [
+                {"name": "literalbridge-1.3.0-sources.jar", "url": "u1", "size": 10},
+                {"name": "literalbridge-1.3.0-javadoc.jar", "url": "u2", "size": 10},
+            ]
+        }
+        self.assertIsNone(core.pick_literalbridge_asset(release, "forge", "1.20.1"))
+
+    def test_download_literalbridge_reports_no_match_without_writing(self):
+        """不做版本复核就会往 NeoForge 实例里塞 Forge 版 jar —— 这里守住这条线。"""
+        release = {"version": "1.3.0", "page": "p", "assets": [{"name": "literalbridge-1.3.0.jar", "url": "u", "size": 1}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            with patch.object(ferryliteralbridge, "literalbridge_releases", return_value=[release]), patch.object(
+                ferryliteralbridge, "download_release_asset", side_effect=self._write_forge_jar
+            ):
+                result = core.download_literalbridge(mods, loader="neoforge", mc_version="1.21.10")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], "no_match")
+            self.assertFalse(mods.exists())
+
+    def test_download_literalbridge_installs_matching_jar(self):
+        release = {"version": "1.3.0", "page": "p", "assets": [{"name": "literalbridge-1.3.0.jar", "url": "u", "size": 1}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            with patch.object(ferryliteralbridge, "literalbridge_releases", return_value=[release]), patch.object(
+                ferryliteralbridge, "download_release_asset", side_effect=self._write_forge_jar
+            ):
+                result = core.download_literalbridge(mods, loader="forge", mc_version="1.20.1")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["version"], "1.3.0")
+            self.assertTrue((mods / "literalbridge-1.3.0.jar").is_file())
+
+    def test_download_literalbridge_falls_back_when_offline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(ferryliteralbridge, "literalbridge_releases", side_effect=OSError("no network")):
+                result = core.download_literalbridge(Path(tmp) / "mods", loader="forge", mc_version="1.20.1")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], "network")
+            self.assertEqual(result["page"], core.LITERALBRIDGE_PAGE)
+
+    def _write_forge_jar(self, url, dest, timeout=60.0, progress=None, attempts=1):
+        """冒充下载：落一个支持 forge / [1.20.1,1.21) 的假 jar。"""
+        self._make_mod_jar(Path(dest), loader="forge", mc_range="[1.20.1,1.21)")
+        return Path(dest)
+
+    # ---- 自动升级（2026-10-12 加） ----
+
+    def test_version_key_orders_numerically_not_lexically(self):
+        self.assertEqual(core.version_key("1.3.0"), (1, 3, 0))
+        self.assertGreater(core.version_key("1.10.0"), core.version_key("1.9.9"))
+        self.assertEqual(core.version_key(""), (0,))
+
+    def test_installed_literalbridge_ignores_backups_and_picks_newest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            self._make_mod_jar(mods / "literalbridge-forge-1.20.1-1.2.0.jar", loader="forge", mc_range="[1.20.1,1.21)", version="1.2.0")
+            self._make_mod_jar(mods / "literalbridge-1.3.0.jar", loader="forge", mc_range="[1.20.1,1.21)", version="1.3.0")
+            # 升级时被改名的旧版不能算「已装」，否则每一轮都会重复升级
+            self._make_mod_jar(mods / "literalbridge-9.9.9.jar.bak-20261012", loader="forge", mc_range="[1.20.1,1.21)", version="9.9.9")
+            found = core.installed_literalbridge(mods)
+            self.assertEqual(found["version"], "1.3.0")
+            self.assertTrue(found["path"].endswith("literalbridge-1.3.0.jar"))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(core.installed_literalbridge(Path(tmp) / "mods"))
+
+    def test_download_literalbridge_already_installed_does_not_touch_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            self._make_mod_jar(mods / "literalbridge-1.3.0.jar", loader="forge", mc_range="[1.20.1,1.21)", version="1.3.0")
+            with patch.object(ferryliteralbridge, "literalbridge_releases", side_effect=AssertionError("不该联网")):
+                result = core.download_literalbridge(mods, loader="forge", mc_version="1.20.1")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], "already_installed")
+            self.assertEqual(result["version"], "1.3.0")
+
+    def test_download_literalbridge_upgrade_reports_up_to_date_without_downloading(self):
+        """已是最新时不该再下整份 jar —— 否则下载一失败就被误报成网络错。"""
+        release = {"version": "1.3.0", "page": "p", "assets": [{"name": "literalbridge-1.3.0.jar", "url": "u", "size": 1}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            self._make_mod_jar(mods / "literalbridge-1.3.0.jar", loader="forge", mc_range="[1.20.1,1.21)", version="1.3.0")
+            with patch.object(ferryliteralbridge, "literalbridge_releases", return_value=[release]), patch.object(
+                ferryliteralbridge, "download_release_asset", side_effect=AssertionError("不该下载")
+            ):
+                result = core.download_literalbridge(mods, loader="forge", mc_version="1.20.1", upgrade=True)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["action"], "up_to_date")
+            self.assertEqual([p.name for p in mods.glob("*")], ["literalbridge-1.3.0.jar"])
+
+    def test_download_literalbridge_upgrade_swaps_jar_and_keeps_one_backup(self):
+        release = {"version": "1.4.0", "page": "p", "assets": [{"name": "literalbridge-1.4.0.jar", "url": "u", "size": 1}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            self._make_mod_jar(mods / "literalbridge-forge-1.20.1-1.2.0.jar", loader="forge", mc_range="[1.20.1,1.21)", version="1.2.0")
+            with patch.object(ferryliteralbridge, "literalbridge_releases", return_value=[release]), patch.object(
+                ferryliteralbridge, "download_release_asset", side_effect=self._write_forge_jar
+            ):
+                result = core.download_literalbridge(mods, loader="forge", mc_version="1.20.1", upgrade=True)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["action"], "upgraded")
+            self.assertEqual((result["from_version"], result["version"]), ("1.2.0", "1.4.0"))
+            # 关键：mods 里只许留一份 .jar —— 两份同 modId 的 jar 会直接崩游戏
+            self.assertEqual([p.name for p in mods.glob("*.jar")], ["literalbridge-1.4.0.jar"])
+            self.assertIn(".jar.bak-", result["backup"])
+            self.assertTrue(Path(result["backup"]).is_file())
+
+    def test_download_literalbridge_upgrade_picks_newest_release_not_first(self):
+        """GitHub 的返回顺序别指望 —— 按版本号排序，否则可能换成本地更旧的版本。"""
+        older = {"version": "1.1.0", "page": "p", "assets": [{"name": "literalbridge-1.1.0.jar", "url": "u", "size": 1}]}
+        newer = {"version": "1.4.0", "page": "p", "assets": [{"name": "literalbridge-1.4.0.jar", "url": "u", "size": 1}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            self._make_mod_jar(mods / "literalbridge-forge-1.20.1-1.2.0.jar", loader="forge", mc_range="[1.20.1,1.21)", version="1.2.0")
+            with patch.object(ferryliteralbridge, "literalbridge_releases", return_value=[older, newer]), patch.object(
+                ferryliteralbridge, "download_release_asset", side_effect=self._write_forge_jar
+            ):
+                result = core.download_literalbridge(mods, loader="forge", mc_version="1.20.1", upgrade=True)
+            self.assertEqual(result["version"], "1.4.0", result)
+
+    def test_download_literalbridge_refuses_upgrade_when_old_jar_cannot_be_retired(self):
+        """旧版改名失败必须放弃升级 —— 宁可没升，也不能留下两份同 modId 的 jar。"""
+        release = {"version": "1.4.0", "page": "p", "assets": [{"name": "literalbridge-1.4.0.jar", "url": "u", "size": 1}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "mods"
+            mods.mkdir()
+            old = self._make_mod_jar(mods / "literalbridge-forge-1.20.1-1.2.0.jar", loader="forge", mc_range="[1.20.1,1.21)", version="1.2.0")
+            with patch.object(ferryliteralbridge, "literalbridge_releases", return_value=[release]), patch.object(
+                ferryliteralbridge, "download_release_asset", side_effect=self._write_forge_jar
+            ), patch.object(ferryliteralbridge, "_retire_old_literalbridge", return_value=""):
+                result = core.download_literalbridge(mods, loader="forge", mc_version="1.20.1", upgrade=True)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], "backup_failed")
+            self.assertEqual([p.name for p in mods.glob("*.jar")], [old.name])
+
+    # ---- 下载重试（2026-10-12 加） ----
+
+    def test_download_release_asset_retries_transient_failures(self):
+        """实测 GitHub 附件 3 次里挂 2 次（连接被重置）—— 不重试等于这个功能不能用。"""
+        calls = {"n": 0}
+
+        class _Response:
+            def __init__(self, payload: bytes) -> None:
+                self._buffer = io.BytesIO(payload)
+                self.headers = {"Content-Length": str(len(payload))}
+
+            def read(self, size: int = -1) -> bytes:
+                return self._buffer.read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise ConnectionResetError("连接被重置")
+            return _Response(b"jar-bytes")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "lb.jar"
+            with patch.object(urllib.request, "urlopen", side_effect=fake_urlopen), patch.object(time, "sleep"):
+                core.download_release_asset("https://example.invalid/lb.jar", dest, attempts=3)
+            self.assertEqual(calls["n"], 3)
+            self.assertEqual(dest.read_bytes(), b"jar-bytes")
+
+    def test_download_release_asset_default_does_not_retry(self):
+        """默认 attempts=1 —— 其它调用点（CFPA 整合包 / 摆渡自更新）的行为不能被悄悄改掉。"""
+        calls = {"n": 0}
+
+        def fake_urlopen(request, timeout=None):
+            calls["n"] += 1
+            raise ConnectionResetError("连接被重置")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "x.jar"
+            with patch.object(urllib.request, "urlopen", side_effect=fake_urlopen), patch.object(time, "sleep"):
+                with self.assertRaises(OSError):
+                    core.download_release_asset("https://example.invalid/x.jar", dest)
+            self.assertEqual(calls["n"], 1)
+
+    def test_detect_mod_loader_votes_from_mods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = Path(tmp)
+            mods = instance / "mods"
+            mods.mkdir()
+            self._make_mod_jar(mods / "a.jar", loader="forge", mc_range="[1.20.1,1.21)")
+            self._make_mod_jar(mods / "b.jar", loader="forge", mc_range="[1.20.1,1.21)")
+            self.assertEqual(core.detect_mod_loader(instance), "forge")
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = Path(tmp)
+            mods = instance / "mods"
+            mods.mkdir()
+            self._make_mod_jar(mods / "c.jar", loader="neoforge", mc_range="[1.21,1.22)")
+            self.assertEqual(core.detect_mod_loader(instance), "neoforge")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(core.detect_mod_loader(Path(tmp)), "")
 
 
 if __name__ == "__main__":

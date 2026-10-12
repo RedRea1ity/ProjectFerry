@@ -3,6 +3,8 @@
 import json
 import io
 import tempfile
+import urllib.request
+import time
 import threading
 import unittest
 import zipfile
@@ -10,6 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import mc_ai_translator as core
+from ferrycore import engine as ferryengine
+from ferrycore import packio as ferrypackio
 
 
 class CorpusTranslationTests(unittest.TestCase):
@@ -92,7 +96,7 @@ class CorpusTranslationTests(unittest.TestCase):
                     "item.c": "梨", "item.a": "禁止覆盖苹果",
                 }, ensure_ascii=False)}}]}
 
-            with patch.object(core, "_http_post_json", side_effect=fake_post):
+            with patch.object(ferryengine, "_http_post_json", side_effect=fake_post):
                 translations, errors, failed = core.translate_entries(entries, settings, corpus=corpus)
             self.assertFalse(errors or failed)
             self.assertEqual(len(calls), 1)
@@ -180,7 +184,7 @@ class CorpusTranslationTests(unittest.TestCase):
                     raise ValueError("simulated malformed model response")
                 return {name: "译文 " + value for name, value in masked.items()}
 
-            with patch.object(core, "_translate_batch_with_retry", side_effect=fake_translate):
+            with patch.object(ferryengine, "_translate_batch_with_retry", side_effect=fake_translate):
                 translated, errors, failed = core.translate_entries(entries, settings)
             self.assertEqual(set(translated["demo"]), {"key0", "key2"})
             self.assertIn("key1", failed["demo"])
@@ -192,7 +196,7 @@ class CorpusTranslationTests(unittest.TestCase):
             pack = Path(tmp) / "ai.zip"
             core.write_pack(pack, {"demo": {"before": "旧译文"}}, 15)
             previous = pack.read_bytes()
-            with patch.object(core, "_write_pack_file", side_effect=OSError("simulated full disk")):
+            with patch.object(ferrypackio, "_write_pack_file", side_effect=OSError("simulated full disk")):
                 with self.assertRaises(OSError):
                     core.write_pack(pack, {"demo": {"after": "新译文"}}, 15)
             self.assertEqual(pack.read_bytes(), previous)
@@ -202,7 +206,7 @@ class CorpusTranslationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings = {"cache_dir": tmp, "batch_size": 2, "concurrency": 1, "glossary": {}, "keep": set(), "delay": 0,
                         "engine": "openai", "model": "test", "base_url": "https://example.test/v1"}
-            with patch.object(core, "_translate_batch_with_retry", return_value={"bad": ["not text"], "good": "你好"}):
+            with patch.object(ferryengine, "_translate_batch_with_retry", return_value={"bad": ["not text"], "good": "你好"}):
                 translated, errors, failed = core.translate_entries(entries, settings)
             self.assertEqual(translated, {"demo": {"good": "你好"}})
             self.assertEqual(failed, {"demo": ["bad"]})
@@ -215,7 +219,7 @@ class CorpusTranslationTests(unittest.TestCase):
     def test_cancelled_queued_batch_never_calls_engine(self):
         event = threading.Event()
         event.set()
-        with patch.object(core, "translate_batch") as translate:
+        with patch.object(ferryengine, "translate_batch") as translate:
             with self.assertRaisesRegex(RuntimeError, "取消"):
                 core._translate_batch_with_retry("openai", {"key": "Hello"}, {}, cancel_event=event)
             translate.assert_not_called()
@@ -241,7 +245,7 @@ class CorpusTranslationTests(unittest.TestCase):
                 self.assertIn("contextual suggestions", prompt)
                 return {"choices": [{"message": {"content": json.dumps({"key": "在金苹果附近挖红石"}, ensure_ascii=False)}}]}
 
-            with patch.object(core, "_http_post_json", side_effect=fake_post):
+            with patch.object(ferryengine, "_http_post_json", side_effect=fake_post):
                 translated, errors, failed = core.translate_entries(entries, settings)
             self.assertFalse(errors or failed)
             self.assertEqual(translated["demo"]["key"], "在金苹果附近挖红石")
@@ -338,7 +342,7 @@ class HumanPackDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             instance = Path(tmp)
             (instance / "mods").mkdir()
-            with patch.object(core.urllib.request, "urlopen", return_value=Download(self._zip_pack())):
+            with patch.object(urllib.request, "urlopen", return_value=Download(self._zip_pack())):
                 dest = core.download_human_pack("https://example.invalid/human.zip", instance, "example")
             self.assertEqual(dest, core.human_pack_destination(instance, "example"))
             scan = core.scan_inputs(instance / "mods", instance / "resourcepacks")
@@ -365,7 +369,7 @@ class HumanPackDownloadTests(unittest.TestCase):
             dest.write_bytes(self._zip_pack())
             original = dest.read_bytes()
             for invalid in (self._zip_pack("wrong"), self._zip_pack(marker=True), b"not a zip"):
-                with patch.object(core.urllib.request, "urlopen", return_value=Download(invalid)):
+                with patch.object(urllib.request, "urlopen", return_value=Download(invalid)):
                     with self.assertRaises(ValueError):
                         core.download_human_pack("https://example.invalid/human.zip", instance, "example")
                 self.assertEqual(dest.read_bytes(), original)
