@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+【2026-10-12 已停用】本脚本只为 Mixin 注解处理器生成 refmap 服务。
+摆渡桥 L1 之后已零 Mixin（两条替换路径都改走 Forge 官方事件），
+build.gradle 里的 AP / refmap / SRG 配置已整体删除，本脚本**不再参与构建**，
+保留于此仅作踩坑记录。详见 docs/PLAN_SCALE_UP.md 第 2 节。
+
 固化 ForgeGradle 算出的 reobf 映射，供 Mixin 注解处理器生成 refmap。
 
 ## 为什么需要（2026-10-10）

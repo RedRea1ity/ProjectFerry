@@ -13,29 +13,18 @@ permissions:
   contents: write
 
 jobs:
-  verify:
-    # 秒级门禁：Mixin 注入点签名错一步就要等 20 分钟编译才暴露，这里先拦掉。
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Fetch Mojang official mappings
-        run: |
-          mkdir -p .mappings
-          curl -sSL -o .mappings/client_mappings.txt \
-            https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
-          VER=$(python3 -c "import json;print(json.load(open('.mappings/client_mappings.txt'))['versions'][0]['url'])")
-          curl -sSL -o .mappings/version.json "$VER"
-          URL=$(python3 -c "import json;print(json.load(open('.mappings/version.json'))['downloads']['client_mappings']['url'])")
-          curl -sSL -o .mappings/client_mappings.txt "$URL"
-          ls -la .mappings/
-      - name: Verify mixin injection signatures
-        run: python3 bridge/tools/verify_mixin_signatures.py
-
   build:
-    needs: verify
+    # 2026-10-12（L1）：本模组已零 Mixin，原来那个名为 verify 的
+    # 「核验 Mixin 注入点签名」作业随之删除 —— 没有注入点了，也就没有签名可核验。
+    #
+    # 顺带记一笔：那个作业本来就跑不通。它拉完 Mojang mappings 后直接
+    # `python3 bridge/tools/verify_mixin_signatures.py`，既不传 argv 也不设
+    # MC_MAPPINGS，而脚本默认路径写死在 Windows 的 D:\Temp\...，
+    # CI（ubuntu）上必然 [FATAL] mappings 不存在 → 退出码 2 → 整条工作流红。
+    # 留着它只会让 main 的桥工作流一直失败，掩盖真正的构建问题。
+    #
+    # 去 Mixin 之后，「跨版本要验什么」从「字节码注入点签名」变成了
+    # 「Forge 事件 API 签名」—— 后者由编译器把关，不需要单独的签名核验作业。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

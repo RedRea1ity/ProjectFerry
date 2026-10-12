@@ -1,6 +1,8 @@
 // 仓库顺序 = 解析优先级，从左到右逐个尝试：
 //
-//  1. FerryLocal  本地预置仓库（D:\Temp\forge-prefetch\m2）
+//  1. FerryLocal  本地预置仓库（<repo>/.forge-prefetch/m2，由 tools/prefetch-forge-deps.sh 生成）
+//     用相对路径 ../.forge-prefetch/m2 —— settings 目录是 bridge/，所以指向仓库根下的
+//     .forge-prefetch/m2。**不要**再写 D:/Temp/...：那是系统临时目录，会被清空。
 //     BMCLAPI 虽然缓存了 modlauncher 10.x 的文件，但 maven-metadata.xml 索引没更新，
 //     导致 `cpw.mods:modlauncher:10.0.+` 这类动态版本解析不出来。
 //     tools/prefetch-forge-deps.sh 会手工生成 metadata 补上这个缺口。
@@ -19,7 +21,7 @@ pluginManagement {
     repositories {
         maven {
             name = 'FerryLocal'
-            url = uri('D:/Temp/forge-prefetch/m2')
+            url = uri('../.forge-prefetch/m2')
         }
         maven { name = 'BMCLAPI'; url = 'https://bmclapi2.bangbang93.com/maven' }
         gradlePluginPortal()

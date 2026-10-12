@@ -14,9 +14,6 @@
       "com.redreality.ferrybridge.fabric.FerryBridgeFabricClient"
     ]
   },
-  "mixins": [
-    "ferrybridge.mixins.json"
-  ],
   "depends": {
     "fabricloader": ">=0.15.0",
     "minecraft": "1.20.1",

@@ -11,13 +11,14 @@
 # 本地仓库是 file:// 协议，不走网络，彻底绕开这个问题。
 #
 # 用法：bash tools/prefetch-builder-deps.sh
-# 产物：D:\Temp\forge-prefetch\m2\
+# 产物：<仓库根>/.forge-prefetch/m2/（**不是** D:\Temp，那是临时目录会被清）
 
 set -u
 
 MIRROR="https://bmclapi2.bangbang93.com/maven"
 CENTRAL="https://repo1.maven.org/maven2"
-M2="${FERRY_M2_DIR:-D:/Temp/forge-prefetch/m2}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+M2="${FERRY_M2_DIR:-$SCRIPT_DIR/../../.forge-prefetch/m2}"
 
 # 通用库走 Maven Central（快且稳定），Forge 专有走 BMCLAPI。
 # 格式: group_path|artifact|version|source

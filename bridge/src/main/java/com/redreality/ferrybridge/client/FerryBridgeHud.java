@@ -1,6 +1,7 @@
 package com.redreality.ferrybridge.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.redreality.ferrybridge.core.FerryBridgeCollector;
 import com.redreality.ferrybridge.core.FerryBridgeLive;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -45,9 +46,10 @@ public final class FerryBridgeHud {
     /** 浮层是否显示。默认关闭，不打扰正常游戏。 */
     private static boolean hudVisible = false;
 
-    /** 累计命中/未命中，用于判断是否需要刷新状态文件。 */
+    /** 上次写文件时的计数快照，用于判断是否需要刷新状态文件。 */
     private static int lastWrittenHits = -1;
     private static int lastWrittenLive = -1;
+    private static int lastWrittenCollected = -1;
 
     @SubscribeEvent
     public static void onRegisterKeys(RegisterKeyMappingsEvent event) {
@@ -109,9 +111,11 @@ public final class FerryBridgeHud {
 
         // 状态变化时即时写文件，保证 ferrybridge-status.txt 始终是新鲜的
         if (FerryBridgeLive.getHitCount() != lastWrittenHits
-                || FerryBridgeLive.getInjectorLive() != lastWrittenLive) {
+                || FerryBridgeLive.getInjectorLive() != lastWrittenLive
+                || FerryBridgeCollector.size() != lastWrittenCollected) {
             lastWrittenHits = FerryBridgeLive.getHitCount();
             lastWrittenLive = FerryBridgeLive.getInjectorLive();
+            lastWrittenCollected = FerryBridgeCollector.size();
             FerryBridgeLive.writeStatusFile(FMLPaths.GAMEDIR.get());
         }
     }

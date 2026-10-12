@@ -25,10 +25,13 @@ displayTest="IGNORE_ALL_VERSION"
     ordering="NONE"
     side="CLIENT"
 
-# 文本替换由 mixin 完成，不依赖任何 Forge 事件。
-# 同一份 ferrybridge.mixins.json 会被 Fabric 版复用，这是跨加载器的关键。
-[[mixins]]
-    config="ferrybridge.mixins.json"
+# 这里**刻意没有 [[mixins]] 块**。
+# 2026-10-12（L1）：文本替换已全部改走 Forge 官方事件
+#   聊天栏   -> ClientChatReceivedEvent（client/FerryBridgeChat）
+#   物品tooltip -> ItemTooltipEvent      （client/FerryBridgeTooltip）
+# 本模组现在已经**零 Mixin**：没有 mixins.json、没有 refmap、不需要混淆映射。
+# 这是跨版本升级成本的关键 —— 事件 API 比字节码注入点稳定得多，
+# 也为「按版本预编译桥模板」的规模化路线让开了路（见 docs/PLAN_SCALE_UP.md）。
 
 # 注意：**不要**为了声明「客户端专属」再加第二个 [[mods]] 块。
 # 2026-10-10 踩过：重复声明同一个 modId 会让 Forge 在扫描阶段直接报

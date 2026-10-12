@@ -14,7 +14,8 @@
 
 set -u
 
-LOCAL_M2="${LOCAL_M2:-D:/Temp/forge-prefetch/m2}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_M2="${LOCAL_M2:-$SCRIPT_DIR/../../.forge-prefetch/m2}"
 CENTRAL="https://repo1.maven.org/maven2"
 
 # groupId:artifactId:version[:classifier]

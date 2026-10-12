@@ -15,14 +15,18 @@ import java.nio.file.Paths;
  * <p><b>为什么需要这个类</b>
  *
  * <p>2026-10-10 连续三次把游戏改崩，每次都是同一种失败模式：
- * 注入点在类加载阶段出问题（被静默丢弃，或直接 FATAL），而玩家只能靠
- * 崩溃报告反推原因。核心问题是——<b>Mixin 注入点没有"活着"的反馈</b>：
+ * 替换路径在加载阶段出问题（当时是 Mixin 注入点被静默丢弃，或直接 FATAL），
+ * 而玩家只能靠崩溃报告反推原因。核心问题是——<b>「替换到底挂上没有」没有"活着"的反馈</b>：
  *
  * <ul>
- *   <li>被丢弃时，日志只有一条 ERROR，游戏照常启动，玩家看到"部分生效"，
+ *   <li>当时 Mixin 被丢弃时，日志只有一条 ERROR，游戏照常启动，玩家看到"部分生效"，
  *       完全无从判断是"映射表不够"还是"路径根本没挂上"；</li>
  *   <li>FATAL 时游戏开不起来，代价是玩家的整个游戏时间。</li>
  * </ul>
+ *
+ * <p>2026-10-12（L1）起，替换路径已全部改成 Forge 官方事件，本模组零 Mixin：
+ * 「事件有没有注册上」比「字节码注入有没有命中」可靠得多。但"到底生效没有"
+ * 仍然需要反馈，所以本类的安全模式与诊断报告继续保留这个职责。
  *
  * <p>本类提供两个能力：
  *
@@ -50,9 +54,6 @@ public final class FerryBridgeDiag {
 
     /** 安全模式标记：注入点查到后直接返回，不做替换。 */
     private static volatile boolean injectionEnabled = true;
-
-    /** 注入点是否已成功应用。由每个注入点在 {@code @Inject} 里回报自己。 */
-    private static volatile int liveInjectors = 0;
 
     private FerryBridgeDiag() {
     }
@@ -109,24 +110,13 @@ public final class FerryBridgeDiag {
     }
 
     /**
-     * 注入点回报自己已成功应用。
-     *
-     * <p>只有当 {@code @Inject} 真的被执行到（而不是被 Mixin 静默丢弃）时，
-     * 才会调用本方法。这正是"哪些路径活着"的可观测性来源。
-     */
-    public static void markInjectorLive(String name) {
-        int now = liveInjectors;
-        if (now == 0) {
-            LOGGER.info("FerryBridge injector live: {}", name);
-        }
-        liveInjectors++;
-    }
-
-    /**
      * 产出人话诊断报告。
      *
      * <p>刻意用中文写清楚"哪个环节断了"，因为使用者（牢红）看不懂 Java 堆栈，
      * 需要的是「坏了什么、要不要修」而不是 200 行 stacktrace。
+     *
+     * <p><b>本报告只在启动时写一次</b>，是「进入游戏那一刻的快照」。
+     * 实时状态请看 {@code ferrybridge-status.txt}（随变化即时刷新）或按 F9 开 HUD。
      */
     public static String buildReport(Path gameDir, TranslationStore store, String loadResult) {
         StringBuilder sb = new StringBuilder();
@@ -139,37 +129,55 @@ public final class FerryBridgeDiag {
 
         sb.append("【一句话结论】\n");
         int entries = store == null ? 0 : store.size();
+        int live = FerryBridgeLive.getInjectorLive();
         if (!injectionEnabled) {
             sb.append("  当前是【安全模式】：桥已加载但不替换任何文本，游戏保证能启动。\n");
             sb.append("  这是排查模式，不是故障。\n");
         } else if (entries == 0) {
             sb.append("  映射表是空的 → 桥无法翻译任何东西。\n");
             sb.append("  要修：用摆渡计划重新导出桥接 jar。\n");
-        } else if (liveInjectors == 0) {
-            // 关键：区分「注入点没加载」与「还没触发过」——
+        } else if (live == 0) {
+            // 关键：区分「路径没挂上」与「还没触发过」——
             // 后者是正常情况，不能报成故障，否则会误导人去查不存在的 bug。
-            sb.append("  映射表有 ").append(entries).append(" 条；注入点已随模组正常加载。\n");
-            sb.append("  「生效注入点 0」只说明【本次启动还没触发过聊天消息】，不是故障。\n");
-            sb.append("  要验证：进游戏后在聊天栏打一句话，报告会立刻更新。\n");
-            sb.append("  若日志 latest.log 里有 [ERROR] [mixin] 行，那才是真的注入失败。\n");
+            sb.append("  映射表有 ").append(entries).append(" 条；两条替换路径已随模组正常加载。\n");
+            sb.append("  「生效路径 0」只说明【本次启动还没收到过聊天 / 悬停过物品】，不是故障。\n");
+            sb.append("  要验证：进游戏打一句话或悬停一个物品，再看实时状态\n");
+            sb.append("  （ferrybridge-status.txt，或按 F9 开 HUD）。本报告是启动快照，不会自己更新。\n");
         } else {
-            sb.append("  映射表 ").append(entries).append(" 条，").append(liveInjectors)
-              .append(" 个注入点已生效 → 桥在正常工作。\n");
+            sb.append("  映射表 ").append(entries).append(" 条，").append(live)
+              .append(" 条替换路径已生效 → 桥在正常工作。\n");
             sb.append("  若某些文本仍是英文，多半是它们不在映射表里（属正常，属覆盖范围问题）。\n");
         }
 
         sb.append('\n').append("【细节】\n");
         sb.append("  映射表加载结果: ").append(loadResult).append('\n');
-        sb.append("  映射条数      : ").append(entries).append('\n');
+        sb.append("  映射条数      : ").append(entries)
+          .append("（内置 ").append(store == null ? 0 : store.jarSize())
+          .append(" + 外部 ").append(store == null ? 0 : store.externalSize()).append("）").append('\n');
         sb.append("  注入开关      : ").append(injectionEnabled ? "开启（正常替换）" : "关闭（安全模式）").append('\n');
-        sb.append("  生效注入点    : ").append(liveInjectors)
-          .append(liveInjectors == 0 && entries > 0 ? "（尚未触发，非故障）" : "").append('\n');
-        sb.append("  映射表路径    : ").append(TranslationStore.RESOURCE_PATH).append('\n');
+        sb.append("  生效路径      : ").append(live)
+          .append(live == 0 && entries > 0 ? "（尚未触发，非故障）" : "").append('\n');
+        sb.append("  内置表路径    : ").append(TranslationStore.RESOURCE_PATH).append('\n');
+        sb.append("  外部表路径    : ").append(describeExternalPath(store)).append('\n');
         sb.append("  重启游戏可刷新本报告 → ").append(REPORT_NAME).append('\n');
 
-        sb.append('\n').append("【生效范围】\n");
-        sb.append("  聊天栏        : ").append(liveInjectors > 0 ? "由 ChatComponentMixin 负责" : "未知").append('\n');
-        sb.append("  物品tooltip  : ").append("当前无注入点覆盖（Component 是接口，Mixin 无法注入，见 README）").append('\n');
+        sb.append('\n').append("【生效范围】（都走 Forge 官方事件，本模组零 Mixin）\n");
+        sb.append("  聊天栏        : 已挂 ClientChatReceivedEvent")
+          .append(live > 0 ? "（本次启动已触发过）" : "（打一句话即触发，未触发不是故障）").append('\n');
+        sb.append("  物品tooltip  : 已挂 ItemTooltipEvent（悬停物品才触发）\n");
+
+        sb.append('\n').append("【批量翻译数据】\n");
+        if (FerryBridgeCollector.isEnabled()) {
+            sb.append("  采集器        : 开启 → 未命中的英文记进 ")
+              .append(FerryBridgeCollector.FILE_NAME).append('\n');
+            sb.append("  已采集        : ").append(FerryBridgeCollector.size())
+              .append(" 条（玩游戏时实时增长）\n");
+            sb.append("  用法          : 把该文件交给摆渡批量翻译，产出 ")
+              .append(TranslationStore.EXTERNAL_NAME)
+              .append(" 即热重载生效（不用重启游戏）。\n");
+        } else {
+            sb.append("  采集器        : 关闭（启动参数 -Dferrybridge.collect=false）\n");
+        }
 
         sb.append('\n').append("【安全模式怎么开】\n");
         sb.append("  方式一：在游戏目录建 ").append(CONFIG_NAME).append(' ')
@@ -184,6 +192,16 @@ public final class FerryBridgeDiag {
             LOGGER.warn("FerryBridge failed to write diagnostic report", ex);
         }
         return report;
+    }
+
+    /**
+     * 外部映射表路径的描述，供诊断报告展示。未配置时返回「未配置」。
+     */
+    private static String describeExternalPath(TranslationStore store) {
+        if (store == null || store.getExternalPath() == null) {
+            return "未配置";
+        }
+        return store.getExternalPath().toString();
     }
 
     /**

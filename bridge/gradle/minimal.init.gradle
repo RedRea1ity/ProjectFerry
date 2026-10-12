@@ -12,6 +12,29 @@
  *
  * 此外不设任何镜像、不改仓库顺序 —— 标准 MDK 工程该是什么样就什么样。
  */
+
+// ───────────────────────────────────────────────────────────────
+// 必须在 **settings 求值之前** 就把网络超时设好。
+//
+// 2026-10-12 实测补坑：插件解析（build.gradle 的 plugins { id '...' }）发生在
+// settings/build 脚本求值阶段，**比 gradle.projectsLoaded 回调早得多**。
+// 原先只在 projectsLoaded 里设超时，于是解析插件、连 gradlePluginPortal /
+// maven.minecraftforge.net 时用的仍是「无超时」的 HttpsURLConnection ——
+// 网络一慢就**静默卡死**：进程活着、日志停在 "Daemon will be stopped at the end
+// of the build"、零任务输出，看起来像死了其实是在等一个永远不来的响应。
+// 这正是历史上「联网构建跑 10 分钟毫无动静」的机制。
+//
+// 双保险：init 脚本顶层（先于 settings 执行）+ gradle.beforeSettings 回调。
+System.setProperty('net.minecraftforge.gradle.check.certs', 'false')
+System.setProperty('sun.net.client.defaultConnectTimeout', '15000')
+System.setProperty('sun.net.client.defaultReadTimeout', '15000')
+
+gradle.beforeSettings {
+    System.setProperty('net.minecraftforge.gradle.check.certs', 'false')
+    System.setProperty('sun.net.client.defaultConnectTimeout', '15000')
+    System.setProperty('sun.net.client.defaultReadTimeout', '15000')
+}
+
 gradle.projectsLoaded {
     System.setProperty('net.minecraftforge.gradle.check.certs', 'false')
     System.setProperty('sun.net.client.defaultConnectTimeout', '15000')
@@ -41,7 +64,12 @@ gradle.beforeProject {
 // 实测：不加任何仓库改动时构建能跑通（反编译产出 173 MB）。
 //
 // 所以这里只"加"，绝不"改/删/换顺序"。
-def LOCAL_M2 = 'D:/Temp/forge-prefetch/m2'
+// 本地预置仓库 = 仓库根下的 .forge-prefetch/m2（由 tools/prefetch-forge-deps.sh 生成）。
+// 用相对路径：init script 里 project.uri()/file() 都相对 **项目目录**（= bridge/）解析，
+// 所以 ../.forge-prefetch/m2 正好是仓库根下那一份。
+// **不要**写 D:/Temp/... —— D:\Temp 是系统临时目录，2026-10-12 被清过一次，
+// 整个构建环境（gradle 发行版 + 预置仓库）当场蒸发，构建直接 exit=127。
+def LOCAL_M2 = '../.forge-prefetch/m2'
 
 // 关键：必须在 beforeEvaluate 注入，不能用 afterEvaluate。
 //

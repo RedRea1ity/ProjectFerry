@@ -7,12 +7,16 @@
 # 解法：把工件按标准 maven 布局放到本地仓库，并在 metadata 里手动登记版本。
 #
 # 用法：bash tools/prefetch-forge-deps.sh
-# 产物：D:\Temp\forge-prefetch\m2\
+# 产物：<仓库根>/.forge-prefetch/m2/
+# 注意：**不要**再放 D:\Temp —— 那是系统临时目录，2026-10-12 被清过一次，
+#       预置仓库连同 gradle 发行版一起蒸发，构建 exit=127。
 
 set -u
 
 MIRROR="https://bmclapi2.bangbang93.com/maven"
-M2="${FERRY_M2_DIR:-D:/Temp/forge-prefetch/m2}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 脚本在 bridge/tools/，往上两级是仓库根
+M2="${FERRY_M2_DIR:-$SCRIPT_DIR/../../.forge-prefetch/m2}"
 
 # group_path:artifact:version[:classifier]
 ARTIFACTS=(

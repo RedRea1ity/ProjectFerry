@@ -33,13 +33,18 @@ public final class FerryBridgeLive {
     /** 状态文件名。写入频繁（仅在数值变化时），故单独放一份便于排查。 */
     public static final String STATUS_NAME = "ferrybridge-status.txt";
 
-    // ── 实时计数（volatile int，读写开销可忽略，够用且简单）────────────────
-    private static volatile int injectorLive = 0;
+    // ── 实时计数（volatile，读写开销可忽略，够用且简单）────────────────
+    // injectorLive 是"当前有多少条**不同**的替换路径被证实活着"，
+    // 不是调用次数 —— tooltip 事件每帧都可能触发，若按次数计会瞬间上万，
+    // 完全失去意义。所以这里用名字集合去重。
+    private static final java.util.Set<String> liveInjectors =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static volatile int hitCount = 0;
     private static volatile int missCount = 0;
     private static volatile boolean injectionOn = true;
     private static volatile int mappingCount = 0;
     private static volatile String lastHit = "";
+    private static volatile String lastMiss = "";
     private static volatile long lastUpdateNanos = System.nanoTime();
 
     private FerryBridgeLive() {
@@ -52,13 +57,25 @@ public final class FerryBridgeLive {
         touch();
     }
 
-    /** 注入点真正执行时回报。这是"路径活着"的可靠信号。 */
+    /**
+     * 替换路径真正执行时回报。这是"路径活着"的可靠信号。
+     *
+     * <p>按**名字去重**：同一个路径被调用一万次，也只算 1 条生效路径。
+     * 否则 tooltip 这类每帧触发的事件会把计数撑爆，看不出"到底有几条路径是活的"。
+     */
     public static void markInjectorLive(String name) {
-        if (injectorLive == 0) {
-            LOGGER.info("FerryBridge injector live: {}", name);
+        if (name == null) {
+            return;
         }
-        injectorLive++;
-        touch();
+        if (liveInjectors.add(name)) {
+            LOGGER.info("FerryBridge injector live: {}", name);
+            touch();
+        }
+    }
+
+    /** 当前已被证实活着的替换路径条数（去重后）。 */
+    public static int getInjectorLive() {
+        return liveInjectors.size();
     }
 
     /** 查表命中一次（成功替换）。 */
@@ -91,10 +108,6 @@ public final class FerryBridgeLive {
 
     public static boolean isInjectionOn() {
         return injectionOn;
-    }
-
-    public static int getInjectorLive() {
-        return injectorLive;
     }
 
     public static int getHitCount() {
@@ -132,9 +145,10 @@ public final class FerryBridgeLive {
             "§6摆渡桥 FerryBridge §7（实时状态，F9 关闭）",
             "§f映射表  §e" + mappingCount + " §7条",
             "§f注入开关§e " + (injectionOn ? "§a开启（正常替换）" : "§c关闭（安全模式）"),
-            "§f生效注入点§e " + injectorLive + " §7个",
+            "§f生效路径  §e" + getInjectorLive() + " §7条（去重）",
             "§f已替换  §a" + hitCount + " §7次",
             "§f未命中  §7" + missCount + " §7次",
+            "§f已采集  §b" + FerryBridgeCollector.size() + " §7条 §8(批量翻译原料)",
             "§f最近命中§7 " + (lastHit.isEmpty() ? "§8（还没有）" : lastHit),
             "§8" + describeState(),
         };
@@ -151,10 +165,14 @@ public final class FerryBridgeLive {
         if (hitCount > 0) {
             return "正常工作，已替换 " + hitCount + " 次";
         }
-        if (injectorLive == 0) {
-            return "注入点未生效 → 查日志 [ERROR] [mixin]";
+        if (getInjectorLive() == 0) {
+            return "替换路径尚未触发 → 打一句话 / 悬停物品试试";
         }
-        return "已加载，等文本出现（发一句话试试）";
+        int collected = FerryBridgeCollector.size();
+        if (collected > 0) {
+            return "注入点在跑，已采集 " + collected + " 条待翻（表里还没有）";
+        }
+        return "已加载，等文本出现（悬停物品看 tooltip 试试）";
     }
 
     /**

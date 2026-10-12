@@ -15,210 +15,66 @@ base { archivesName = 'ferrybridge' }
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 minecraft {
-    //必须用 official（官方 Mojang 映射），不能用默认的 srg/stable：
-    //我们要直接写 mixin 的 method 字符串，official 下的可读名与
-    // ChatComponent.addMessage 等真实签名一一对应，最不容易写错。
+    // 用 official（官方 Mojang 映射）：编译期写可读的 MC 类名 / 方法名。
+    // 产物再交给 reobfJar 重混淆成生产环境能链接的名字。
     mappings channel: 'official', version: '1.20.1'
-
-    // ───────────────────────────────────────────────────────────
-    // 让 ForgeGradle 把混淆映射交给 Mixin 注解处理器（2026-10-10 加）
-    //
-    // 没有这一行会报：
-    //   错误: Unable to locate obfuscation mapping for @Inject target addMessage
-    //
-    // 原因：refmap 的作用是把可读方法名（如 addMessage）翻译成生产环境的
-    // 混淆名（如 a）。AP 靠 -AreobfTsrgFile / mixin 配置里给的映射文件做这件事。
-    // 官方映射通道下这个文件默认不生成，于是每个注入点都"找不到混淆映射"。
-    //
-    //⚠️ 症状极具欺骗性：因为同时设了 require = 0，注入点会被**静默跳过**，
-    //    游戏日志零 ERROR，但功能就是不生效。所以「refmap 缺失」务必靠
-    //    检查 jar 里有没有 *.refmap.json 来确认，别等玩家报bug。
-    //
-    // 顺带修掉FilerException：refmap 写两次是因为
-    //    -AoutRefMapFile 的输出路径与 reobfJar 的产物路径撞了，
-    //    删掉下面的 mixin { } 块（默认已开启）即可。
 }
 
 dependencies {
     minecraft 'net.minecraftforge:forge:1.20.1-47.3.0'
-    // 编译期只需要 mixin 注解类，运行时由 Forge 提供。
-    compileOnly 'org.spongepowered:mixin:0.8.5'
-    // Mixin AP 自己要解析/写 refmap，依赖 gson + guava（gson 又依赖 guava）。
-    // 这两条只给 AP 用，不进最终 jar。少任何一条都会报
-    //   NoClassDefFoundError: com/google/gson/JsonParseException
-    //   NoClassDefFoundError: com/google/common/collect/Maps
-    compileOnly 'com.google.code.gson:gson:2.10.1'
-    compileOnly 'com.google.guava:guava:31.1-jre'
+    // 2026-10-12（L1）：这里**曾经**还有三条 compileOnly ——
+    //   org.spongepowered:mixin:0.8.5（注解类）+ gson + guava（Mixin AP 的传递依赖）。
+    // 本模组已零 Mixin，不需要注解处理器，也就不需要它们。
 }
 
 // ───────────────────────────────────────────────────────────────
-// 编译配置
+// 编译配置：只保留最基本的设置。
 //
-// 这里必须显式注册 Mixin 注解处理器（2026-10-10 修复的关键）
+// 2026-10-12（L1）：这里**曾经**有一大坨 Mixin 注解处理器（AP）的配置 ——
+//   -AoutRefMapFile / -AdisableOverwriteChecker / -AreobfSrgFile /
+//   -AdefaultObfuscationEnv=searge，外加把 gradle/mappings/official_to_srg.srg
+//   声明成 compileJava 的输入、以及 doFirst 里那一长串中文报错。
 //
-// 之前 build.sh 注释里写「不要手写annotationProcessor，ForgeGradle 会自动注册，
-// 重复注册会让 refmap 被写两次抛 FilerException」——前一半是错的：
-// ForgeGradle 6.0.24 并没有自动注册 Mixin AP。后一半确实成立，但原因不是
-// 「ForgeGradle 自动注册了」，而是要么全靠你、要么全别靠，别两边都写。
+// 它们存在的目的只有一个：让 Mixin AP 生成 ferrybridge.refmap.json。
+// 没有它，注入点在混淆后的生产环境里找不到目标方法，又因为设了 require = 0
+// 被**静默跳过** —— 症状是「游戏正常启动、日志零 ERROR、功能就是不动」，
+// 属于「不配就静默坏掉」的那一类，当初查了很久。
 //
-// 实际症状（当时极隐蔽，因为全程零报错）：
-//   1. jar 里没有 ferrybridge.refmap.json
-//   2. 游戏日志只有一句 WARN：Reference map 'ferrybridge.refmap.json'
-//      for ferrybridge.mixins.json could not be read
-//   3. debug.log 里 `Mixing ChatComponentMixin into ChatComponent` 照常出现
-//      （**mixin 类确实被混入了**，极易误判成"加载成功"）
-//   4. 但注入点在混淆后的生产环境找不到目标方法，
-//      又因require = 0 被静默跳过 → markInjectorLive 一次都没调
-//      → HUD 显示「生效注入点 0」
+// 本模组现在零 Mixin（聊天栏 / tooltip 两条替换路径全走 Forge 官方事件），
+// refmap 这个概念整个消失：上面那一坨、连同 9 MB 的混淆映射文件一起不再需要。
+// 当初为它写的转换脚本（tools/tsrg2_to_srg.py、tools/copy_reobf_mappings.py）
+// 保留在 tools/ 里只作历史参考，**不再参与构建**。
 //
-// 验证手段（别再靠猜）：gradle showAp，看 annotationProcessorPath 是否为空。
+// 踩坑史见 docs/PLAN_SCALE_UP.md 第 2 节「Mixin 是负债，官方事件是资产」那张表。
+// ───────────────────────────────────────────────────────────────
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
-    options.compilerArgs += [
-        '-AoutRefMapFile=ferrybridge.refmap.json',
-        // 允许覆写已存在的 refmap。AP 反复写同一个输出文件时报
-        //   FilerException: Attempt to reopen a file for path .../ferrybridge.refmap.json
-        // 这个检查默认开启，不关掉它每次构建都会刷一串 FilerException
-        //（虽不致命，但会把真正的错误淹掉）。
-        //
-        // 注：原来这里写的 -AdefaultRequire=0 是**无效选项**——
-        // Mixin 0.8.5 的 SupportedOptions 里根本没有它，
-        // 只会得到「选项未被任何处理程序识别」的警告。
-        // require 的默认值已在各 @Inject(require = 0) 上注解级声明，不依赖它。
-        '-AdisableOverwriteChecker'
-    ]
-    // 直接给整个 compileClasspath：Mixin AP 的传递依赖链很长
-    //（gson → guava → asm → asm-commons …），逐个补会连环报
-    // NoClassDefFoundError，补到第三个还会冒第四个。
-    // classpath 只在编译期用，不会打进 jar，所以全给没有副作用。
-    //
-    // ⚠️ 这行**只能出现在这一处**。写两遍（例如dependencies 块里也来一份）
-    // 会让 AP 被注册两次，两个处理器抢写同一个 refmap，报
-    // FilerException: Attempt to reopen a file for path .../ferrybridge.refmap.json
-    //
-    // ⚠️ 必须用 doFirst 惰性求值。写成
-    //     options.annotationProcessorPath = files(configurations.compileClasspath)
-    // 会在配置阶段就解析 compileClasspath，而此时 init script 的仓库还没注入
-    // （beforeProject 里加的），直接报
-    //     Cannot resolve external dependency org.spongepowered:mixin:0.8.5
-    //     because no repositories are defined
-    //
-    // 接着喂混淆映射（refmap 能生成的前提）。
-    //
-    // AP 的映射服务是 SPI 实现 ObfuscationServiceMCP，它读的选项名**不在**
-    // SupportedOptions 里，而在 SPI 实现类中硬编码为：
-    //     reobfSrgFile / reobfSrgFiles / reobfNotchSrgFile
-    // 注意**不是** -AreobfTsrgFile（我先试过这个，AP 直接忽略，
-    // 然后报「选项未被任何处理程序识别」，极易误判成映射已生效）。
-    //
-    // 缺失时的症状极具欺骗性：
-    //   错误: Unable to locate obfuscation mapping for @Inject target addMessage
-    // 而因为同时设了 require = 0，运行时是**静默跳过** —— 游戏正常启动、
-    // 日志零 ERROR、功能就是不动。属于「不配就静默坏掉」的那一类配置。
-    doFirst {
-        // 用 sourceSets 而不是 configurations：后者在配置阶段就会解析，
-        // 那时 init script 的仓库还没注入（beforeProject 里才加），
-        // 直接报 'Cannot resolve external dependency ... because no repositories are defined'。
-        // sourceSets.main.compileClasspath 是FileCollection，到执行期才求值。
-        options.annotationProcessorPath = files(sourceSets.main.compileClasspath)
-
-        // 映射来源：gradle/mappings/official_to_srg.tsrg
-        //（由 tools/copy_reobf_mappings.py 从 ForgeGradle 的 reobf 产物固化）
-        //
-        // ⚠️ 已确认的事实，别再重复踩（2026-10-10 花了一整晚）：
-        //
-        //· AP 读的选项名是 reobfSrgFile / reobfSrgFiles / reobfNotchSrgFile，
-        //   硬编码在 SPI 实现 ObfuscationServiceMCP 里，**不在** SupportedOptions。
-        //   -AreobfTsrgFile 会被静默忽略。
-        // · 映射源只能用 SRG（m_93785_ 这种），不能用 Mojang 官方 notch 名：
-        //   notch 名对重载方法是**复用的**（三个 addMessage 全叫 a），
-        //   而 AP 内部用 guava BiMap.forcePut 建索引，值必须唯一，
-        //   撞名就查不到。
-        // · 目前仍未让 refmap 真正生成：AP 报
-        //     No valid input files for searge could be read
-        //   即「文件读到了，但被判为无效输入」——不是内容缺失，是格式不被接受。
-        //   verifyRefmap 任务就是守这条线的，红了就是没修好。
-        def tsrg = file('gradle/mappings/official_to_srg.tsrg')
-        if (!tsrg.exists()) {
-            throw new GradleException(
-                "缺少混淆映射 ${tsrg}\n" +
-                "跑一次生成：python tools/copy_reobf_mappings.py")
-        }
-        options.compilerArgs += [
-            "-AreobfSrgFile=${tsrg.absolutePath}",
-            '-AdefaultObfuscationEnv=searge'
-        ]
-    }
 }
 
-tasks.register('verifyRefmap') {
-    dependsOn 'jar'
-    doLast {
-        def refmap = file('build/libs/ferrybridge-1.0.0.jar')
-        // 直接读 jar 内的 refmap，判断 mappings 是否为空
-        def empty = true
-        def found = false
-        new java.util.zip.ZipFile(refmap).withCloseable { zip ->
-            def e = zip.getEntry('ferrybridge.refmap.json')
-            if (e != null) {
-                found = true
-                def txt = zip.getInputStream(e).getText('UTF-8')
-                // 粗判：mappings 里有至少一个非空的类条目才算有效
-                def m = txt =~ /"mappings"\s*:\s*\{([\s\S]*?)\n\s{2}\}/
-                if (m && m.group(1).contains('"')) empty = false
-            }
-        }
-        if (!found) {
-            throw new GradleException("jar 里没有 ferrybridge.refmap.json —— 注入点会静默失效。检查 Mixin AP 是否注册。")
-        }
-        if (empty) {
-            throw new GradleException(
-                "refmap 的 mappings 是空的 —— 注入点在游戏里会静默失效。\n" +
-                "最可能原因：-AreobfSrgFile 没生效（AP 的选项名很挑，\n" +
-                "见 build.gradle 注释），或 gradle/mappings/ 下的 tsrg 不是对应版本的。")
-        }
-        println('✅ refmap 非空，注入点映射已生成')
-    }
-}
-
-// refmap 是编译期产物，落在 build/classes 下的某个包目录里。
-// 必须显式打进 jar，否则运行期 Mixin 读不到 → 注入点静默失效。
-// include 不写 '*.refmap.json' 是因为 AP 把它输出在包路径下，
-// 用 '**/*.refmap.json' 才覆盖得到。
+// 打包：manifest 里**不再**有 'MixinConfigs' 这一项。
+// 它原让 Forge 启动时去读 ferrybridge.mixins.json；现在配置文件和 mixin 类
+// 都不存在了，留着它只会让 Mixin 每次启动去读一个不存在的东西。
+// Fabric 版对应的是 fabric.mod.json，与本文件无关。
 jar {
-    from('build/classes/java/main') {
-        include '**/*.refmap.json'
-    }
     manifest {
         attributes([
             'Specification-Title'   : 'ferrybridge',
             'Specification-Version' : '1',
             'Implementation-Title'  : 'FerryBridge',
-            'Implementation-Version': project.version,
-            // Forge 从这里读取 mixin 配置；Fabric 版改走 fabric.mod.json。
-            'MixinConfigs'           : 'ferrybridge.mixins.json'
+            'Implementation-Version': project.version
         ])
     }
     finalizedBy 'reobfJar'
-}
-// ───────────────────────────────────────────────────────────────
-// 诊断用：打印 compileJava 实际的注解处理器路径与编译参数。
-//
-// 重点看 annotationProcessorPath 里**有没有 mixin-*.jar**。
-// 为空 = Mixin AP 没在跑= refmap 不会生成= 注入点在生产环境静默失效。
-// 2026-10-10 就是靠这个任务定位到根因的，别删。
-tasks.register("showAp") {
-    doLast {
-        def t = tasks.named("compileJava").get()
-        def apFiles = t.options.annotationProcessorPath.files
-        println("=== annotationProcessorPath (${apFiles.size()}) ===")
-        apFiles.each { f -> println("  " + f.name) }
-        if (!apFiles.any { it.name.startsWith('mixin-') }) {
-            println("  ⚠️  没有 mixin AP！refmap 不会生成，注入点会静默失效")
-        }
-        println("=== compilerArgs ===")
-        t.options.compilerArgs.each { println("  " + it) }
-    }
+
+    // 保险：万一将来有重复条目，至少别让 build 直接炸。
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
+// ───────────────────────────────────────────────────────────────
+// 已随 L1 一并删除的两个任务（留着它们只会误导后来人）：
+//
+//   verifyRefmap —— 校验 jar 里的 ferrybridge.refmap.json 非空。
+//                   零 Mixin 后这个文件不再产生，任务本身也就无从完成。
+//   showAp       —— 打印 annotationProcessorPath，确认 Mixin AP 在跑。
+//                   现在压根没有注解处理器了。
 // ───────────────────────────────────────────────────────────────
