@@ -18,10 +18,12 @@ import java.nio.file.Path;
  * 排查效率极低。而注入点是否生效、命中了多少次这些信息，
  * 完全是<b>运行时状态</b>，本该实时可见。
  *
- * <p>本类把状态拆成可实时读取的原子计数，并提供两个出口：
+ * <p>本类把状态拆成可实时读取的原子计数，并提供三个出口：
  * <ul>
  *   <li><b>游戏内 HUD</b>：按 {@code F9} 切换浮层（Forge 侧渲染），即时显示；</li>
- *   <li><b>状态文件</b>：每次状态变化即写盘，比日志更实时，且随时可查。</li>
+ *   <li><b>状态文件</b>：每次状态变化即写盘，比日志更实时，且随时可查；</li>
+ *   <li><b>诊断包</b>：{@code F9} 顺带导出（见 {@link FerryBridgeReport}），
+ *       给「要把问题反馈给作者」用。</li>
  * </ul>
  *
  * <p>本类<b>不引用任何 Minecraft / 加载器类</b>，保持可跨加载器复用。
@@ -45,6 +47,7 @@ public final class FerryBridgeLive {
     private static volatile int mappingCount = 0;
     private static volatile String lastHit = "";
     private static volatile String lastMiss = "";
+    private static volatile String lastReport = "";
     private static volatile long lastUpdateNanos = System.nanoTime();
 
     private FerryBridgeLive() {
@@ -126,6 +129,22 @@ public final class FerryBridgeLive {
         return lastHit;
     }
 
+    /**
+     * 记下最近一次导出的诊断包文件名。
+     *
+     * <p>光把文件写出去还不够 —— 玩家得知道它叫什么、在哪。写进 HUD 与状态文件后，
+     * 「按 F9 导出，然后找那个文件」这句话才有落点。
+     */
+    public static void setLastReport(String name) {
+        lastReport = name == null ? "" : name;
+        touch();
+    }
+
+    /** 最近一次导出的诊断包文件名；没导出过则为空串。 */
+    public static String getLastReport() {
+        return lastReport;
+    }
+
     /** 距离上次状态变化过去了多少毫秒（用于判断"是不是卡住了"）。 */
     public static long millisSinceUpdate() {
         return (System.nanoTime() - lastUpdateNanos) / 1_000_000L;
@@ -142,7 +161,7 @@ public final class FerryBridgeLive {
      */
     public static String[] hudLines() {
         return new String[] {
-            "§6摆渡桥 FerryBridge §7（实时状态，F9 关闭）",
+            "§6摆渡桥 FerryBridge §7（实时状态，F9 关闭并导出诊断包）",
             "§f映射表  §e" + mappingCount + " §7条",
             "§f注入开关§e " + (injectionOn ? "§a开启（正常替换）" : "§c关闭（安全模式）"),
             "§f生效路径  §e" + getInjectorLive() + " §7条（去重）",
@@ -150,6 +169,8 @@ public final class FerryBridgeLive {
             "§f未命中  §7" + missCount + " §7次",
             "§f已采集  §b" + FerryBridgeCollector.size() + " §7条 §8(批量翻译原料)",
             "§f最近命中§7 " + (lastHit.isEmpty() ? "§8（还没有）" : lastHit),
+            "§f诊断包  §7" + (lastReport.isEmpty()
+                    ? "§8按 F9 导出（在游戏目录里）" : "§b" + lastReport),
             "§8" + describeState(),
         };
     }

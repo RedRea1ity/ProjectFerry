@@ -3,6 +3,7 @@ package com.redreality.ferrybridge.client;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.redreality.ferrybridge.core.FerryBridgeCollector;
 import com.redreality.ferrybridge.core.FerryBridgeLive;
+import com.redreality.ferrybridge.core.FerryBridgeReport;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
@@ -15,17 +16,25 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.loading.FMLPaths;
+import net.minecraftforge.versions.forge.ForgeVersion;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Path;
+
 /**
- * 游戏内实时状态浮层（HUD）。
+ * 游戏内实时状态浮层（HUD），兼「一键诊断包」的触发点。
  *
-* <p><b>解决的问题</b>：诊断信息原本只能写日志／文件，必须重启游戏才能刷新。
-     * 排查「注入点到底生效没有」时，"改代码 → 重启 → 看报告 → 再改" 每轮几分钟，
-     * 效率极低。改成游戏内浮层后，<b>按 F9 立刻看到当前状态</b>，
-     * 且每收到一条聊天消息实时更新命中数。
+ * <p><b>解决的问题</b>：诊断信息原本只能写日志／文件，必须重启游戏才能刷新。
+ * 排查「注入点到底生效没有」时，"改代码 → 重启 → 看报告 → 再改" 每轮几分钟，
+ * 效率极低。改成游戏内浮层后，<b>按 F9 立刻看到当前状态</b>，
+ * 且每收到一条聊天消息实时更新命中数。
+ *
+ * <p><b>F9 同时负责导出诊断包</b>：按 F9 除了开关浮层，还会<b>静默</b>把一份
+ * 诊断文件写进游戏目录（见 {@link FerryBridgeReport}）。这是给普通玩家用的 ——
+ * 桥出问题时，他们按一下键就得到一个可以整份发出去的文件，不需要自己去翻日志、
+ * 找状态文件、列模组清单。
  *
  * <p><b>为什么单独放 client 包</b>：本类引用 Minecraft 渲染 API 与 Forge 事件，
  * 是纯客户端专属代码。core 包里的东西保持零 MC 依赖，以便 Fabric 版复用。
@@ -83,7 +92,7 @@ public final class FerryBridgeHud {
         event.enqueueWork(() -> {
             MinecraftForge.EVENT_BUS.addListener(FerryBridgeHud::onClientTick);
             MinecraftForge.EVENT_BUS.addListener(FerryBridgeHud::onRenderOverlay);
-            LOGGER.info("FerryBridge HUD ready: F9 切换浮层, F10 切换注入开关");
+            LOGGER.info("FerryBridge HUD ready: F9 切换浮层并导出诊断包, F10 切换注入开关");
         });
     }
 
@@ -100,7 +109,14 @@ public final class FerryBridgeHud {
         // consumeClick 避免按住不放时反复触发
         while (toggleHud.consumeClick()) {
             hudVisible = !hudVisible;
-            LOGGER.info("FerryBridge HUD: {}", hudVisible ? "shown" : "hidden");
+            // F9 身兼两职：开关浮层 + 顺手导出一份诊断包。
+            // 「静默」是硬要求：不弹窗、不抢焦点、不打断游戏 —— 玩家按完继续玩，
+            // 文件已经在游戏目录里躺好了（FerryBridgeReport.FILE_NAME）。
+            Path report = FerryBridgeReport.write(
+                    FMLPaths.GAMEDIR.get(), "Forge " + ForgeVersion.getVersion());
+            FerryBridgeLive.setLastReport(report == null ? "" : report.getFileName().toString());
+            FerryBridgeLive.writeStatusFile(FMLPaths.GAMEDIR.get());
+            LOGGER.info("FerryBridge HUD: {}（诊断包 -> {}）", hudVisible ? "shown" : "hidden", report);
         }
         while (toggleInject.consumeClick()) {
             boolean now = !FerryBridgeLive.isInjectionOn();
