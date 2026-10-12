@@ -102,7 +102,8 @@ mixin 配置 / refmap / 混淆映射那一整套。唯一覆盖缺口是别的�
    英文，按「聊天栏 / 物品 tooltip」分桶记到游戏目录的 `ferrybridge-collected.txt`。
    按 **F9** 能实时看到「已采集 N 条」在涨。
 2. 回摆渡，点底部「**导入游戏采集（开发者补漏）**」，读那份清单、批量翻译，写进同一份映射表。
-3. 游戏里**不用重启**，按 F9 能看到「已替换」开始涨。
+3. 游戏里**不用重启**，按 F9 能看到「已替换」开始涨。**按 F9 同时会顺手在游戏目录写一份
+   `ferrybridge-diagnose.txt`** —— 桥要是哪里不对劲，把那个文件整份发出来就行。
 
 两个入口写的是**同一个文件**，摆渡会**合并**：导出的批次除了自己那批，原有的条目照样留着
 （先前的 bug 是两边都整表覆盖，谁后点谁赢，会把先点的全抹掉，已修）。
@@ -111,6 +112,11 @@ mixin 配置 / refmap / 混淆映射那一整套。唯一覆盖缺口是别的�
 
 采集器只记录、不翻译，也永远不会自动替换——玩家自己敲进聊天框的话虽然会被记下来，
 但它不在表里就一直是原文。这条由「整条精确匹配」那条红线保证。
+
+**出问题了怎么反馈** —— 摆渡这边底部有个「**一键诊断**」按钮：点一下会把版本、运行环境、
+配置概览（**只写「设没设」，不写密钥的值**）、游戏侧状态和脱敏后的日志收成一个文件，
+并告诉你在哪。游戏里按 F9 也会生成对应的 `ferrybridge-diagnose.txt`。
+两份都不用你自己去翻日志、列模组清单，**整份发出来就行**。
 
 **日常排查用自检模式**，游戏保证能启动、不做任何替换：
 
@@ -343,16 +349,20 @@ DPAPI，会退化成明文存（会写进日志提醒），因为摆渡本来就
   以为它就是最新版。现在唯一来源是 `.github/workflows/release.yml` —— 打 `v*` tag
   时在 CI 上构建、测过、挂到 Release；也在 workflow_dispatch 下产出构建产物用于验证。
 - **代码完成模块化**：`mc_ai_translator.py` 从 3809 行拆到 **57 行的薄壳**，实现
-  全部下沉到 `ferrycore/` 的 18 个模块（自底向上：base / models / text / secrets /
-  net / config / versions / glossary / scan / hardcoded / bridge / update / community /
-  literalbridge / online / engine / packio / cli）。对外 API 一个字没变（`core.xxx`
-  照旧），GUI 和测试只改了几处 `mock.patch.object` 的目标模块。分层与拆分约定见
-  `docs/ARCHITECTURE.md`。
+  全部下沉到 `ferrycore/` 的 19 个模块（自底向上：base / models / text / secrets /
+  net / config / diagnose / versions / glossary / scan / hardcoded / bridge / update /
+  community / literalbridge / online / engine / packio / cli）。对外 API 一个字没变
+  （`core.xxx` 照旧），GUI 和测试只改了几处 `mock.patch.object` 的目标模块。分层与
+  拆分约定见 `docs/ARCHITECTURE.md`。
 - **顺手修掉两个真缺陷**：① `app_dir()` 平移后目录跑偏（配置会写进 `ferrycore/`）；
   ② `_version_key` 在同一个文件里被定义了两次、后者静默覆盖前者 —— 也就是说
   `latest_github_release` 一直在用一个它「没打算用」的实现，拆分会把这两处拆到不同
   模块、行为立刻分叉。现已合并为 `ferrycore.versions.version_key` 唯一口径。
-- **测试从 95 项加到 99 项**；顺手修掉一个「测试污染真实配置」的真缺陷 —— 两个 CLI 测试的
+- **新增「一键诊断」**：出问题时不用再自己去翻日志、找状态文件、列模组清单 ——
+  摆渡底部点一下就生成一份诊断包（版本 / 运行环境 / 配置概览 / 游戏侧状态 / 脱敏日志），
+  游戏里按 F9 也顺带写一份 `ferrybridge-diagnose.txt`。文件里**不含 API Key 的值**
+  （配置一栏只写「设没设、是明文还是密文」），可以直接丢出来。
+- **测试从 95 项加到 105 项**；顺手修掉一个「测试污染真实配置」的真缺陷 —— 两个 CLI 测试的
   `mock.patch` 目标跨模块失效（patch 了薄壳，而 `command_translate` 走的是 `ferrycore.cli`
   里 import 进来的名字），会**真的读本机 `ferry_config.json`、真的打网络**。用「明文探针」验过已修好。
 - README 里两条指向不存在文档的死链修掉。
@@ -437,7 +447,7 @@ python -m unittest -v test_spec_p0 test_refine
 - CI 在 `.github/workflows/tests.yml`，push 和 PR 时在 Python 3.11、3.12 上跑上面这些测试。目前 99 个全绿，绿的每一行都是修过之后才绿的呃。
 - 桥接模组在 `bridge/`，1.20.1 Forge，`.github/workflows/bridge.yml` 会构建它；自研桥已解冻并在跑，和 LiteralBridge 供数路线并行（前者管 tooltip / 聊天，后者管 NBT 显示层）。
 - 本地构建桥（改完 Java 想自己出 jar）：`cd bridge && ./build.sh`。离线优先，缓存缺件会自动联网补一次；新机器先跑 `bash tools/prefetch-forge-deps.sh` 生成 `.forge-prefetch/m2`。产物是 `bridge/build/libs/ferrybridge-1.0.0.jar`。
-- **代码结构**见 `docs/ARCHITECTURE.md`：`mc_ai_translator.py` 是 57 行的薄壳（重新导出 `ferrycore` 的名字 + 转交 CLI），实现在 `ferrycore/` 的 18 个模块里，依赖单向分层。动代码前先读那份文档 —— 尤其「`mock.patch.object(core, "X")` 跨模块会静默失效」那一节，那是拆分时最容易踩的坑。
+- **代码结构**见 `docs/ARCHITECTURE.md`：`mc_ai_translator.py` 是 57 行的薄壳（重新导出 `ferrycore` 的名字 + 转交 CLI），实现在 `ferrycore/` 的 19 个模块里，依赖单向分层。动代码前先读那份文档 —— 尤其「`mock.patch.object(core, "X")` 跨模块会静默失效」那一节，那是拆分时最容易踩的坑。
 - 设计文档在 `docs/`：`ARCHITECTURE.md` 是代码结构与拆分路线，`PLAN_SCALE_UP.md` 是规模化路线（大批量翻译 / 去 Mixin / 多加载器 / 多版本），`TEST_DESKTOP_ONESTEP.md` 是桌面「一步到位」流程的测试清单，`TEST_COLLECT_ROUND1.md` 是游戏内采集（开发者补漏）的测试清单。
 - 自己打包 exe（**平时用不着** —— 打 tag 时 CI 会自动构建并发到 Release）：
 

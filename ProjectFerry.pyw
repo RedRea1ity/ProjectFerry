@@ -556,6 +556,8 @@ class FerryApp(tk.Tk):
         # 底栏：低频工具靠右，左边只留一句最短操作提示。
         bottom = ttk.Frame(root)
         ttk.Button(bottom, text="日志", command=self._show_log).pack(side="right")
+        self.diagnose_button = ttk.Button(bottom, text="一键诊断", command=self._export_diagnostics)
+        self.diagnose_button.pack(side="right", padx=(6, 0))
         self.limits_button = ttk.Button(bottom, text="汉化限制", command=self._show_limits, state="disabled")
         self.limits_button.pack(side="right", padx=(6, 0))
         self.quality_button = ttk.Button(bottom, text="质量检查", command=self._show_quality)
@@ -1344,6 +1346,49 @@ class FerryApp(tk.Tk):
         ttk.Button(buttons, text="清空", command=lambda: (core.LOG_FILE.write_text("", encoding="utf-8"), refresh())).pack(side="left")
         self._center_over(window, 720, 430)
 
+    def _export_diagnostics(self) -> None:
+        """一键诊断：把排障信息收成一个文件，让用户能整份发给作者。
+
+        刻意做成「点一下就完事」——不弹保存对话框、不让选路径。会点这个按钮的人
+        本来就是遇到了问题；每多一步选择，就多一批人放弃反馈。
+
+        文件里**不含密钥的值**（配置一栏只写「设没设、是明文还是密文」），日志走脱敏，
+        所以这一份可以直接丢到公开的地方。
+        """
+        instance_path = self.path_var.get().strip()
+        instance = Path(instance_path) if instance_path and Path(instance_path).is_dir() else None
+
+        summary: dict[str, object] = {}
+        scan = self.scan_cache.get(instance_path) if instance_path else None
+        if scan is not None:
+            summary["检出模组数"] = len({f.modid for f in scan.english})
+            summary["英文语言文件"] = len(scan.english)
+            summary["已有中文（社区/官方）"] = len(scan.community)
+            summary["摆渡自己生成的包"] = len(scan.ai)
+
+        try:
+            target = core.write_diagnostic_report(
+                app_version=APP_VERSION,
+                instance=instance,
+                scan_summary=summary or None,
+            )
+        except OSError as exc:
+            messagebox.showerror("一键诊断", f"写诊断文件失败：{exc}")
+            return
+
+        self.status_var.set(f"诊断包已生成：{target.name}")
+        if messagebox.askyesno(
+            "一键诊断",
+            f"诊断包已生成：\n{target}\n\n"
+            "里面没有你的 API Key（配置一栏只记录「设没设、是不是密文」）。\n"
+            "遇到问题时把这个文件整份发出去就行 —— 粘贴或当附件都可以。\n\n"
+            "要现在打开它所在的文件夹吗？",
+        ):
+            try:
+                os.startfile(str(target.parent))
+            except (OSError, AttributeError):
+                messagebox.showinfo("一键诊断", f"文件在：\n{target}")
+
     def _show_quality(self) -> None:
         instance_path = self.path_var.get().strip()
         if not instance_path or instance_path not in self.scan_cache:
@@ -1552,6 +1597,8 @@ class FerryApp(tk.Tk):
             "【推荐】全在摆渡里一次做完，不用反复进游戏：选实例 → 扫描 → 勾「翻译硬编码文本」",
             "　　→ 开始翻译。译完会自动把映射写进游戏目录（勾了「译完自动导出桥映射」时），",
             "　　进游戏点 F9 看「已替换」在涨就成。tooltip、聊天栏文本都走这条线。",
+            "　　游戏里按 F9 还会顺手在游戏目录写一份 ferrybridge-diagnose.txt —— 桥要是",
+            "　　哪里不对劲，把那个文件整份发出来就行（不用自己去翻日志）。",
             "「导出桥接映射」：规则写进实例 config/literalbridge/ferry.json（给 LiteralBridge），",
             "　　映射写进游戏目录的 ferrybridge-mappings.json（给自研摆渡桥，每秒热重载、不用重启）。",
             "　　实例 mods 里没装 LiteralBridge 时：网络通就直接从 GitHub 下匹配你加载器",
@@ -1665,7 +1712,8 @@ class FerryApp(tk.Tk):
                 + "\n进游戏生效方式：\n"
                 "· LiteralBridge（聊天 / 实体名 / 动作栏）：检测到规则变化自动热重载；\n"
                 "· 摆渡桥（物品 tooltip / 聊天）：读上面那份 ferrybridge-mappings.json，\n"
-                "  每秒自动热重载，无需重启游戏；按 F9 可查看桥的实时状态。\n"
+                "  每秒自动热重载，无需重启游戏；按 F9 可查看实时状态，并导出一份"
+                "诊断包（游戏目录里的 ferrybridge-diagnose.txt，出问题时把它发出来）。\n"
                 "并确认资源包列表里摆渡包处于启用状态。"
             )
             if bridge_note:
@@ -1882,7 +1930,8 @@ class FerryApp(tk.Tk):
         count = int(payload.get("count", 0))
         message = (
             f"已写出 {count} 条摆渡桥映射：\n{payload.get('target', '')}\n\n"
-            "游戏内每秒自动热重载，无需重启；按 F9 可查看桥的实时状态。"
+            "游戏内每秒自动热重载，无需重启；按 F9 可查看实时状态并导出诊断包"
+            "（游戏目录里的 ferrybridge-diagnose.txt）。"
         )
         if payload.get("errors"):
             message += f"\n\n另有 {payload['errors']} 个批次失败，相关条目保留英文（下次重跑会自动重试）。"

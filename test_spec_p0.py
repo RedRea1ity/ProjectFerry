@@ -16,6 +16,7 @@ from pathlib import Path
 import mc_ai_translator as core
 from ferrycore import cli as ferrycli
 from ferrycore import config as ferryconfig
+from ferrycore import diagnose as ferrydiagnose
 from ferrycore import literalbridge as ferryliteralbridge
 from ferrycore import online as ferryonline
 from ferrycore import packio as ferrypackio
@@ -1220,6 +1221,78 @@ class LiteralBridgeFetchTests(unittest.TestCase):
             self.assertEqual(core.detect_mod_loader(instance), "neoforge")
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(core.detect_mod_loader(Path(tmp)), "")
+
+
+class DiagnoseTests(unittest.TestCase):
+    """一键诊断包：**能发得出去**（不含密钥、日志脱敏），且读不到文件也不崩。
+
+    这是给普通玩家用的功能 —— 他们对「日志」「配置」没概念，只会按一下按钮然后
+    把文件发出去。所以「文件里不能有他的密钥」不是可选项，是前提。
+    """
+
+    def test_config_shape_never_shows_secret_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "ferry_config.json"
+            core.save_config(
+                {"openai_api_key": "sk-diag-secret-1", "model_pool": [{"api_key": "sk-diag-secret-2"}]},
+                cfg,
+            )
+            text = "\n".join(ferrydiagnose._config_shape(cfg))
+            self.assertNotIn("sk-diag-secret-1", text)
+            self.assertNotIn("sk-diag-secret-2", text)
+            self.assertIn("openai_api_key", text)
+
+    def test_plaintext_secret_is_flagged(self):
+        """老配置是明文时要一眼看出来 —— 这正是最需要修的状态。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "ferry_config.json"
+            cfg.write_text(
+                json.dumps({"openai_api_key": "sk-plain-value", "model_pool": [{"api_key": "sk-nested"}]}),
+                encoding="utf-8",
+            )
+            text = "\n".join(ferrydiagnose._config_shape(cfg))
+            self.assertIn("明文", text)
+            self.assertNotIn("sk-plain-value", text)
+            self.assertNotIn("sk-nested", text)
+
+    @unittest.skipUnless(secretbox.available(), "仅 Windows DPAPI 可用")
+    def test_encrypted_secret_is_reported_as_ciphertext(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "ferry_config.json"
+            core.save_config({"openai_api_key": "sk-encrypted"}, cfg)
+            text = "\n".join(ferrydiagnose._config_shape(cfg))
+            self.assertIn("密文", text)
+            self.assertNotIn("sk-encrypted", text)
+
+    def test_log_tail_is_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "ferry.log"
+            log.write_text("Authorization: Bearer sk-abcdefgh12345678\n普通一行\n", encoding="utf-8")
+            with patch.object(ferrydiagnose, "LOG_FILE", log), \
+                    patch.object(ferrydiagnose, "CONFIG_FILE", Path(tmp) / "no-config.json"):
+                text = ferrydiagnose.build_diagnostic_report()
+            self.assertNotIn("sk-abcdefgh12345678", text)
+            self.assertIn("普通一行", text)
+
+    def test_missing_everything_still_returns_text(self):
+        """读不到日志 / 没有实例 / 没有配置，依然要给出一份可读的报告，不能抛异常。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(ferrydiagnose, "LOG_FILE", Path(tmp) / "nope.log"), \
+                    patch.object(ferrydiagnose, "CONFIG_FILE", Path(tmp) / "nope.json"):
+                text = ferrydiagnose.build_diagnostic_report(instance=Path(tmp) / "nope-instance")
+            self.assertIn("诊断包", text)
+            self.assertIn("运行环境", text)
+            self.assertIn("游戏侧", text)
+
+    def test_write_diagnostic_report_creates_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "nested" / "ferry-diagnose-x.txt"
+            with patch.object(ferrydiagnose, "LOG_FILE", Path(tmp) / "nope.log"), \
+                    patch.object(ferrydiagnose, "CONFIG_FILE", Path(tmp) / "nope.json"):
+                written = ferrydiagnose.write_diagnostic_report(app_version="9.9.9", dest=dest)
+            self.assertEqual(written, dest)
+            self.assertTrue(dest.is_file())
+            self.assertIn("9.9.9", dest.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

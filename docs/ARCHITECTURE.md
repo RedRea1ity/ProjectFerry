@@ -9,7 +9,7 @@
 |---|---|---|
 | `mc_ai_translator.py` | ~57 | **薄壳**：把 `ferrycore` 的名字重新导出 + 把命令行转交 `ferrycore.cli` |
 | `ProjectFerry.pyw` | ~3570 | tkinter GUI（单类 `FerryApp`） |
-| `ferrycore/` | 18 个模块 | 真正的实现，按职责分层 |
+| `ferrycore/` | 19 个模块 | 真正的实现，按职责分层 |
 
 **对外 API 没有变**：GUI 和测试仍然 `import mc_ai_translator as core`，
 `core.xxx` 全部照旧 —— 薄壳里刻意保留「全量重新导出」（含 `_` 开头的私有名），
@@ -37,11 +37,11 @@
                ▼
            scan.py            ← 实例发现、语言文件读取、缺失 key、模组状态
                │
-        ┌──────┼─────────┬──────────────┐
-        ▼      ▼         ▼              ▼
-   glossary.py versions.py config.py  text.py
-   术语表      版本/格式    配置/进度   解析/掩码/提示词/分批
-        └──────┴─────────┴──────────────┘
+        ┌──────┼─────────┬──────────────┬─────────┐
+        ▼      ▼         ▼              ▼         ▼
+   glossary.py versions.py config.py  text.py  diagnose.py
+   术语表      版本/格式    配置/进度   解析/掩码  诊断包
+        └──────┴─────────┴──────────────┴─────────┘
                ▼
         models.py   secrets.py   base.py     ← 数据结构 / 密钥保护 / 日志与路径
 ```
@@ -53,7 +53,8 @@
 | `text` | 310 | 语言文件解析、占位符与术语掩码、提示词、`cache_key`、分批 |
 | `secrets` | 172 | 密钥本地保护（Windows DPAPI 落盘加密） |
 | `net` | 80 | HTTP GET / POST JSON、统一错误文案 |
-| `config` | 200 | `DEFAULT_CONFIG`、配置读写（经 secrets 加密）、进度记录、git 忽略检测 |
+| `config` | 236 | `DEFAULT_CONFIG`、配置读写（经 secrets 加密）、进度记录、git 忽略检测 |
+| `diagnose` | 235 | 一键诊断包：把排障信息收成一个能整份发出去的纯文本（**不含密钥值**） |
 | `versions` | 403 | 版本 ↔ 资源包格式（本地表 / 远程表 / 客户端 jar 探测）、`version_key` |
 | `glossary` | 136 | 内置原版名词、官方术语下载、用户术语、批次术语提示 |
 | `scan` | 507 | 实例发现、语言文件 / Patchouli 读取、缺失 key 计算、模组状态构建 |
@@ -120,7 +121,7 @@ python tools/split_module.py move <模块名> <符号1> <符号2> ...
 ### 2. 每拆一步就跑测试
 
 ```bash
-python -m unittest test_refine test_spec_p0     # 99 项，必须全绿
+python -m unittest test_refine test_spec_p0     # 105 项，必须全绿
 python -m py_compile ProjectFerry.pyw mc_ai_translator.py ferrycore/*.py
 ```
 

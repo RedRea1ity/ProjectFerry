@@ -13,6 +13,7 @@
 - `secrets`       密钥本地保护（Windows DPAPI 落盘加密）
 - `net`           HTTP GET / POST JSON、统一错误文案
 - `config`        DEFAULT_CONFIG、配置读写（经 secrets 加密）、进度记录
+- `diagnose`      一键诊断包：把排障信息收成一个可整份发出去的纯文本（不含密钥）
 - `versions`      版本 ↔ 资源包格式、客户端 jar 探测、`version_key`
 - `glossary`      内置原版名词、官方术语下载、用户术语、术语提示
 - `scan`          实例发现、语言文件 / Patchouli 读取、缺失 key、模组状态

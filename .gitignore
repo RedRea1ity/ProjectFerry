@@ -15,6 +15,9 @@ user_glossary.json
 *.pre-lang-backup
 *.uninstalled.json
 *.zip.part
+# 「一键诊断」生成的报告：里面有用户的路径与模组清单，只该发给作者，不该进仓库
+diagnostics/
+ferry-diagnose-*.txt
 
 # Python
 __pycache__/
@@ -69,8 +72,8 @@ bridge/gradle/mirror.init.gradle
 bridge/gradle/mirror/
 
 # 混淆映射（9 MB），由 ForgeGradle 下载 MCP 映射后转换而来。
-# build.gradle 用它给 Mixin AP 生成 refmap；缺失时构建会明确报错并提示重建。
-# 体积大且可再生，不入库。
+# 2026-10-12 去掉 Mixin 之后，构建**不再需要**它（实测把这目录整个移走仍能 build）。
+# 留着只为体积大且可再生，不入库。
 bridge/gradle/mappings/
 
 # 从他人 mod jar 提取的中间产物，可由 bridge/tools/gen_hardcoded_map.py 重新生成
@@ -83,4 +86,3 @@ docs/PLAN_LEGACY_RESOURCE_PACK.md
 docs/SPEC_P0P1.md
 PROMPT_UI_translate_progress.md
 PROMPT_*.md
-bridge/gradle/mappings/
