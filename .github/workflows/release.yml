@@ -1,9 +1,13 @@
 name: release
 
+# 仓库里**不提交** ProjectFerry.exe —— 那个 13 MB 的二进制只在这里产生。
+# 打一个 v* tag（例如 v1.9.0）就会在 CI 上构建，并挂到对应的 GitHub Release。
 on:
   push:
     tags:
       - "v*"
+  # 允许手动跑一次做验证（手动触发只产出 workflow artifact，不发版）
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,13 +23,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # 先跑测试再打包：测试不过就不该产出 exe
       - name: Run unit tests
         run: python -m unittest -v test_refine test_spec_p0
+
       - name: Install PyInstaller
         run: pip install pyinstaller
+
       - name: Build exe
         run: pyinstaller ProjectFerry.spec --noconfirm
+
+      # 兜底检查：产物存在且不是空的，避免"发了个空包"
+      - name: Verify artifact
+        shell: pwsh
+        run: |
+          $exe = "dist/ProjectFerry.exe"
+          if (-not (Test-Path $exe)) { throw "构建产物缺失：$exe" }
+          $size = (Get-Item $exe).Length
+          if ($size -lt 1MB) { throw "产物太小，疑似构建失败：$size 字节" }
+          Write-Host "产物 OK：$exe（$([math]::Round($size/1MB,1)) MB）"
+
+      # 打 tag → 发 Release；手动触发 → 只作为 workflow artifact
+      #
+      # tag 名里带 '-' 的（如 v1.9.0-beta）自动标成 GitHub「预发行版」。
+      # 这一点很关键：应用内「检查更新」查的是 releases/latest，这个接口天然
+      # 跳过预发行版 —— 所以 beta 不会被自动推给现有用户，想尝鲜的自己来
+      # Release 页下。不带 '-' 的正常版本（v1.9.0）才会作为「最新版」被推送。
       - name: Upload exe to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/ProjectFerry.exe
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Upload exe as workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProjectFerry-exe
+          path: dist/ProjectFerry.exe

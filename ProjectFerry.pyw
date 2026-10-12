@@ -269,6 +269,7 @@ class FerryApp(tk.Tk):
         self._closing = False
         self.updating_glossary = False
         self.looking_up = False
+        self.fetching_literalbridge = False
         self.checking_update = False
         self.cancel_event = threading.Event()
         self._tx_phase: tuple[int, int, str] | None = None
@@ -483,6 +484,10 @@ class FerryApp(tk.Tk):
         ttk.Label(settings_header, textvariable=self.settings_summary_var, foreground=MUTED, font=FONT_SMALL).pack(side="left", padx=(2, 0))
         self.hardcoded_var = tk.BooleanVar(value=bool(self.config.get("translate_hardcoded", True)))
         ttk.Checkbutton(settings_header, text="翻译硬编码文本", variable=self.hardcoded_var, command=self._refine_changed).pack(side="left", padx=(12, 0))
+        self.auto_export_var = tk.BooleanVar(value=bool(self.config.get("auto_export_bridge", True)))
+        ttk.Checkbutton(settings_header, text="译完自动导出桥映射", variable=self.auto_export_var, command=self._auto_export_changed).pack(side="left", padx=(10, 0))
+        self.auto_update_var = tk.BooleanVar(value=bool(self.config.get("auto_update_literalbridge", True)))
+        ttk.Checkbutton(settings_header, text="自动升级 LiteralBridge", variable=self.auto_update_var, command=self._auto_update_changed).pack(side="left", padx=(10, 0))
         ttk.Button(settings_header, text="并发 / 模型池…", command=self._show_settings).pack(side="right")
         self.settings_toggle_button = tk.Label(settings_header, text="▸ 翻译设置", fg=ACCENT, bg=BG, font=FONT_SMALL_BOLD, cursor="hand2")
         self.settings_toggle_button.pack(side="right", padx=(0, 12))
@@ -509,6 +514,7 @@ class FerryApp(tk.Tk):
         self.profile_combo.bind("<<ComboboxSelected>>", self._profile_selected)
 
         # P0-2：API Key 默认掩码，右侧「显示」按钮切换明文（只改显示，不改存储）。
+        # 存储本身在 Windows 上走 DPAPI 加密（见 ferrycore/secrets.py），不是明文躺着。
         ttk.Label(self.grid_frame, text="API Key").grid(row=1, column=0, sticky="w", pady=3)
         self.api_key_var = tk.StringVar()
         key_frame = ttk.Frame(self.grid_frame)
@@ -558,6 +564,8 @@ class FerryApp(tk.Tk):
         self.lookup_button.pack(side="right", padx=(6, 0))
         self.bridge_button = ttk.Button(bottom, text="导出桥接映射", command=self.export_bridge_mapping)
         self.bridge_button.pack(side="right", padx=(6, 0))
+        self.collect_button = ttk.Button(bottom, text="导入游戏采集（开发者补漏）", command=self.import_collected)
+        self.collect_button.pack(side="right", padx=(6, 0))
         ttk.Label(bottom, text="双击行直接翻译；右键可卸载、还原、重翻，详见「使用说明」。", font=FONT_SMALL, foreground=FAINT).pack(side="left")
 
         # 先从下往上预留 底栏 → 设置 → 翻译区，再让表格占剩余空间；
@@ -673,7 +681,8 @@ class FerryApp(tk.Tk):
         if chosen == "只看疑似硬编码":
             return row["hardcoded"]
         if chosen == "只看已完成":
-            return row["missing"] == 0 and not row["uninstalled"] and not row["hardcoded"]
+            # 「完成」= 语言文件没缺口 + 硬编码也没剩没翻的（检出过但全翻完，仍算完成）。
+            return row["missing"] == 0 and not row["uninstalled"] and not row.get("hardcoded_pending")
         return True
 
     def _row_visible(self, row: dict, query: str, chosen: str) -> bool:
@@ -756,18 +765,28 @@ class FerryApp(tk.Tk):
         else:
             self._show_empty(None)
 
-    def _mark_hardcoded_row(self, row: dict) -> None:
-        """后台硬编码检测结果回来后，给已显示的行补上标记。"""
+    def _mark_hardcoded_row(self, row: dict, pending: int = 0) -> None:
+        """后台硬编码检测结果回来后，给已显示的行补上标记。
+
+        pending = 这个 modid 还有几条硬编码没翻（0 表示全翻完了）。
+        语言文件全通、硬编码也翻完 → 状态该是「已 AI 汉化完成 / 已 AI 补完」，
+        不该再挂 ⚠；只有还剩没翻的才挂。
+        """
         if row.get("hardcoded") or row.get("excluded"):
             return
         row["hardcoded"] = True
+        row["hardcoded_pending"] = max(0, int(pending or 0))
         label = row.get("label", "")
         if "硬编码" not in label:
             row["label"] = f"{label}·疑似硬编码文本" if label else "疑似硬编码文本"
-        if row["tag"] not in ("failed", "status_uninstalled", "status_reverted"):
-            row["symbol"] = "⚠"
-            row["short"] = "含硬编码文本" if row["missing"] == 0 else f"含硬编码·缺{row['missing']}"
-            row["tag"] = "status_hardcoded"
+        if row["tag"] in ("failed", "status_uninstalled", "status_reverted", "status_excluded"):
+            return
+        st = row.get("_status")
+        if st is None:
+            return
+        row["symbol"], row["short"], row["tag"] = self._status_visual(
+            st, bool(row["uninstalled"]), 0, bool(row["patch_pending"]), bool(row["excluded"]), row["hardcoded_pending"]
+        )
 
     # ---------- D / E / G：选择、快捷键、清除 ----------
 
@@ -811,7 +830,7 @@ class FerryApp(tk.Tk):
 
     # ---------- 扫描结果 -> 行数据 ----------
 
-    def _status_visual(self, st, is_uninstalled: bool, failed_count: int, hardcoded: bool, patch_pending: bool, is_excluded: bool = False) -> tuple[str, str, str]:
+    def _status_visual(self, st, is_uninstalled: bool, failed_count: int, patch_pending: bool, is_excluded: bool = False, hardcoded_pending: int = 0) -> tuple[str, str, str]:
         if failed_count:
             return "✗", f"失败{failed_count}条", "failed"
         if is_uninstalled:
@@ -820,11 +839,21 @@ class FerryApp(tk.Tk):
             return "⊘", "已还原", "status_reverted"
         if is_excluded:
             return "∅", "已排除（不翻译）", "status_excluded"
-        # A-2：含硬编码文本时单独成状态，避免掉进「待翻·缺0」这种自相矛盾的显示。
-        if hardcoded:
-            return "⚠", ("含硬编码文本" if st.missing == 0 else f"含硬编码·缺{st.missing}"), "status_hardcoded"
+        # 硬编码文本（走桥的那部分）还有没翻完的 → 挂 ⚠。只看「还差几条」，
+        # 不看「检出过没有」：全翻完了就不该再挂个 ⚠ 吓人。
+        if hardcoded_pending:
+            tail = f"·缺{st.missing}" if st.missing > 0 else ""
+            return "⚠", f"含硬编码·待翻{hardcoded_pending}{tail}", "status_hardcoded"
+        # 语言文件全通、硬编码也翻完 —— 这才叫「完成」。措辞要分清楚是谁翻的：
+        # 人工打底、AI 只补缺口的，说「已 AI 补完」；AI 从零翻完的，才说「已 AI 汉化完成」。
+        # 摆渡的定位是「临时的、到岸即离」，功劳该留给汉化组，别把人工的活算成自己的。
         if st.fully_translated:
-            return "✓", "完成", "status_complete"
+            if st.community_keys > 0 and st.ai_keys > 0:
+                return "✓", "已 AI 补完", "status_complete"
+            if st.community_keys > 0:
+                # 全是人工汉化，摆渡压根没插手 —— 不蹭功劳。
+                return "◈", "人工·完整（已让位）", "status_community"
+            return "✓", "已 AI 汉化完成", "status_complete"
         if st.has_community:
             short = "人工·完整" if st.fully_community else f"人工·缺{st.missing}"
             return "◈", short + ("·手册" if patch_pending else ""), "status_community"
@@ -832,7 +861,7 @@ class FerryApp(tk.Tk):
             return "◐", f"部分·缺{st.missing}", "status_partial"
         return "○", f"待翻·缺{st.missing}", "status_pending"
 
-    def _make_row(self, st, label: str, coverage: str, instance: Path, is_uninstalled: bool, failed_count: int, patch_pending: bool, hardcoded: bool, is_excluded: bool = False) -> dict:
+    def _make_row(self, st, label: str, coverage: str, instance: Path, is_uninstalled: bool, failed_count: int, patch_pending: bool, hardcoded: bool, is_excluded: bool = False, hardcoded_pending: int = 0) -> dict:
         # A-1：保证三个关键标记一定出现在主表状态文字里（调用方已拼则跳过）。
         if is_excluded and "已排除" not in label:
             label = f"{label}·已排除" if label else "已排除"
@@ -842,7 +871,7 @@ class FerryApp(tk.Tk):
             label = f"{label}·手册待翻" if label else "手册待翻"
         if failed_count and "失败" not in label:
             label = f"{label}·上次失败{failed_count}条" if label else f"上次失败{failed_count}条"
-        symbol, short, tag = self._status_visual(st, is_uninstalled, failed_count, hardcoded, patch_pending, is_excluded)
+        symbol, short, tag = self._status_visual(st, is_uninstalled, failed_count, patch_pending, is_excluded, hardcoded_pending)
         total = int(st.total_keys)
         percent = 0.0 if is_uninstalled or total <= 0 else (total - int(st.missing)) / total
         percent = max(0.0, min(1.0, percent))
@@ -851,6 +880,8 @@ class FerryApp(tk.Tk):
             "modid": st.modid,
             "label": label,
             "hardcoded": bool(hardcoded),
+            "hardcoded_pending": max(0, int(hardcoded_pending or 0)),
+            "_status": st,
             "missing": int(st.missing),
             "ai": int(st.ai_keys),
             "community": int(st.community_keys),
@@ -873,8 +904,8 @@ class FerryApp(tk.Tk):
 
     def _placeholder_row(self, instance: Path) -> dict:
         return {
-            "modid": PLACEHOLDER_MODID, "label": "", "hardcoded": False, "missing": 0, "ai": 0, "community": 0, "total": 0,
-            "percent": 0.0, "complete_text": "", "symbol": "", "short": "无待汉化模组", "tag": "status_pending",
+            "modid": PLACEHOLDER_MODID, "label": "", "hardcoded": False, "hardcoded_pending": 0, "missing": 0, "ai": 0, "community": 0, "total": 0,
+            "percent": 0.0, "complete_text": "", "symbol": "", "short": "无待汉化模组", "tag": "status_pending", "_status": None,
             "coverage": "", "instance": instance.name, "instance_path": str(instance),
             "uninstalled": False, "failed": False, "patch_pending": False, "has_community": False, "excluded": False, "placeholder": True,
         }
@@ -1087,6 +1118,8 @@ class FerryApp(tk.Tk):
         config["refine_community"] = bool(self.refine_var.get())
         config["community_enabled"] = bool(self.community_var.get())
         config["translate_hardcoded"] = bool(self.hardcoded_var.get())
+        config["auto_export_bridge"] = bool(self.auto_export_var.get())
+        config["auto_update_literalbridge"] = bool(self.auto_update_var.get())
         config["concurrency"] = int(self.concurrency_var.get())
         return config
 
@@ -1397,6 +1430,20 @@ class FerryApp(tk.Tk):
         elif not self.translating and self.path_var.get():
             self.start_scan()
 
+    def _auto_export_changed(self) -> None:
+        """「译完自动导出桥映射」开关：只影响翻译收尾，不必触发重扫。"""
+        if self._closing:
+            return
+        self.config["auto_export_bridge"] = bool(self.auto_export_var.get())
+        core.save_config(self.config)
+
+    def _auto_update_changed(self) -> None:
+        """「自动升级 LiteralBridge」开关：同上，只存配置。"""
+        if self._closing:
+            return
+        self.config["auto_update_literalbridge"] = bool(self.auto_update_var.get())
+        core.save_config(self.config)
+
     def _update_glossary(self) -> None:
         if self.updating_glossary or self.translating:
             return
@@ -1502,30 +1549,74 @@ class FerryApp(tk.Tk):
             "F5：重新扫描；Esc：清空搜索。",
             "选中模组后点「查询在线汉化」，可查多个网站有没有现成汉化；查询源在「设置」里自定义。",
             "右键「加入不翻译名单」：此模组完全跳过 AI 翻译（状态列显示 ∅），右键可移出恢复。",
-            "勾选「翻译硬编码文本」后，疑似硬编码的英文会随翻译批一起交给 AI，译文存进资源包旁的 .hardcoded.json。",
-            "「导出桥接映射」：按 LiteralBridge 的格式把规则写进实例 config、语言补丁并入资源包；装上 LiteralBridge 后进游戏即可替换 NBT / 硬编码显示。",
+            "【推荐】全在摆渡里一次做完，不用反复进游戏：选实例 → 扫描 → 勾「翻译硬编码文本」",
+            "　　→ 开始翻译。译完会自动把映射写进游戏目录（勾了「译完自动导出桥映射」时），",
+            "　　进游戏点 F9 看「已替换」在涨就成。tooltip、聊天栏文本都走这条线。",
+            "「导出桥接映射」：规则写进实例 config/literalbridge/ferry.json（给 LiteralBridge），",
+            "　　映射写进游戏目录的 ferrybridge-mappings.json（给自研摆渡桥，每秒热重载、不用重启）。",
+            "　　实例 mods 里没装 LiteralBridge 时：网络通就直接从 GitHub 下匹配你加载器",
+            "　　和游戏版本的那个 jar 丢进 mods（模组要重启游戏才加载）；网络不通或没有",
+            "　　支持你这版的才打开项目页自己下。注意它官方只有 Forge 版、MC 1.20.1–1.20.x，",
+            "　　NeoForge / 1.21+ 上装不上，那种情况只能靠自研摆渡桥。",
+            "　　已经装了的话（勾了「自动升级 LiteralBridge」时）顺带查一次新版，有就自动换掉，",
+            "　　旧版改名成 .jar.bak-… 留在原地备份，想回退把名字改回去就行。",
+            "「导入游戏采集（开发者补漏）」：只给开发者用的兜底 —— 桥在游戏里记下没翻到的英文，",
+            "　　回摆渡翻译后合并进同一份映射表。普通用户不需要它，桌面扫描已经覆盖绝大部分。",
+            "两个入口写的是同一份摆渡桥映射表，会合并，不会互相覆盖。",
         ])
         section("状态符号", [
-            "✓ 已完全汉化　◐ 部分翻译　○ 待翻译　◈ 已有人工汉化",
-            "⚠ 疑似硬编码　⊗ AI 汉化已卸载",
-            "⊘ 已还原英文　✗ 上次翻译失败",
+            "✓ 已 AI 汉化完成（AI 从零翻完）　✓ 已 AI 补完（人工打底、AI 只补缺口）",
+            "◈ 人工·完整（全是人工汉化，摆渡没插手）　◐ 部分翻译　○ 待翻译",
+            "⚠ 含硬编码·待翻N（走桥的那部分还没翻完）　⊗ AI 汉化已卸载",
+            "⊘ 已还原英文　∅ 已排除（不翻译）　✗ 上次翻译失败",
         ])
         section("能力边界", [
             "只能改语言文件：写死在模组代码、图片纹理、NBT 描述里的文字无法覆盖，扫描后点「汉化限制」查看。",
+        ])
+        section("密钥安全", [
+            "API Key 只存在本机的 ferry_config.json，只用来调你自己选的翻译接口，不上传到任何服务器。",
+            "Windows 上会用系统自带的 DPAPI 加密后再落盘 —— 文件被别人拿到、传到别的机器也解不开。",
+            "进程内存里仍是明文（不然没法拿去调接口）：要防的是文件泄漏，不是同机抓内存。",
+            "输入框默认打码显示，右侧「显示」只切换画面显示，不影响存储。",
         ])
         ttk.Button(body, text="关闭", command=window.destroy).pack(anchor="e", pady=(16, 0))
         self._center_over(window, 580, 500)
 
     def export_bridge_mapping(self) -> None:
-        """把映射导出成 LiteralBridge 的外部规则文件 + 资源包语言补丁。"""
+        """按钮入口：导出 LiteralBridge 规则 + 摆渡桥外部映射表，并弹窗说明。"""
         if self.scanning:
             messagebox.showinfo("提示", "正在扫描，请稍候再导出。")
             return
-        instance_value = self.path_var.get().strip()
+        result = self._write_bridge_mapping(self.path_var.get().strip(), notify=True)
+        if result is None:
+            return
+        if result.get("empty"):
+            self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
+            return
+        if result.get("error"):
+            messagebox.showerror("导出桥接映射", result["error"])
+            return
+        self.status_var.set(
+            f"桥接规则已导出：{result['groups']} 个模组组、{result['rules']} 条，详见弹窗。"
+        )
+
+    def _write_bridge_mapping(self, instance_value: str, *, notify: bool) -> dict | None:
+        """把扫描 / 翻译结果写成桥能读的两份文件，返回结果字典。
+
+        两个调用方：
+        · 手动点「导出桥接映射」→ notify=True，弹窗说明写到了哪；
+        · 翻译结束后自动导出 → notify=False，只更新状态栏，不打断流程。
+
+        自动导出是「进游戏之前、全在摆渡里扫描 → 翻译 → 一步到位」的最后一环：
+        译完即写进游戏目录，摆渡桥热重载立刻生效，不必再手点一次。
+        """
+        if not instance_value:
+            return None
         scan = self.scan_cache.get(instance_value)
         if scan is None:
-            messagebox.showinfo("提示", "请先扫描实例，再导出桥接映射。")
-            return
+            if notify:
+                messagebox.showinfo("提示", "请先扫描实例，再导出桥接映射。")
+            return None
         try:
             settings = core.resolve_translate_settings(self._snapshot_config(), Path(instance_value))
             pack = Path(settings["output_dir"]) / settings["pack_name"]
@@ -1536,8 +1627,7 @@ class FerryApp(tk.Tk):
         hardcoded = core.load_hardcoded_translations(pack) if pack else None
         groups = core.build_bridge_groups(scan.english, scan.community, ai_by_modid, hardcoded=hardcoded)
         if not groups:
-            self.status_var.set("没有可导出的映射：先完成一次翻译（或有社区/人工汉化）再试。")
-            return
+            return {"empty": True}
         mapping = core.build_bridge_mapping(scan.english, scan.community, ai_by_modid, hardcoded=hardcoded)
         rules_doc = core.build_literalbridge_export(groups)
         bridge_config_dir = Path(instance_value) / "config" / "literalbridge"
@@ -1546,39 +1636,258 @@ class FerryApp(tk.Tk):
             # 根节点只能是组（LiteralBridge 按组解析，混入元数据键会让整个文件被拒载）
             (bridge_config_dir / "ferry.json").write_text(json.dumps(rules_doc, ensure_ascii=False, indent=1), encoding="utf-8")
         except OSError as exc:
-            messagebox.showerror("导出桥接映射", f"写入规则文件失败：{exc}")
-            return
-        # tooltip 覆盖靠冻结的摆渡桥（LiteralBridge 的 mixin 不含 tooltip），它吃自己的旧格式
+            return {"error": f"写入规则文件失败：{exc}"}
+        # 自研摆渡桥读的是**游戏目录**下的外部映射表（ferrybridge-mappings.json），
+        # 不是 config/ferrybridge/translations.json —— 那是早期版本留下的位置，
+        # 现在的桥根本不读那里，写进去等于没写（这正是「导出后依旧全是英文」的原因之一）。
         try:
-            fb_dir = Path(instance_value) / "config" / "ferrybridge"
-            fb_dir.mkdir(parents=True, exist_ok=True)
-            fb_payload = {"format": 1, "generated": time.strftime("%Y-%m-%d %H:%M:%S"), "count": len(mapping), "map": mapping}
-            (fb_dir / "translations.json").write_text(json.dumps(fb_payload, ensure_ascii=False, indent=1), encoding="utf-8")
+            fb_target = core.write_ferrybridge_external(Path(instance_value), mapping)
         except OSError as exc:
-            messagebox.showerror("导出桥接映射", f"写入 tooltip 映射失败：{exc}")
-            return
-        pack_note = "，LiteralBridge 检测到规则文件变化后会自动热重载"
+            return {"error": f"写入摆渡桥映射失败：{exc}"}
         mods_dir = Path(instance_value) / "mods"
-        has_bridge = any(item.name.lower().startswith("literalbridge") for item in mods_dir.glob("*.jar")) if mods_dir.is_dir() else False
+        installed = core.installed_literalbridge(mods_dir)
+        has_bridge = installed is not None
         total_rules = sum(len(group.get("rules", [])) for group in rules_doc.values())
-        summary = (
-            f"规则文件（{len(rules_doc)} 个模组组、{total_rules} 条）：\n"
-            f"{bridge_config_dir / 'ferry.json'}\n"
-            f"tooltip 映射（{len(mapping)} 条）：\n"
-            f"{fb_dir / 'translations.json'}\n\n"
-            "进游戏生效方式：\n"
-            "· 聊天 / 实体名 / 动作栏：LiteralBridge 自动热重载，无需重启；\n"
-            "· 物品 tooltip：重启游戏后生效。\n"
-            "并确认资源包列表里摆渡包处于启用状态。"
-        )
+        # 没装 → 联网装一份；已装且开了自动升级 → 联网查一次有没有新版，有就换。
+        # 两者都是网络操作，只能丢后台；结果走 result_queue 的 "literalbridge" 消息。
+        bridge_note = ""
         if not has_bridge:
-            summary += f"\n\n注意：实例 mods 里没有 LiteralBridge（{core.LITERALBRIDGE_PAGE}），已为你打开项目页。"
+            bridge_note = self._start_literalbridge_fetch(instance_value, notify=notify, upgrade=False)
+        elif self.auto_update_var.get():
+            bridge_note = self._start_literalbridge_fetch(instance_value, notify=notify, upgrade=True)
+        if notify:
+            summary = (
+                f"LiteralBridge 规则（{len(rules_doc)} 个模组组、{total_rules} 条）：\n"
+                f"{bridge_config_dir / 'ferry.json'}\n"
+                f"摆渡桥映射（{len(mapping)} 条）：\n"
+                f"{fb_target}\n"
+                + (f"（实例 mods 里已装 LiteralBridge {installed['version'] or '未知版本'}）\n" if has_bridge else "")
+                + "\n进游戏生效方式：\n"
+                "· LiteralBridge（聊天 / 实体名 / 动作栏）：检测到规则变化自动热重载；\n"
+                "· 摆渡桥（物品 tooltip / 聊天）：读上面那份 ferrybridge-mappings.json，\n"
+                "  每秒自动热重载，无需重启游戏；按 F9 可查看桥的实时状态。\n"
+                "并确认资源包列表里摆渡包处于启用状态。"
+            )
+            if bridge_note:
+                summary += f"\n\n{bridge_note}"
+            messagebox.showinfo("桥接映射已导出", summary)
+        return {
+            "target": str(fb_target),
+            "ferry_json": str(bridge_config_dir / "ferry.json"),
+            "groups": len(rules_doc),
+            "rules": total_rules,
+            "mapping": len(mapping),
+            "has_bridge": has_bridge,
+            "bridge_note": bridge_note,
+        }
+
+    def _start_literalbridge_fetch(self, instance_value: str, *, notify: bool, upgrade: bool = False) -> str:
+        """取 / 升级 LiteralBridge，返回一句给用户看的说明。
+
+        规则（2026-10-12 定）：**网络通就直接从 GitHub Release 下载**匹配的 jar 装进 mods/；
+        只有「网络不通」或「没有支持该加载器 + MC 版本的本体」时，才回落到打开项目页。
+        upgrade=True 表示实例里已经有桥了，这次只是来查更新 —— 失败不弹窗也不开浏览器。
+        下载是网络操作，必须丢后台线程，否则会卡住界面。
+        """
+        if self.fetching_literalbridge:
+            return "正在获取 LiteralBridge，请稍候……"
+        self.fetching_literalbridge = True
+        threading.Thread(
+            target=self._literalbridge_worker,
+            args=(instance_value, notify, upgrade),
+            daemon=True,
+        ).start()
+        if upgrade:
+            return "已开始检查 LiteralBridge 更新……"
+        return "实例 mods 里没有 LiteralBridge，已开始从 GitHub 获取……"
+
+    def _literalbridge_worker(self, instance_value: str, notify: bool, upgrade: bool) -> None:
+        try:
+            instance = Path(instance_value)
+            loader = core.detect_mod_loader(instance)
+            version = core.detect_minecraft_version(instance) or ""
+            result = core.download_literalbridge(
+                instance / "mods", loader=loader, mc_version=version, upgrade=upgrade
+            )
+            result.update({"notify": notify, "upgrade": upgrade, "loader": loader, "version": version})
+        except Exception as exc:  # noqa: BLE001 —— 后台线程不能把异常抛回主循环
+            result = {
+                "ok": False,
+                "reason": "error",
+                "page": core.LITERALBRIDGE_PAGE,
+                "detail": core.redact_secrets(str(exc)),
+                "notify": notify,
+                "upgrade": upgrade,
+            }
+        self.result_queue.put(("literalbridge", result))
+
+    def _after_literalbridge(self, payload: dict) -> None:
+        """取桥结果落地：装好了 / 升级了就报喜，没装成且本来也没有 → 回落到打开项目页。"""
+        self.fetching_literalbridge = False
+        notify = bool(payload.get("notify"))
+        # upgrade=True：实例里本来就有桥，这次只是来查更新。
+        # 这种情况失败只是「没升成」，不该弹窗、抢焦点或开浏览器。
+        upgrade = bool(payload.get("upgrade"))
+        page = str(payload.get("page") or core.LITERALBRIDGE_PAGE)
+        action = str(payload.get("action") or "")
+        if payload.get("ok"):
+            version = payload.get("version")
+            if action == "up_to_date":
+                self.status_var.set(f"LiteralBridge 已是最新（{version}），无需更新。")
+                return
+            if action == "upgraded":
+                was = payload.get("from_version") or "旧版"
+                backup = payload.get("backup") or ""
+                self.status_var.set(
+                    f"LiteralBridge 已从 {was} 升级到 {version}，重启游戏后生效。"
+                )
+                if notify:
+                    messagebox.showinfo(
+                        "LiteralBridge 已升级",
+                        f"LiteralBridge：{was} → {version}\n"
+                        f"新版：{payload.get('path')}\n"
+                        + (f"旧版已改名备份：{backup}\n（想回退就把文件名里的 .bak-… 去掉）\n" if backup else "")
+                        + "\n模组本体需要【重启游戏】才会加载（映射表能热重载，模组不行）。",
+                    )
+                return
+            self.status_var.set(
+                f"已下载 LiteralBridge {version} 到实例 mods，重启游戏后生效。"
+            )
+            if notify:
+                messagebox.showinfo(
+                    "LiteralBridge 已装好",
+                    f"LiteralBridge {payload.get('version')} 已下载到：\n{payload.get('path')}\n\n"
+                    "它是模组本体，需要【重启游戏】才会加载（资源包能热重载，模组不行）。\n"
+                    "重进游戏后，摆渡导出的规则文件才会被它读到。",
+                )
+            return
+        reason = str(payload.get("reason") or "")
+        if reason == "already_installed":
+            return
+        tried = payload.get("tried") or []
+        if reason == "no_match":
+            loader = payload.get("loader") or "未知加载器"
+            version = payload.get("version") or "未知版本"
+            head = (
+                f"没有支持「{loader} + Minecraft {version}」的 LiteralBridge。\n"
+                "（它是硬编码文本的显示层桥，官方 Release 目前只有 Forge / MC 1.20.1–1.20.x 版。）\n"
+                f"已试过的构件：{'、'.join(tried) if tried else '无'}"
+            )
+        elif reason == "network":
+            head = f"联网获取 LiteralBridge 失败：{payload.get('detail') or '网络不可达'}"
+        elif reason == "no_release":
+            head = "GitHub 上没有带 jar 附件的 LiteralBridge Release。"
+        elif reason == "backup_failed":
+            head = (
+                "旧版 LiteralBridge 改名备份失败，为避免两份同 modId 同时加载崩游戏，这次没有升级。\n"
+                "多半是文件被占用（游戏还开着？），关掉游戏重试即可。"
+            )
+        else:
+            head = f"获取 LiteralBridge 时出错：{payload.get('detail') or '未知原因'}"
+        if upgrade:
+            # 本来就有桥，查更新失败只是「没升成」，安静说一声就行。
+            self.status_var.set(f"LiteralBridge 更新检查失败：{head.splitlines()[0]}")
+            return
+        self.status_var.set("没能自动获取 LiteralBridge。")
+        # 只在用户主动点「导出桥接映射」时才弹窗 / 开浏览器 ——
+        # 译完自动导出那条路径是静默的，别突然弹窗或抢焦点。
+        if notify:
+            messagebox.showinfo("需要手动安装 LiteralBridge", f"{head}\n\n已为你打开项目页。")
             try:
-                os.startfile(core.LITERALBRIDGE_PAGE)
+                os.startfile(page)
             except OSError:
                 pass
-        messagebox.showinfo("桥接映射已导出", summary)
-        self.status_var.set(f"桥接规则已导出：{len(rules_doc)} 个模组组、{total_rules} 条，详见弹窗。")
+
+    def import_collected(self) -> None:
+        """读游戏里采集的未命中文本 → 批量翻译 → 写摆渡桥外部映射表。
+
+        这是「大批量多模组翻译」的入口：玩家正常玩一圈，摆渡桥把「出现过、
+        但映射表里没有译文」的英文记进 ferrybridge-collected.txt；这里把它们
+        一次性翻译出来，写回游戏目录，桥每秒比对 mtime 热重载 —— 不用重启游戏。
+        """
+        if self.scanning or self.translating:
+            messagebox.showinfo("提示", "有任务正在进行，请稍候。")
+            return
+        instance_value = self.path_var.get().strip()
+        if not instance_value:
+            messagebox.showinfo("提示", "请先选择游戏实例。")
+            return
+        instance = Path(instance_value)
+        collected_path = instance / core.COLLECTED_NAME
+        buckets = core.parse_collected_file(collected_path)
+        if not buckets:
+            messagebox.showinfo(
+                "没有采集数据",
+                f"没找到可用的采集清单：\n{collected_path}\n\n"
+                "先去游戏里正常玩一圈（悬停物品、看聊天栏），\n"
+                "摆渡桥会把没翻到的英文记下来，再回来点这个按钮。",
+            )
+            return
+        total = sum(len(items) for items in buckets.values())
+        detail = "、".join(f"{name} {len(items)} 条" for name, items in sorted(buckets.items()))
+        if not messagebox.askyesno(
+            "导入游戏采集",
+            f"采集到 {total} 条未翻译文本（{detail}）。\n\n"
+            "会用当前翻译引擎把它们翻成中文，写进摆渡桥的外部映射表；\n"
+            "游戏内每秒自动热重载，无需重启。继续？",
+        ):
+            return
+        self.translating = True
+        self.cancel_event.clear()
+        self._set_translating_ui(True)
+        self.status_var.set(f"正在翻译采集到的 {total} 条文本……")
+        threading.Thread(target=self._collected_worker, args=(instance, buckets), daemon=True).start()
+
+    def _collected_worker(self, instance: Path, buckets: dict) -> None:
+        """后台线程：翻译采集文本并写出映射表，结果经队列回到 UI 线程。"""
+        try:
+            settings = core.resolve_translate_settings(self._snapshot_config(), instance)
+            entries = core.collected_entries(buckets)
+            translations, errors, _failed = core.translate_entries(
+                entries,
+                settings,
+                cancel_event=self.cancel_event,
+                progress=lambda done, total, _modid: self.result_queue.put(
+                    ("status", f"翻译采集文本中…… {done}/{total}")
+                ),
+            )
+            pairs = {
+                english: chinese
+                for english, chinese in (translations.get(core.COLLECTED_MODID) or {}).items()
+                if chinese and str(chinese).strip()
+            }
+            if not pairs:
+                self.result_queue.put(("collected", {
+                    "error": "没有翻译出任何条目。请检查翻译引擎配置（API key / 网络）。",
+                }))
+                return
+            target = core.write_ferrybridge_external(instance, pairs)
+            self.result_queue.put(("collected", {
+                "target": str(target),
+                "count": len(pairs),
+                "errors": len(errors),
+            }))
+        except Exception as exc:
+            self.result_queue.put(("collected", {"error": core.redact_secrets(str(exc))}))
+
+    def _after_collected(self, payload: dict) -> None:
+        """UI 线程侧：收尾翻译采集的结果。"""
+        self.translating = False
+        self._set_translating_ui(False)
+        error = payload.get("error")
+        if error:
+            self.status_var.set("翻译采集文本失败。")
+            messagebox.showerror("导入游戏采集", error)
+            return
+        count = int(payload.get("count", 0))
+        message = (
+            f"已写出 {count} 条摆渡桥映射：\n{payload.get('target', '')}\n\n"
+            "游戏内每秒自动热重载，无需重启；按 F9 可查看桥的实时状态。"
+        )
+        if payload.get("errors"):
+            message += f"\n\n另有 {payload['errors']} 个批次失败，相关条目保留英文（下次重跑会自动重试）。"
+        messagebox.showinfo("导入游戏采集", message)
+        self.status_var.set(f"采集文本已翻译并写出 {count} 条，游戏内热重载生效。")
 
     def start_online_lookup(self) -> None:
         """选中若干模组，逐个查询源探测网上有没有现成汉化。"""
@@ -2261,6 +2570,12 @@ class FerryApp(tk.Tk):
                     detected = []
                 hardcoded_findings.extend(detected)
                 hardcoded_namespaces = core.hardcoded_modids(scan, detected)
+                # 硬编码翻完没有？比对工具自己记的 .hardcoded.json —— 全翻完的 modid
+                # 才配显示「已 AI 汉化完成」，还有剩的挂 ⚠。检测没跑（缓存空）时先当未知。
+                hardcoded_pending = (
+                    core.pending_hardcoded_modids(detected, scan, core.load_hardcoded_translations(pack))
+                    if detected else {}
+                )
                 patch_pending = {entry.modid for entry in core.missing_patchouli_entries(scan)}
                 shown_mods = {status.modid for status in statuses}
                 for modid in sorted(patch_pending - shown_mods):
@@ -2284,7 +2599,7 @@ class FerryApp(tk.Tk):
                         is_excluded = st.modid in self.no_translate
                         complete = st.fully_translated and not is_uninstalled and st.modid not in patch_pending and not is_hardcoded
                         coverage = core.translation_coverage_label(st) if complete else ""
-                        rows.append(self._make_row(st, label, coverage, instance, is_uninstalled, failed_count, st.modid in patch_pending, is_hardcoded, is_excluded))
+                        rows.append(self._make_row(st, label, coverage, instance, is_uninstalled, failed_count, st.modid in patch_pending, is_hardcoded, is_excluded, hardcoded_pending.get(st.modid, 0)))
                         if not is_excluded and st.modid not in uninstalled[str(instance)] and ((st.missing > 0 and (not st.has_community or fill_community or refine_community)) or st.modid in patch_pending or (translate_hardcoded and st.modid in hardcoded_namespaces)):
                             translatable_targets.setdefault(str(instance), set()).add(st.modid)
                 else:
@@ -2718,6 +3033,9 @@ class FerryApp(tk.Tk):
         self.translate_all_button.configure(state=state)
         self.translate_selected_button.configure(state=state)
         self.stop_button.configure(state="normal" if active else "disabled")
+        # 桥接相关按钮也一起锁：翻译进行中不该再导出 / 导入，避免两个写入撞车。
+        self.bridge_button.configure(state=state)
+        self.collect_button.configure(state=state)
 
     def _finish_translate(self, packs: list[str], errors: list[str], cancelled: bool, usage_text: str = "") -> None:
         self.translating = False
@@ -2726,6 +3044,22 @@ class FerryApp(tk.Tk):
         self.progress_text_var.set("")
         nbt_count = self._last_nbt_count
         self._last_nbt_count = 0
+        # ── 「一步到位」最后一环 ──────────────────────────────────────
+        # 译完自动把映射写进游戏目录（摆渡桥读它、每秒热重载），
+        # 省掉手动点「导出桥接映射」那一步。失败也只降级成提示，绝不冒充翻译失败。
+        auto_note = ""
+        exported = None
+        if self.auto_export_var.get() and not cancelled and (packs or nbt_count):
+            try:
+                exported = self._write_bridge_mapping(self.path_var.get().strip(), notify=False)
+            except Exception as exc:  # 导出是收尾彩蛋，坏掉不能连累已生成的结果
+                exported = {"error": core.redact_secrets(str(exc))}
+            if exported and exported.get("mapping"):
+                auto_note = f"\n已自动导出桥接映射（{exported['mapping']} 条）—— 进游戏无需重启即生效。"
+                if exported.get("bridge_note"):
+                    auto_note += f"\n（{exported['bridge_note']}）"
+            elif exported and exported.get("error"):
+                auto_note = f"\n（自动导出桥接映射失败：{exported['error']}）"
         lines: list[str] = []
         if packs:
             lines.append("已生成：" + "\n".join(packs))
@@ -2737,10 +3071,15 @@ class FerryApp(tk.Tk):
             if cancelled:
                 lines.append("\n翻译已停止，这是不完整的包（只含已翻译的部分）。")
             if nbt_count:
-                lines.append(f"\n另翻译了 {nbt_count} 条硬编码文本（桥接显示用）——点「导出桥接映射」写进游戏。")
-                self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}：{len(packs)} 个资源包 + {nbt_count} 条硬编码文本。")
-            else:
-                self.status_var.set(f"翻译{'已停止' if cancelled else '完成'}，写入 {len(packs)} 个资源包。")
+                lines.append(f"\n另翻译了 {nbt_count} 条硬编码文本（桥接显示用）。")
+            if auto_note:
+                lines.append(auto_note)
+            base = f"翻译{'已停止' if cancelled else '完成'}：{len(packs)} 个资源包"
+            if nbt_count:
+                base += f" + {nbt_count} 条硬编码文本"
+            if exported and exported.get("mapping"):
+                base += f"，已自动导出桥接映射 {exported['mapping']} 条"
+            self.status_var.set(base + "。")
             if messagebox.askyesno("已停止" if cancelled else "完成", "\n".join(lines) + "\n\n是否打开所在目录？"):
                 try:
                     os.startfile(str(Path(packs[0]).parent))
@@ -2754,7 +3093,10 @@ class FerryApp(tk.Tk):
         else:
             self.status_var.set("没有需要翻译的 key（可能已由人工汉化覆盖，或已翻译完成）。")
             if nbt_count:
-                self.status_var.set(f"另翻译了 {nbt_count} 条硬编码文本；点「导出桥接映射」写进游戏。")
+                if exported and exported.get("mapping"):
+                    self.status_var.set(f"另翻译并自动导出 {nbt_count} 条硬编码文本的映射，进游戏即生效。")
+                else:
+                    self.status_var.set(f"另翻译了 {nbt_count} 条硬编码文本；点「导出桥接映射」写进游戏。")
         # 只有真正产生了变化（写包 / 有失败）时才自动重扫，避免“点翻译却只是在重扫”的错觉。
         if packs or errors:
             self.start_scan()
@@ -2991,6 +3333,8 @@ class FerryApp(tk.Tk):
                 self.start_scan()
             else:
                 self.status_var.set("没有自动找到 Minecraft 实例。你可以点击“浏览”手动选择。")
+        elif kind == "collected":
+            self._after_collected(payload)
         elif kind == "rows":
             self.scanning = False
             rows, translatable_targets, failed_modids, hardcoded, scan_cache, uninstalled, yield_reports = payload
@@ -3049,9 +3393,18 @@ class FerryApp(tk.Tk):
         elif kind == "hardcoded":
             instance_path, namespaces, findings = payload
             namespace_set = set(namespaces)
+            # 顺便数一下每个 modid 还有几条硬编码没翻 —— 决定状态是「已完成」还是挂 ⚠。
+            scan = self.scan_cache.get(instance_path)
+            pending: dict[str, int] = {}
+            if scan is not None:
+                instance = Path(instance_path)
+                pack = Path(self.config.get("output_dir") or instance / "resourcepacks") / (
+                    self.config.get("pack_name") or core.DEFAULT_CONFIG["pack_name"]
+                )
+                pending = core.pending_hardcoded_modids(findings, scan, core.load_hardcoded_translations(pack))
             for row in self.all_rows:
                 if row["instance_path"] == instance_path and row["modid"] in namespace_set:
-                    self._mark_hardcoded_row(row)
+                    self._mark_hardcoded_row(row, pending.get(row["modid"], 0))
             if findings:
                 self.hardcoded_results = list(self.hardcoded_results or []) + list(findings)
                 self.limits_button.configure(state="normal")
@@ -3166,6 +3519,8 @@ class FerryApp(tk.Tk):
             self.lookup_button.configure(state="normal")
             self.progress.configure(value=0)
             self._show_lookup_results(payload)
+        elif kind == "literalbridge":
+            self._after_literalbridge(payload)
         elif kind == "nbt_translated":
             self._last_nbt_count += int(payload)
         elif kind == "pack_progress":
