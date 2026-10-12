@@ -140,8 +140,11 @@ class CorpusTranslationTests(unittest.TestCase):
             "openai_model": "test-model",
             "glossary": {"Custom Widget": "自定义组件"},
         }
+        # patch 目标必须是 ferrycore.engine（resolve_translate_settings 的所在模块），
+        # 不能是薄壳 core —— 跨模块 patch 会静默失效，测试会退化成「读本机
+        # user_glossary.json」，本机有那份未被跟踪的文件时假绿、CI 上直接 KeyError。
         with tempfile.TemporaryDirectory() as tmp, patch.object(
-            core, "load_user_glossary", return_value={"Lead": "拴绳", "Redstone Dust": "红石粉"}
+            ferryengine, "load_user_glossary", return_value={"Lead": "拴绳", "Redstone Dust": "红石粉"}
         ):
             settings = core.resolve_translate_settings(config, Path(tmp), {"pack_format": 15})
         self.assertEqual(settings["glossary"], {"Custom Widget": "自定义组件"})
