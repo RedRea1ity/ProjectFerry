@@ -86,7 +86,7 @@ def _lenient_json_text(text: str) -> str:
     return "".join(out)
 
 
-def load_json_bytes(raw: bytes, source: str) -> dict[str, str]:
+def load_json_document(raw: bytes, source: str) -> dict[str, Any]:
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
@@ -100,6 +100,11 @@ def load_json_bytes(raw: bytes, source: str) -> dict[str, str]:
             raise ValueError(f"无法解析 {source}: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"语言文件不是 JSON 对象: {source}")
+    return value
+
+
+def load_json_bytes(raw: bytes, source: str) -> dict[str, str]:
+    value = load_json_document(raw, source)
     return {str(k): str(v) for k, v in value.items() if isinstance(v, (str, int, float, bool))}
 
 

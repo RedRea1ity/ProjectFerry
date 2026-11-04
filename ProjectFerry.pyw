@@ -272,6 +272,13 @@ class FerryApp(tk.Tk):
         self.fetching_literalbridge = False
         self.checking_update = False
         self.cancel_event = threading.Event()
+        # 非 MC 游戏（外挂模组）那一窗口的状态；窗口没开时 _loc_win 为 None。
+        self._loc_win: tk.Toplevel | None = None
+        self._loc_root: Path | None = None
+        self._loc_probe = None
+        self._loc_out_dir: Path | None = None
+        self._localizing = False
+        self._loc_cancel = threading.Event()
         self._tx_phase: tuple[int, int, str] | None = None
         self._tx_stats: dict | None = None
         self._progress_value = 0.0
@@ -568,7 +575,9 @@ class FerryApp(tk.Tk):
         self.bridge_button.pack(side="right", padx=(6, 0))
         self.collect_button = ttk.Button(bottom, text="导入游戏采集（开发者补漏）", command=self.import_collected)
         self.collect_button.pack(side="right", padx=(6, 0))
-        ttk.Label(bottom, text="双击行直接翻译；右键可卸载、还原、重翻，详见「使用说明」。", font=FONT_SMALL, foreground=FAINT).pack(side="left")
+        # 非 MC 游戏的入口放在左侧：它不是低频工具，是另一种「输入」。
+        ttk.Button(bottom, text="汉化其他游戏…", command=self._show_localize).pack(side="left", padx=(0, 10))
+        ttk.Label(bottom, text="双击行可翻译，右键更多。", font=FONT_SMALL, foreground=FAINT).pack(side="left")
 
         # 先从下往上预留 底栏 → 设置 → 翻译区，再让表格占剩余空间；
         # 高度不足时只压缩表格，翻译按钮、进度条和底栏始终可见。
@@ -1345,6 +1354,326 @@ class FerryApp(tk.Tk):
         ttk.Button(buttons, text="打开日志目录", command=lambda: os.startfile(str(core.LOG_FILE.parent))).pack(side="left", padx=8)
         ttk.Button(buttons, text="清空", command=lambda: (core.LOG_FILE.write_text("", encoding="utf-8"), refresh())).pack(side="left")
         self._center_over(window, 720, 430)
+
+    # ---------- 非 MC 游戏：外挂模组（引擎适配器）的入口 ----------
+    #
+    # 这一窗口刻意跟主界面**不共享**表格与状态：MC 是「实例 → 模组列表 → 逐模组翻」，
+    # 别的游戏是「一个目录 → 一个副本」。硬塞进同一张表会把两边都搞脏。
+
+    def _loc_alive(self) -> bool:
+        try:
+            return self._loc_win is not None and bool(self._loc_win.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _show_localize(self) -> None:
+        if self.translating or self.scanning or self.managing_pack or self._localizing:
+            messagebox.showinfo("汉化其他游戏", "有任务正在进行，请稍候再试。")
+            return
+        if self._loc_alive():
+            self._loc_win.deiconify()
+            self._loc_win.lift()
+            self._loc_win.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("汉化其他游戏（实验）")
+        win.configure(bg=BG)
+        win.transient(self)
+        win.minsize(620, 460)
+        self._loc_win = win
+        win.protocol("WM_DELETE_WINDOW", self._close_localize)
+
+        box = ttk.Frame(win, padding=(14, 12, 14, 12))
+        box.pack(fill="both", expand=True)
+        ttk.Label(
+            box,
+            text="选一个游戏目录：先体检，再决定要不要翻。认得引擎才会动手，认不出就把线索摊开给你。",
+            foreground=MUTED, font=FONT_SMALL, wraplength=640, justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        pick = ttk.Frame(box)
+        pick.pack(fill="x")
+        # 记住上次的目录：这是纯界面记忆，放 ferry_ui.json。
+        # 别塞进 ferry_config.json —— `load_config` 只认 DEFAULT_CONFIG 里的键，
+        # 塞进去读不回来（今天踩过），而且那是翻译配置，不是窗口状态。
+        self._loc_path_var = tk.StringVar(value=str(self._load_ui_state().get("localize_dir") or ""))
+        entry = ttk.Entry(pick, textvariable=self._loc_path_var, font=FONT_BODY)
+        entry.pack(side="left", fill="x", expand=True)
+        entry.bind("<Return>", lambda _e: self._loc_start_probe())
+        ttk.Button(pick, text="浏览…", command=self._loc_choose).pack(side="left", padx=(6, 0))
+        self._loc_path_var.trace_add("write", self._loc_path_changed)
+
+        tools = ttk.Frame(box)
+        tools.pack(fill="x", pady=(9, 6))
+        self._loc_probe_button = make_action_button(tools, "体检", self._loc_start_probe, ACCENT)
+        self._loc_probe_button.pack(side="left")
+        self._loc_run_button = make_action_button(tools, "开始汉化", self._loc_start, GREEN, state="disabled")
+        self._loc_run_button.pack(side="left", padx=(8, 0))
+        self._loc_stop_button = make_action_button(tools, "停止", self._loc_stop, RED, state="disabled")
+        self._loc_stop_button.pack(side="left", padx=(8, 0))
+        self._loc_status_var = tk.StringVar(value="")
+        ttk.Label(tools, textvariable=self._loc_status_var, foreground=MUTED, font=FONT_SMALL).pack(side="right")
+
+        self._loc_progress = ttk.Progressbar(box, mode="determinate")
+        self._loc_progress.pack(fill="x", pady=(0, 8))
+
+        # 报告区：只读但可选中复制 —— 认不出引擎时，这一段是要发给我看的东西。
+        self._loc_report = tk.Text(
+            box, height=13, wrap="word", bg=CARD, fg=INK, font=FONT_BODY,
+            relief="flat", padx=12, pady=10,
+            highlightbackground=BORDER, highlightthickness=1, spacing1=1, spacing3=3,
+        )
+        self._loc_report.pack(fill="both", expand=True)
+        for tag, color, font in (
+            ("head", INK, FONT_BOLD),
+            ("ok", GREEN, FONT_BODY),
+            ("warn", AMBER, FONT_BODY),
+            ("bad", RED, FONT_BODY),
+            ("dim", MUTED, FONT_SMALL),
+        ):
+            self._loc_report.tag_configure(tag, foreground=color, font=font)
+        self._loc_report.configure(state="disabled")
+
+        foot = ttk.Frame(box)
+        foot.pack(fill="x", pady=(8, 0))
+        self._loc_open_button = ttk.Button(foot, text="打开产出文件夹", command=self._loc_open_output, state="disabled")
+        self._loc_open_button.pack(side="left")
+        ttk.Button(foot, text="关闭", command=self._close_localize).pack(side="right")
+
+        self._loc_write([("dim", "还没有体检。选好目录后点「体检」—— 它不发一个请求、不写一个字节。")])
+        self._center_over(win, 700, 560)
+
+    def _close_localize(self) -> None:
+        core.LOG.info("localize: closing window (localizing=%s)", self._localizing)
+        if self._localizing:
+            if not messagebox.askyesno("汉化其他游戏", "还在翻译，确定停下并关闭吗？", parent=self._loc_win):
+                return
+            self._loc_cancel.set()
+        self._localizing = False
+        if self._loc_win is not None:
+            try:
+                self._loc_win.destroy()
+            except tk.TclError:
+                pass
+        self._loc_win = None
+
+    def _loc_choose(self) -> None:
+        if not self._loc_alive():
+            return
+        path = filedialog.askdirectory(title="选择游戏目录（exe 所在的那一层）", parent=self._loc_win)
+        if path:
+            self._loc_path_var.set(path)
+            self._loc_start_probe()
+
+    def _loc_path_changed(self, *_args: object) -> None:
+        # 换了目录，上一次的体检结论就作废 —— 宁可多点一次，也不能拿旧结论开新游戏。
+        self._loc_probe = None
+        self._loc_refresh_run_state()
+
+    def _remember_localize_dir(self, root: Path) -> None:
+        try:
+            state = self._load_ui_state()
+            state["localize_dir"] = str(root)
+            UI_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except (OSError, tk.TclError) as exc:
+            core.LOG.debug("remember localize dir failed: %s", type(exc).__name__)
+
+    def _loc_refresh_run_state(self) -> None:
+        if not self._loc_alive():
+            return
+        ready = bool(self._loc_probe is not None and self._loc_probe.ready)
+        self._loc_run_button.configure(state="normal" if ready else "disabled")
+
+    def _loc_set_busy(self, busy: bool) -> None:
+        if not self._loc_alive():
+            return
+        self._loc_probe_button.configure(state="disabled" if busy else "normal")
+        self._loc_stop_button.configure(state="normal" if busy else "disabled")
+        if busy:
+            self._loc_run_button.configure(state="disabled")
+        else:
+            self._loc_refresh_run_state()
+
+    def _loc_write(self, lines: list[tuple[str, str]]) -> None:
+        if not self._loc_alive():
+            return
+        widget = self._loc_report
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        for tag, text in lines:
+            widget.insert("end", text + "\n", tag)
+        widget.configure(state="disabled")
+
+    def _loc_start_probe(self) -> None:
+        if not self._loc_alive() or self._localizing:
+            return
+        raw = self._loc_path_var.get().strip().strip('"')
+        if not raw:
+            messagebox.showinfo("体检", "先选一个游戏目录。", parent=self._loc_win)
+            return
+        root = Path(raw)
+        if not root.is_dir():
+            messagebox.showinfo("体检", f"这个路径不是一个目录：\n{raw}\n\n请选 exe 所在的那一层。", parent=self._loc_win)
+            return
+        self._loc_root = root
+        self._loc_probe = None
+        self._loc_out_dir = None
+        self._remember_localize_dir(root)
+        if self._loc_alive():
+            self._loc_open_button.configure(state="disabled")
+            self._loc_progress.configure(value=0)
+            self._loc_status_var.set("正在体检……")
+            self._loc_write([("dim", "正在看这个游戏的目录结构，稍等。")])
+        self._loc_set_busy(True)
+        threading.Thread(target=self._loc_probe_worker, args=(root,), daemon=True).start()
+
+    def _loc_probe_worker(self, root: Path) -> None:
+        try:
+            adapter = core.engine_adapters.detect(root)
+            if adapter is None:
+                hints = core.scan_hints(root)
+                self.result_queue.put(("loc_probe", (root, None, "", hints)))
+                return
+            report = adapter.probe(root)
+            self.result_queue.put(("loc_probe", (root, report, adapter.name, [])))
+        except Exception as exc:
+            self.result_queue.put(("loc_error", ("probe", core.redact_secrets(str(exc)))))
+
+    def _loc_probe_lines(self, report, adapter_name: str) -> list[tuple[str, str]]:
+        lines: list[tuple[str, str]] = [("head", f"引擎：{report.engine}（适配器 {adapter_name}）")]
+        if report.container or report.text_format:
+            lines.append(("dim", f"容器：{report.container or '未标注'}　｜　文本格式：{report.text_format or '未标注'}"))
+        lines.append(("", f"待翻：{report.unit_count} 条"))
+        if report.writable:
+            lines.append(("ok", "可写：是 —— 只会产出副本，原游戏一个字节都不动"))
+        else:
+            lines.append(("bad", "可写：否 —— 翻了也放不回去，这就该停手"))
+        if report.verifiable:
+            lines.append(("ok", "自动验证：可以（能自己起游戏、读画面确认真的是中文）"))
+        else:
+            lines.append(("dim", "自动验证：这个引擎还没有验证通道，只能你自己进游戏看"))
+        if report.images_with_text:
+            lines.append(("warn", f"图片文字：{report.images_with_text} 处 —— 文本层永远碰不到，得重画图"))
+        for note in report.notes:
+            lines.append(("dim", note))
+        lines.append(("", ""))
+        if report.ready:
+            lines.append(("ok", "结论：可以开工。点「开始汉化」，翻完会产出一个新 exe，原版留着。"))
+        elif not report.readable:
+            lines.append(("bad", "结论：认不出文本在哪，先别开工。"))
+        elif not report.writable:
+            lines.append(("bad", "结论：写不回去，先别开工 —— 这才是真正会白干的那一步。"))
+        else:
+            lines.append(("bad", "结论：没找到可翻译的文本单元。"))
+        return lines
+
+    def _loc_hint_lines(self, root: Path, hints: list[str]) -> list[tuple[str, str]]:
+        lines: list[tuple[str, str]] = [
+            ("bad", "没有适配器认得这个游戏"),
+            ("dim", "摆渡不是不能翻它，是还不知道它的文本住在哪。下面是把目录摊开看到的线索："),
+            ("", ""),
+        ]
+        for hint in hints:
+            lines.append(("", f"· {hint}"))
+        lines.append(("", ""))
+        lines.append(("dim", f"目录：{root}"))
+        lines.append(("dim", "把这段发给我，就能判断该先加哪个引擎的适配器。"))
+        return lines
+
+    def _loc_start(self) -> None:
+        if not self._loc_alive() or self._localizing:
+            return
+        probe = self._loc_probe
+        root = self._loc_root
+        if probe is None or root is None or not probe.ready:
+            messagebox.showinfo("开始汉化", "先体检，确认「可写」和条数之后再开工。", parent=self._loc_win)
+            return
+        config = self._snapshot_config()
+        try:
+            settings = core.localize_settings(config, root)
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("开始汉化", core.redact_secrets(str(exc)), parent=self._loc_win)
+            return
+        if settings["engine"] in core.ENGINES_WITH_KEY and not settings.get("api_key"):
+            messagebox.showinfo(
+                "缺少 API Key",
+                f"现在的引擎是「{settings['engine']}」，需要 API Key。\n\n"
+                "请回主界面展开「翻译设置」填好密钥并保存，再回来点开始。",
+                parent=self._loc_win,
+            )
+            return
+        self._localizing = True
+        self._loc_cancel.clear()
+        self._loc_set_busy(True)
+        core.LOG.info("localize: start root=%s engine=%s entries=%s", root, settings.get("engine"), probe.unit_count)
+        if self._loc_alive():
+            self._loc_status_var.set("正在翻译……")
+            self._loc_progress.configure(maximum=max(1, probe.unit_count), value=0)
+            self._loc_open_button.configure(state="disabled")
+        threading.Thread(target=self._loc_worker, args=(root, settings), daemon=True).start()
+
+    def _loc_stop(self) -> None:
+        if not self._localizing:
+            return
+        self._loc_cancel.set()
+        if self._loc_alive():
+            self._loc_status_var.set("已请求停止，等当前批次返回后收尾……")
+
+    def _loc_worker(self, root: Path, settings: dict) -> None:
+        def progress(done: int, total: int, modid: str) -> None:
+            self.result_queue.put(("loc_progress", (done, total, modid)))
+
+        try:
+            result = core.localize_game(
+                root, settings=settings, progress=progress, cancel_event=self._loc_cancel
+            )
+            core.LOG.info("localize: done entries=%s translated=%s applied=%s out=%s",
+                          result.entries, result.translated, result.applied, result.out_path)
+            self.result_queue.put(("loc_done", result))
+        except Exception as exc:
+            core.LOG.exception("localize: worker failed")
+            self.result_queue.put(("loc_error", ("run", core.redact_secrets(str(exc)))))
+
+    def _loc_show_result(self, result) -> None:
+        lines: list[tuple[str, str]] = []
+        if result.applied and result.out_path:
+            lines.append(("ok", f"完成：{result.applied} 条已写回"))
+            lines.append(("", f"副本：{result.out_path}"))
+            lines.append(("dim", "原游戏没有改动。双击这个副本就是中文版。"))
+            self._loc_out_dir = Path(result.out_path).parent
+            if self._loc_alive():
+                self._loc_open_button.configure(state="normal")
+            self._loc_status_var.set(f"完成 · {result.applied} 条")
+        elif result.translated and not result.applied:
+            lines.append(("warn", f"拿到 {result.translated} 条译文，但一条都没能写回去"))
+            self._loc_status_var.set("写回失败")
+        elif result.entries:
+            lines.append(("warn", "抽到了文本，但没有产出副本"))
+            self._loc_status_var.set("未产出")
+        else:
+            lines.append(("warn", "没有产出"))
+            self._loc_status_var.set("未产出")
+        lines.append(("", ""))
+        for line in result.summary().split("\n"):
+            if line.strip():
+                lines.append(("dim", line))
+        if result.missed:
+            lines.append(("warn", f"{result.missed} 条没拿到译文；再跑一次会只补缺的。"))
+        for conflict in result.conflicts[:6]:
+            lines.append(("bad", f"冲突：{conflict}"))
+        if len(result.conflicts) > 6:
+            lines.append(("bad", f"……另有 {len(result.conflicts) - 6} 处冲突，见运行日志。"))
+        for error in result.errors[:6]:
+            lines.append(("bad", error))
+        lines.append(("", ""))
+        if result.applied:
+            lines.append(("dim", "下一步：双击副本进游戏看一眼。文本层翻不到的东西（图片按钮、特殊字体）不在这次范围内。"))
+        self._loc_write(lines)
+
+    def _loc_open_output(self) -> None:
+        if self._loc_out_dir is not None and Path(self._loc_out_dir).is_dir():
+            os.startfile(str(self._loc_out_dir))
 
     def _export_diagnostics(self) -> None:
         """一键诊断：把排障信息收成一个文件，让用户能整份发给作者。
@@ -2951,10 +3280,12 @@ class FerryApp(tk.Tk):
                         packs = instance / "resourcepacks"
                         scan = core.scan_inputs(instance / "mods", packs if packs.is_dir() else None, instance)
                     english = core.english_map_for(scan.english, set(modids))
+                    ftb_selected = any(modid.lower().replace("-", "_") == "ftbquestlocalizer" for modid in modids)
+                    ftb_english = dict(scan.ftb_localizer) if (ftb_selected and scan.ftb_localizer) else None
                     for modid in modids:
-                        if modid not in english:
+                        if modid not in english and not (modid.lower().replace("-", "_") == "ftbquestlocalizer" and ftb_english):
                             skipped.append(modid)
-                    changed.extend(core.revert_mods(pack, english, settings["pack_format"]))
+                    changed.extend(core.revert_mods(pack, english, settings["pack_format"], ftb_english=ftb_english))
                 core.remove_progress_modids(set(modids))
             self.result_queue.put(("reverted", (mode, changed, skipped)))
         except Exception as exc:
@@ -3243,6 +3574,12 @@ class FerryApp(tk.Tk):
                     refine_community=settings["refine_community"],
                 )
                 patch_entries = core.missing_patchouli_entries(scan, modids)
+                ftb_entries = core.missing_ftb_entries(scan, pack_path, modids) if settings["pack_format"] > 3 else []
+                if not scan.ftb_localizer and (scan.ftb_localizer_installed or any(file.modid.lower().replace("-", "_") in {"ftbquests", "ftb_quests"} for file in scan.english)):
+                    if scan.ftb_localizer_installed:
+                        self.result_queue.put(("status", "已检测到 FTB Quest Localizer，但还没导出：进游戏运行 /ftblang export 后重新扫描即可。摆渡只读这个导出文件，不碰 SNBT。"))
+                    else:
+                        self.result_queue.put(("status", "想翻 FTB 任务书：先在 CurseForge / Modrinth 安装 FTB Quest Localizer，进游戏运行 /ftblang export，再回来重新扫描。摆渡不解析、不改写任何 SNBT。"))
                 baseline: dict[str, dict[str, str]] = {}
                 if settings.get("community_enabled"):
                     candidate_scan = core.ScanResult(
@@ -3258,6 +3595,7 @@ class FerryApp(tk.Tk):
                 else:
                     baseline_files = []
                 entries.extend(patch_entries)
+                entries.extend(ftb_entries)
                 # 硬编码候选（桥接用）：key 是 nbt:<hash>，译文存 sidecar，不写进资源包。
                 hardcoded_entries: list[core.Entry] = []
                 if config.get("translate_hardcoded", True):
@@ -3310,10 +3648,11 @@ class FerryApp(tk.Tk):
                 nbt_pairs: dict[str, dict[str, str]] = {}
                 if hardcoded_entries:
                     nbt_pairs = core.hardcoded_pairs_from_entries(hardcoded_entries, translations)
-                if translations or baseline:
+                ftb_components = core.translated_ftb_components(scan, ftb_entries, translations, pack) if settings["pack_format"] > 3 else {}
+                if translations or baseline or ftb_components:
                     lang_translations = {modid: dict(data) for modid, data in baseline.items()}
                     for modid, data in translations.items():
-                        lang_translations.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith(("patchouli:", "nbt:"))})
+                        lang_translations.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith(("patchouli:", "nbt:", "ftblocalizer:"))})
                     self.result_queue.put(("phase", (write_phase, write_phase, "写入资源包")))
                     def report_pack_write(done: int, total: int, namespace: str) -> None:
                         # 写 zip 按命名空间上报，避免打包阶段零反馈。
@@ -3322,7 +3661,11 @@ class FerryApp(tk.Tk):
                     pages = core.load_pack_patchouli(pack)
                     pages.update(core.translated_patchouli_files(scan, patch_entries, translations))
                     sources = {modid: {key: "community" for key in data} for modid, data in baseline.items()}
-                    core.write_pack(pack, merged, settings["pack_format"], core.load_pack_reverted(pack), patchouli=pages, sources=core.merged_sources(pack, merged, sources), pack_progress=report_pack_write)
+                    if ftb_components:
+                        # 新译出的结构化条目登记为 AI；已有条目保留原来源，避免把社区来源洗成 AI。
+                        old_ftb_sources = core.load_pack_sources(pack).get("ftbquestlocalizer", {})
+                        sources.setdefault("ftbquestlocalizer", {}).update({key: old_ftb_sources.get(key, "ai") for key in ftb_components})
+                    core.write_pack(pack, merged, settings["pack_format"], core.load_pack_reverted(pack), patchouli=pages, sources=core.merged_sources(pack, merged, sources), pack_progress=report_pack_write, ftb_components=ftb_components, ftb_sources=core.ftb_source_map(scan, ftb_components) or None)
                     packs_written.append(str(pack))
                 if nbt_pairs:
                     try:
@@ -3592,6 +3935,41 @@ class FerryApp(tk.Tk):
             self._apply_update_swap(payload)
         elif kind == "update_failed":
             self.status_var.set(f"更新下载失败：{payload}。可到发布页手动下载。")
+        elif kind == "loc_probe":
+            if not self._loc_alive():
+                return
+            root, report, adapter_name, hints = payload
+            self._loc_set_busy(False)
+            if report is None:
+                self._loc_probe = None
+                self._loc_status_var.set("认不出这个游戏")
+                self._loc_write(self._loc_hint_lines(root, hints))
+            else:
+                self._loc_probe = report
+                self._loc_status_var.set("体检通过，可以开工" if report.ready else "体检完成，但不建议开工")
+                self._loc_write(self._loc_probe_lines(report, adapter_name))
+            self._loc_refresh_run_state()
+        elif kind == "loc_progress":
+            if not self._loc_alive():
+                return
+            done, total, modid = payload
+            self._loc_progress.configure(maximum=max(1, total), value=done)
+            self._loc_status_var.set(f"正在翻译 {modid} · {done}/{total} 条")
+        elif kind == "loc_done":
+            self._localizing = False
+            if not self._loc_alive():
+                return
+            self._loc_set_busy(False)
+            self._loc_show_result(payload)
+        elif kind == "loc_error":
+            self._localizing = False
+            if self._loc_alive():
+                self._loc_set_busy(False)
+                self._loc_status_var.set("出错了")
+                self._loc_write([("bad", "出错了"), ("", str(payload[1]))])
+                messagebox.showerror("汉化其他游戏", str(payload[1]), parent=self._loc_win)
+            else:
+                messagebox.showerror("汉化其他游戏", str(payload[1]))
         elif kind == "error":
             source, message = payload if isinstance(payload, tuple) and len(payload) == 2 else ("unknown", str(payload))
             if source == "translate":

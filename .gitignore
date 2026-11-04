@@ -86,3 +86,8 @@ docs/PLAN_LEGACY_RESOURCE_PACK.md
 docs/SPEC_P0P1.md
 PROMPT_UI_translate_progress.md
 PROMPT_*.md
+
+# 本机代理工具残留（2026-11-04 加）：权限恢复备份、记忆库、工作区元数据
+.acl-recovery/
+.dsh-meow/
+.obsidian-mem

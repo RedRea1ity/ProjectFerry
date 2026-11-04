@@ -28,6 +28,7 @@ class LangFile:
     path: str
     data: dict[str, str]
     is_ai_generated: bool = False
+    components: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -55,6 +56,12 @@ class ScanResult:
     # 它们不抵扣缺口（游戏里并未生效），但作为术语语料喂给 AI。
     # 这是「最尊重汉化组」的关键：没启用的译文仍被参考，只是不能冒充已生效。
     reference_only: dict[str, dict[str, str]] = field(default_factory=dict)
+    # 未启用包里的结构化 FTB 译文（modid → {lang key: 结构}），
+    # 默认只当语料；--trust-disabled-packs 提升为人工汉化时要用它保住富文本。
+    reference_only_components: dict[str, dict[str, Any]] = field(default_factory=dict)
+    ftb_localizer: dict[str, Any] = field(default_factory=dict)
+    ftb_localizer_source: str = ""
+    ftb_localizer_installed: bool = False
 
 
 @dataclass

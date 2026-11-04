@@ -17,6 +17,7 @@ import mc_ai_translator as core
 from ferrycore import cli as ferrycli
 from ferrycore import config as ferryconfig
 from ferrycore import diagnose as ferrydiagnose
+from ferrycore import json_components as ferryjsoncomponents
 from ferrycore import literalbridge as ferryliteralbridge
 from ferrycore import online as ferryonline
 from ferrycore import packio as ferrypackio

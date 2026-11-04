@@ -9,15 +9,17 @@ import sys
 
 from pathlib import Path
 
+from ferrycore import adapters as engine_adapters
 from ferrycore.base import CONFIG_FILE, USER_GLOSSARY_FILE
 from ferrycore.bridge import COLLECTED_MODID, COLLECTED_NAME, collected_entries, parse_collected_file, write_ferrybridge_external
 from ferrycore.community import community_corpus, fetch_community_baseline
 from ferrycore.config import DEFAULT_CONFIG, load_config, public_config, save_config, update_progress
 from ferrycore.engine import ENGINES_WITH_KEY, resolve_translate_settings, translate_entries
 from ferrycore.glossary import BUILTIN_GLOSSARY, DEFAULT_GLOSSARY_EN_URL, DEFAULT_GLOSSARY_ZH_URL, fetch_glossary, load_user_glossary
+from ferrycore.localize import localize_game
 from ferrycore.models import LangFile, mod_status_label
 from ferrycore.packio import load_pack_reverted, load_pack_sources, load_uninstalled_ai, merge_pack_translations, merged_sources, migrate_legacy_pack, write_pack, yield_to_community
-from ferrycore.scan import _promote_disabled_packs, build_mod_status, entries_with_baseline, find_instance_dirs, load_pack_patchouli, missing_patchouli_entries, resolve_instance_path, scan_inputs, skip_ignored_entries, translated_patchouli_files
+from ferrycore.scan import _promote_disabled_packs, build_mod_status, entries_with_baseline, find_instance_dirs, load_pack_patchouli, missing_ftb_entries, missing_patchouli_entries, resolve_instance_path, scan_inputs, skip_ignored_entries, translated_ftb_components, translated_patchouli_files, ftb_source_map
 from ferrycore.text import format_usage
 from ferrycore.versions import detect_minecraft_version, pack_format_for_version
 
@@ -197,16 +199,22 @@ def command_translate(args: argparse.Namespace) -> int:
     # 但会进 reference_only 当术语语料。
     # --trust-disabled-packs 让玩家手动推翻这一判断：把未启用的包也算人工汉化。
     scan = scan_inputs(mods, resourcepacks, instance)
+    if not scan.ftb_localizer and (scan.ftb_localizer_installed or any(file.modid.lower().replace("-", "_") in {"ftbquests", "ftb_quests"} for file in scan.english)):
+        expected = instance / "kubejs" / "assets" / "ftbquestlocalizer" / "lang" / "en_us.json"
+        action = "请先在 CurseForge / Modrinth 安装 FTB Quest Localizer（与整合包版本对应的 jar），进游戏运行 /ftblang export。" if not scan.ftb_localizer_installed else "已检测到 FTB Quest Localizer；请进游戏运行 /ftblang export 生成导出文件。"
+        print(f"未找到 FTB Quest Localizer 导出文件：{expected}\n{action} 摆渡不会读取或改写任何 SNBT。")
     if getattr(args, "trust_disabled_packs", None):
         _promote_disabled_packs(scan)
     if getattr(args, "ignore_disabled_packs", None):
         scan.reference_only.clear()
+        scan.reference_only_components.clear()
     if migrate_legacy_pack(Path(settings["output_dir"]) / settings["pack_name"], settings["pack_format"]):
         scan = scan_inputs(mods, resourcepacks, instance)
         if getattr(args, "trust_disabled_packs", None):
             _promote_disabled_packs(scan)
         if getattr(args, "ignore_disabled_packs", None):
             scan.reference_only.clear()
+            scan.reference_only_components.clear()
     yield_to_community(scan, Path(settings["output_dir"]) / settings["pack_name"])
     requested = only_modids_from_args(args)
     eligible = {file.modid for file in scan.english if (not requested or file.modid.lower().replace("-", "_") in requested) and file.modid not in load_uninstalled_ai(Path(settings["output_dir"]) / settings["pack_name"])}
@@ -216,7 +224,9 @@ def command_translate(args: argparse.Namespace) -> int:
     uninstalled = load_uninstalled_ai(Path(settings["output_dir"]) / settings["pack_name"])
     entries = [entry for entry in entries if entry.modid not in uninstalled]
     patch_entries = [entry for entry in missing_patchouli_entries(scan, only_modids_from_args(args)) if entry.modid not in uninstalled]
+    ftb_entries = missing_ftb_entries(scan, Path(settings["output_dir"]) / settings["pack_name"], only_modids_from_args(args)) if settings["pack_format"] > 3 else []
     entries.extend(patch_entries)
+    entries.extend(ftb_entries)
     entries = skip_ignored_entries(entries, config)
     if not entries and not baseline:
         print("没有需要翻译的 key（可能已由人工汉化覆盖、AI 汉化已卸载，或没有缺失）。不生成资源包。")
@@ -228,7 +238,8 @@ def command_translate(args: argparse.Namespace) -> int:
     if usage_text:
         print("各模型用量（按字符量平摊）：")
         print(usage_text)
-    if not all_translations and not baseline:
+    ftb_components = translated_ftb_components(scan, ftb_entries, all_translations, Path(settings["output_dir"]) / settings["pack_name"]) if settings["pack_format"] > 3 else {}
+    if not all_translations and not baseline and not ftb_components:
         print("没有成功翻译任何 key，不生成资源包。")
         if errors:
             print(f"共 {len(errors)} 个批次失败：", file=sys.stderr)
@@ -238,19 +249,95 @@ def command_translate(args: argparse.Namespace) -> int:
     pack = Path(settings["output_dir"]) / settings["pack_name"]
     new_values = {modid: dict(data) for modid, data in baseline.items()}
     for modid, data in all_translations.items():
-        new_values.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith("patchouli:")})
+        new_values.setdefault(modid, {}).update({key: value for key, value in data.items() if not key.startswith(("patchouli:", "nbt:", "ftblocalizer:"))})
     merged = merge_pack_translations(pack, new_values, scan.community)
     pages = load_pack_patchouli(pack)
     pages.update(translated_patchouli_files(scan, patch_entries, all_translations))
     sources = {modid: {key: "community" for key in data} for modid, data in baseline.items()}
-    write_pack(pack, merged, settings["pack_format"], load_pack_reverted(pack), version_unconfirmed=version_unconfirmed, patchouli=pages, sources=merged_sources(pack, merged, sources))
+    if ftb_components:
+        # 新译出的结构化条目登记为 AI；已有条目保留原来源，避免把社区来源洗成 AI。
+        old_ftb_sources = load_pack_sources(pack).get("ftbquestlocalizer", {})
+        sources.setdefault("ftbquestlocalizer", {}).update({key: old_ftb_sources.get(key, "ai") for key in ftb_components})
+    write_pack(pack, merged, settings["pack_format"], load_pack_reverted(pack), version_unconfirmed=version_unconfirmed, patchouli=pages, sources=merged_sources(pack, merged, sources), ftb_components=ftb_components, ftb_sources=ftb_source_map(scan, ftb_components) or None)
     print(f"完成: {pack}")
     print(f"写入翻译: {sum(len(v) for v in all_translations.values())} 条；累计 {sum(len(v) for v in merged.values())} 条；缓存: {settings['cache_dir']}")
+    ftb_done = len(all_translations.get("ftbquestlocalizer", {}))
+    if ftb_done:
+        print(f"FTB 任务书：本次翻译 {ftb_done} 段富文本，共 {len(ftb_components)} 个语言 key 写入资源包（未译完的部分保留英文）。")
     if errors:
         print(f"提示：{len(errors)} 个批次失败，相关 key 保留英文（下次运行会自动重试）。", file=sys.stderr)
         for message in errors:
             print(f"  - {message}", file=sys.stderr)
     return 0
+
+
+def command_localize(args: argparse.Namespace) -> int:
+    """非 Minecraft 游戏的汉化入口。
+
+    跟 `translate` 分开而不是复用它，原因只有一个：`translate` 的每一步
+    都假设自己在处理一个 MC 实例（mods 目录、resourcepacks、options.txt、
+    pack_format）。硬塞进来会让两边的语义都变模糊。这里只共享翻译核心。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+    if args.list_adapters:
+        print("已注册的引擎适配器：" + "、".join(engine_adapters.registered()))
+        return 0
+
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+
+    adapter = None
+    options = {"include_samples": bool(getattr(args, "include_samples", False))}
+    if args.adapter:
+        adapter = engine_adapters.get(args.adapter, **options)
+        if adapter is None:
+            print(f"没有这个适配器：{args.adapter}（可用：{'、'.join(engine_adapters.registered())}）", file=sys.stderr)
+            return 2
+
+    settings = None
+    if not args.dry_run:
+        config = load_config()
+        overrides = {
+            "engine": args.engine,
+            "base_url": args.base_url,
+            "api_key": args.api_key,
+            "model": args.model,
+            "batch_size": args.batch_size,
+            "timeout": args.timeout,
+            "delay": args.delay,
+            "concurrency": args.concurrency,
+            # 非 MC 游戏没有 pack_format 这个概念，只为满足内部校验而固定
+            "pack_format": 15,
+        }
+        settings = resolve_translate_settings(config, root, overrides)
+        if settings["engine"] in ENGINES_WITH_KEY and not settings["api_key"]:
+            print(f"{settings['engine']} 引擎需要 API key：请在 ferry_config.json 配置对应字段，或用 --api-key 传入。", file=sys.stderr)
+            return 2
+
+    result = localize_game(
+        root,
+        settings=settings,
+        adapter=adapter,
+        out=Path(args.out) if args.out else None,
+        dry_run=args.dry_run,
+        adapter_options=options,
+    )
+    print(result.summary())
+    for conflict in result.conflicts[:20]:
+        print(f"  冲突：{conflict}", file=sys.stderr)
+    if args.dry_run:
+        return 0 if result.probe.ready else 1
+    if result.errors:
+        for message in result.errors[:10]:
+            print(f"  批次失败：{message}", file=sys.stderr)
+    return 0 if result.ok else 1
 
 
 def command_config(args: argparse.Namespace) -> int:
@@ -358,4 +445,24 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_collect.add_argument("--concurrency", type=int, default=None, help="并发翻译线程数（多模型加速），默认 1")
     bridge_collect.add_argument("--pack-format", type=float, default=None, help="仅用于满足内部校验；桥接映射与其无关")
     bridge_collect.set_defaults(func=command_bridge_collect)
+    localize = sub.add_parser(
+        "localize",
+        help="汉化非 Minecraft 游戏（外挂引擎适配器，只产出副本）",
+        description="先体检、再翻译、最后写回副本。原游戏一个字节都不动。",
+    )
+    localize.add_argument("game", nargs="?", default=".", help="游戏目录（含 exe，或已解包的 data/）")
+    localize.add_argument("--list-adapters", action="store_true", help="列出已注册的引擎适配器")
+    localize.add_argument("--adapter", default=None, help="强制指定适配器，不填则自动识别")
+    localize.add_argument("--dry-run", action="store_true", help="只体检并统计条数，不翻译、不写文件")
+    localize.add_argument("--include-samples", action="store_true", help="连引擎官方示例剧本一起翻（默认跳过，那不是游戏内容）")
+    localize.add_argument("--out", default=None, help="副本输出路径；默认 <游戏名>.cn.exe / <游戏名>.cn")
+    localize.add_argument("--engine", choices=["mymemory", "deepl", "openai", "anthropic", "gemini", "local"], default=None, help="翻译引擎；默认 mymemory（免费）")
+    localize.add_argument("--base-url", default=None, help="覆盖当前引擎的 base URL")
+    localize.add_argument("--api-key", default=None, help="覆盖当前引擎的 API key")
+    localize.add_argument("--model", default=None, help="覆盖当前引擎的模型名")
+    localize.add_argument("--batch-size", type=int, default=None)
+    localize.add_argument("--timeout", type=int, default=None)
+    localize.add_argument("--delay", type=float, default=None)
+    localize.add_argument("--concurrency", type=int, default=None, help="并发翻译线程数（多模型加速），默认 1")
+    localize.set_defaults(func=command_localize)
     return parser

@@ -24,6 +24,12 @@
 - `literalbridge` LiteralBridge 探测 / 下载 / 自动升级
 - `online`        在线汉化查询
 - `engine`        翻译引擎、批次翻译、重试、用量统计
+- `adapters/`     引擎适配器（外挂模组）：把非 MC 游戏压成扁平 Entry 列表再摊回去
+- `localize`      非 MC 游戏的汉化编排：探测 → 抽取 → 翻译 → 回写 → 报缺口
 - `packio`        资源包生成 / 卸载 / 还原 / 让位、锁文件、质量检查
 - `cli`           命令行入口
+
+`adapters/` 是唯一允许「按引擎加文件」的地方：新增一个引擎不改上面任何模块，
+只在 `adapters/` 里加一个实现 `probe` / `collect` / `apply` 的文件并注册。
+翻译那一侧完全复用 `engine.translate_entries`，它本来就不知道文本来自哪个游戏。
 """

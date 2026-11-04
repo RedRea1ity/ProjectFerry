@@ -226,46 +226,52 @@ L3 的准确形态：
 > 需求来自 2026-10-12：他朋友问「摆渡能不能翻任务书，FTB 任务书」。
 > **排期：排在重构摆渡桥（L2 多加载器）之前**，是下一个功能版本的主体。
 
-### 8.1 现状：**不能**，而且差的不止一层
+### 8.1 现状：**不做 SNBT，只吃 Localizer 的导出**
+
+2026-10-20 定案（用户原话）：
+
+> 「摆渡不解析、不写回任何 snbt，只读 FTB Quest Localizer 用 /ftblang export 导出的
+> kubejs/assets/ftbquestlocalizer/lang/en_us.json，翻完把 zh_cn.json 写进摆渡自己的资源包
+> （不要动 kubejs 目录里的原文件）；检测不到 Localizer 就按 LiteralBridge 那套引导用户安装
+> ——1.20.1 的 chapters/*.snbt 内联文本，摆渡一律不碰。」
 
 | 事实 | 后果 |
 |---|---|
-| 1.20.1 的 FTB Quests 把标题 / 描述**内联在 `config/ftbquests/quests/chapters/*.snbt`** | **SNBT**，不是 JSON；不在 `lang/` 下；也不是资源包 → 扫描器完全不认 |
-| 新版 FTB Quests 改成 `config/ftbquests/quests/lang/en_us.snbt` | 还是 SNBT，键形如 `quest.<id>.title` / `quest.<id>.quest_desc` |
-| 摆渡只认 `assets/<modid>/lang/(en_us\|zh_cn).(json\|lang)` + Patchouli | 任务书两条路都不在识别范围内 |
+| 1.20.1 的 FTB Quests 把标题 / 描述**内联在 `config/ftbquests/quests/chapters/*.snbt`** | **SNBT**，摆渡有意**不支持**；不扫、不读、不写、不改 |
+| `/ftblang export` 把任务文本导出成标准 lang JSON | 落点是 `kubejs/assets/ftbquestlocalizer/lang/en_us.json` |
+| 摆渡早就在扫 `kubejs/assets/*/lang/` | 普通字符串 key 走原有流程；数组/对象见 8.2 |
 
-### 8.2 但有一条**半通**的现成路（重要）
+### 8.2 真缺口：数组值被丢掉
 
-`scan_inputs` **早就在扫 `kubejs/assets/*/lang/`**。所以只要整合包装了
-**FTB Quest Localizer**（`/ftblang export en_us`）或 **Quest Lang Files**，
-任务文本会被导出成**标准 lang JSON**，落到 `kubejs/assets/<modid>/lang/*.json`
-→ 摆渡读得到、也翻得动。
-
-**但会掉一半**：`ferrycore/text.py` 的解析是
+`ferrycore/text.py` 的 `load_json_bytes` 只留
 `{str(k): str(v) for k, v in value.items() if isinstance(v, (str, int, float, bool))}`
-—— **值是数组 / 对象的条目直接丢弃**。而 FTB 任务描述常常是带
-`clickEvent` / `hoverEvent` / 颜色的富文本 JSON 数组 → **整条被跳过**
-（注意：是**不翻**，不是翻坏）。只有纯字符串字段（简单标题）能翻出来。
+—— **值是数组 / 对象的条目直接丢弃**。FTB 任务描述常是带
+`clickEvent` / `hoverEvent` / 颜色的富文本数组 → 整条不翻。
 
-### 8.3 做「完整支持」要动的东西
+现在的做法（**不改写、不压平**）：
 
-1. **SNBT 处理**：倾向**不做通用 SNBT 解析器**，而是「保守改写字符串字面量」——
-   不动结构、只替换引号里的文本，风险最低。（整合包任务书结构一旦被改写坏，
-   玩家打开任务书会整个读不出来。）
-2. **富文本感知**：只翻 `text` 字段，原样保住 `clickEvent` / `hoverEvent` /
-   `color` / `translate` / `keybind` 等结构键 —— 与 `mask_placeholders` 同一思路，
-   但作用在 JSON 结构上。
-3. **落地方式**：写回 `config/ftbquests/quests/lang/zh_cn.snbt`（新版），
-   或配合导出模组写 lang JSON（1.20.1 现状）。
-4. **与资源包解耦**：任务书是**实例数据**，不是资源包 ——「让位 / 卸载 / 还原」
-   那套需要一个对应机制（第一版可以只「生成译文文件、不自动覆盖」）。
-5. **必须先备份**：改写前把 `config/ftbquests/quests/` 整个备一份（学 Quest Lang Files
-   的 `quests-backup-<时间戳>/` 做法）。
+1. `json_components.extract_text_nodes` 只取真正显示给玩家的文本：
+   数组里的字符串、对象 `text`、`extra` / `with`、`hoverEvent` 的 `show_text`
+   内容；`clickEvent`、`translate`、`keybind`、`color` 等结构键一律不碰。
+2. 每个文本片段生成内部 key `ftblocalizer:<真实 lang key>#<JSON 指针>`，
+   用正常翻译引擎翻；**这个 key 只用于对账，绝不写进游戏读取的 JSON**。
+3. 写包时把这些片段按指针填回原结构，输出
+   `assets/ftbquestlocalizer/lang/zh_cn.json` 到**摆渡自己的资源包**；
+   kubejs 目录里的原文件只读。
+4. `FERRY_FTB_SOURCES.json` 记录每个指针当时的英文原稿；导出内容改了，
+   该指针退回新英文并重新翻译，不会继续显示旧译文。
+5. 人工汉化已覆盖的 lang key 整条让位（同一个 key 只能整条生效）。
+
+### 8.3 装不上 Localizer 时
+
+只做提示，不自动下载、不改实例模组：`mods/` 里按 jar 元数据识别
+`ftbquestlocalizer`，区分「没装」与「装了但还没导出」，提示安装模组或运行
+`/ftblang export`。
 
 ### 8.4 红线（别为了这个功能破例）
 
 - **不因为「想支持任务书」而放宽扫描器的 lang 识别** —— 那会把大量非文本 JSON 当成
   语言文件，误报会把「只看疑似硬编码」那类筛选彻底淹掉。
-- 参考工具（都是现成的，可对照思路，注意各自许可证）：
-  `FTB Quest Localizer`（模组）、`XDawned/FTBQLocalizationTools`、
-  `peunsu/ftb-snbt-lib`（Python 读 SNBT）、`jerrita/ftb-quests-translator`。
+- **不写回 kubejs / config 下的任何文件**，包括 chapters/*.snbt 与 lang/*.snbt。
+- 参考工具（注意各自许可证）：`FTB Quest Localizer`（模组）、`XDawned/FTBQLocalizationTools`、
+  `peunsa/ftb-snbt-lib`、`jerrita/ftb-quests-translator`。

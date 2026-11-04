@@ -65,6 +65,8 @@
 | `literalbridge` | 417 | LiteralBridge 探测已装版本、下载、自动升级 |
 | `online` | 65 | 在线汉化查询 |
 | `engine` | 448 | 各翻译引擎 API、批次翻译、重试、用量统计 |
+| `adapters/` | 5 个文件 | 引擎适配器（外挂模组）：`base` 契约 / `container` 字节层 / `tyrano` 具体引擎 / `hints` 认不出时给线索 / `__init__` 注册表 |
+| `localize` | ~170 | 非 MC 游戏的汉化编排：探测 → 抽取 → 翻译 → 回写 → 报缺口 |
 | `packio` | 513 | 资源包生成 / 卸载 / 还原 / 让位，锁文件与质量检查 |
 | `cli` | 361 | `argparse` 与各 `command_*` |
 
@@ -121,8 +123,8 @@ python tools/split_module.py move <模块名> <符号1> <符号2> ...
 ### 2. 每拆一步就跑测试
 
 ```bash
-python -m unittest test_refine test_spec_p0     # 105 项，必须全绿
-python -m py_compile ProjectFerry.pyw mc_ai_translator.py ferrycore/*.py
+python -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize   # 158 项，必须全绿
+python -m py_compile ProjectFerry.pyw mc_ai_translator.py ferrycore/*.py ferrycore/adapters/*.py
 ```
 
 再顺手验一遍 GUI 的调用面（防止漏导出）：
@@ -147,7 +149,87 @@ python -c "import mc_ai_translator as core; print(len(dir(core)))"
    网络请求。已把 patch 目标改成 `ferrycore.cli`，并用「明文探针」实验验证修复有效
    （把真实配置临时换成一份已知明文，跑完测试后它仍是明文 = 没被碰）。
 
-## 六、还剩什么
+## 六、引擎适配器（外挂模组）
+
+`adapters/` 是给「非 Minecraft 游戏」留的扩展位。它跟主线的关系只有一句话：
+**共享翻译核心，不共享取词与回写。**
+
+```
+  游戏目录 ──► probe        「能不能读、能不能写、多少条」——答不出可写就不开工
+            ──► collect     压成扁平的 list[Entry]
+                   │
+                   ▼
+          engine.translate_entries()      ← 本体，一行不改
+                   │
+                   ▼
+            ──► apply        写回并产出副本，原游戏一个字节不动
+```
+
+### 为什么 `translate_entries` 不用改
+
+它的签名是 `translate_entries(entries, settings) -> {modid: {原文: 译文}}`：
+吃一个扁平列表，吐一个字典。它**从来没有读过 mods 目录，也没有写过资源包** ——
+那些都在它两侧（`scan_inputs` / `write_pack`）。所以「引擎无关」是天生的，不是设计出来的。
+
+### 三个字段的复用
+
+| `Entry` 的字段 | 适配器往里装什么 |
+|---|---|
+| `modid` | 游戏目录名 |
+| `key` | `文件#行号`，或 `文件#行号#属性名#序号` |
+| `english` | 原文整条（gettext 的 msgid 模型，本来就是原文当 key） |
+| `rel_path` / `json_pointer` | 文件路径 + 定位串 |
+
+**`Entry` 一个字段都没加。**
+
+### 容器 ≠ 引擎
+
+`container.py` 单独存在，是因为卡住汉化的几乎从来不是引擎，而是**数据装在哪儿**。
+「zip 追加在 exe 尾部」这种容器，Tyrano 用、Electron 游戏也用、以后别的引擎还会用。
+所以它是 `Container` 接口（`FolderGame` / `ZipInExe`），跟 `.ks` 怎么解析完全解耦。
+**新引擎先看容器能不能复用，能复用就只剩一个文本解析文件。**
+
+### 三条硬约束
+
+1. **`probe` 必须答得出 `writable`。** 答不出的引擎不许加进来 —— 先翻三千行
+   再发现打不回去，是全废。
+2. **只产出副本。** `apply` 永远写 `<游戏名>.cn.exe`，原文件一个字节不动。
+   而且 `open_container` **必须跳过自己的产出**（`.cn.exe`）——否则第二次运行
+   会把副本当原版，翻的是「已经没有原文的文本」。
+3. **翻不了的要报出来。** 图片上的按钮字、引擎自带的示例剧本、没有跳转能进的
+   死代码剧本 —— 这些不叫漏翻，叫结构性碰不到。不报，用户会以为工具坏了。
+
+### 认不出引擎时，不许只说「认不出」
+
+批量试游戏时最常见的结局就是没有适配器认领。只回一句「认不出」信息量为零 ——
+既不能让人判断值不值得等，也不知道下一个适配器该加谁。所以 `adapters/hints.py`
+只做一件事：把目录摊开。可执行文件多大、尾部有没有追加 zip、命中了哪些引擎标志
+（`nw.pak` / `Game.rgss3a` / `data.win` …）、哪些目录像文本目录。
+
+它**不递归整棵树**（游戏动辄几个 GB），只看顶层和一层子目录 —— 这一层已经足够
+把九成引擎归位。
+
+### 两个入口，一套核心
+
+| 入口 | 位置 | 干什么 |
+|---|---|---|
+| MC 实例 | 主窗口 | 扫 mods → 逐模组翻 → 出资源包 |
+| 其他游戏 | 底栏「汉化其他游戏…」 | 选目录 → 体检 → 出副本 exe |
+
+两边都走 `engine.translate_entries`，缓存、术语、重试、并发共用同一份。
+GUI 那一侧只是 `_show_localize()` 调用 `localize_game()`，**没有第二套翻译逻辑**。
+界面上刻意分成独立窗口：MC 是「实例 → 模组列表」，别的游戏是「一个目录 → 一个副本」，
+硬塞进同一张表会把两边都搞脏。
+
+### 加一个引擎的顺序
+
+1. 用 `container.py` 确认数据装在哪（散装 / zip-in-exe / 需要打包器）
+2. 新建 `adapters/<engine>.py`，实现 `probe` / `collect` / `apply`
+3. 加进 `adapters/__init__.py` 的 `REGISTRY`
+4. 在 `test_localize.py` 补测试：至少证明「抽出的条数」和「写回后文件仍能解析」
+5. `python mc_ai_translator.py localize <游戏目录> --dry-run` 先看条数
+
+## 七、还剩什么
 
 - **`ProjectFerry.pyw`（3570 行）**：GUI 还没拆。它的 UI 结构本身要重做，
   等 UI 重构那一轮一起拆，别现在动。
