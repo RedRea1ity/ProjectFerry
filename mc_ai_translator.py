@@ -36,6 +36,7 @@ from ferrycore.bridge import COLLECTED_MODID, COLLECTED_NAME, FERRYBRIDGE_EXTERN
 from ferrycore.cli import build_parser, command_bridge_collect, command_config, command_detect, command_glossary, command_scan, command_translate, include_modids_from_args, instance_dirs_from_args, only_modids_from_args
 from ferrycore.community import CFPA_PACK_TTL, CFPA_PACK_URL, CFPA_RELEASE_PAGE, community_corpus, community_pack_path, community_pack_translations, download_human_pack, ensure_community_pack, fetch_community_baseline, human_pack_destination
 from ferrycore.config import DEFAULT_CONFIG, SECRET_KEY_RE, config_secret_risk, is_git_ignored, load_config, load_progress, public_config, remove_progress_modids, save_config, save_progress, update_progress
+from ferrycore.deps import DEFAULT_TOOLS_DIR, Dependency, DepStatus, REGISTRY as DEPENDENCIES, install as install_dependency, resolve as resolve_dependencies
 from ferrycore.diagnose import DIAGNOSE_DIRNAME, DIAGNOSE_PREFIX, build_diagnostic_report, write_diagnostic_report
 from ferrycore.engine import CLOUD_ENGINES, ENGINES_WITH_KEY, _resolve_engine_fields, _translate_anthropic, _translate_batch_with_retry, _translate_deepl, _translate_gemini, _translate_mymemory, _translate_openai, reference_examples, resolve_translate_settings, translate_batch, translate_entries, validate_engine_network
 from ferrycore.fontcheck import FontCoverage, FontScanResult, check_font, gb2312_chars, read_font_codepoints, scan_fonts

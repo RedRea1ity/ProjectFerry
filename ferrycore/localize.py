@@ -20,7 +20,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import adapters as adapter_registry
+from . import deps
 from .adapters.base import Adapter, ProbeReport, VerifyReport
+from .deps import Dependency, DepStatus
 from .engine import resolve_translate_settings, translate_entries
 from .fontcheck import FontScanResult, scan_fonts
 
@@ -49,6 +51,9 @@ class LocalizeResult:
     probe: ProbeReport = field(default_factory=ProbeReport)
     # 字库体检：翻得动但显示不出来，等于白翻，所以它跟 probe 同级
     font: FontScanResult = field(default_factory=FontScanResult)
+    # 需要先装好的外部工具。缺了不代表"失败"，代表"这件事现在做不了"，
+    # 两者对用户是不同的话 —— 前者要修，后者只需点一下下载。
+    dep_status: DepStatus = field(default_factory=DepStatus)
     entries: int = 0
     translated: int = 0
     applied: int = 0
@@ -63,8 +68,21 @@ class LocalizeResult:
     def ok(self) -> bool:
         return self.applied > 0 and not self.conflicts
 
+    @property
+    def missing_deps(self) -> list[Dependency]:
+        """缺哪些外部工具。非空时调用方（GUI）该弹窗问用户装不装。"""
+        return list(self.dep_status.missing)
+
+    @property
+    def blocked_by_deps(self) -> bool:
+        """是被依赖挡住的，不是这个游戏不能翻 —— 界面上措辞完全不同。"""
+        return not self.dep_status.ok
+
     def summary(self) -> str:
         lines = [self.probe.summary() if self.probe.engine else "未识别引擎"]
+        if not self.dep_status.ok:
+            # 放第一行：缺依赖时，后面那些"能翻多少条"都是空话
+            lines.insert(0, f"⚠ 缺依赖：{self.dep_status.summary()}")
         lines.extend(self._font_lines())
         if self.entries:
             lines.append(f"抽出 {self.entries} 条文本单元")
@@ -128,6 +146,13 @@ def localize_game(
     probe = adapter.probe(root)
     result.probe = probe
     result.notes.extend(probe.notes)
+    # 依赖检查排在 ready 之前。顺序反了会给出错误结论：
+    # HSP 那类游戏在没编译器时报的是"写不回去"，而真相是"缺个工具，
+    # 装上就能写" —— 用户会以为这个游戏根本翻不了。
+    if probe.needs:
+        result.dep_status = deps.resolve(probe.needs)
+        if not result.dep_status.ok:
+            return result
     if not probe.ready:
         return result
 

@@ -46,6 +46,10 @@ class ProbeReport:
     # 容器形态 / 文本格式，两个正交维度，分开报
     container: str = ""
     text_format: str = ""
+    # 这台机器上必须先装好的外部工具（id 见 `ferrycore/deps.py`）。
+    # 适配器自己最清楚要什么：HSP 要编译器编 DLL 代理，别的引擎可能什么都不需要。
+    # 声明在这里而不是全局扫，是为了「只在真需要时打扰用户」。
+    needs: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     @property

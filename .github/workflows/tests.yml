@@ -22,4 +22,4 @@ jobs:
         # 显式列全，不用 discover：discover 会去翻 .workbuddy/ 里的临时脚本，
         # 而那些是本地调试残留、不入库。新增测试文件时记得加到这里，
         # 否则 CI 绿了但新测试根本没跑（2026-11-04 之前就一直是这样）。
-        run: python -m unittest -v test_refine test_spec_p0 test_localize test_ftb_localizer test_fontcheck
+        run: python -m unittest -v test_refine test_spec_p0 test_localize test_ftb_localizer test_fontcheck test_deps

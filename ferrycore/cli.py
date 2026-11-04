@@ -14,6 +14,7 @@ from ferrycore.base import CONFIG_FILE, USER_GLOSSARY_FILE
 from ferrycore.bridge import COLLECTED_MODID, COLLECTED_NAME, collected_entries, parse_collected_file, write_ferrybridge_external
 from ferrycore.community import community_corpus, fetch_community_baseline
 from ferrycore.config import DEFAULT_CONFIG, load_config, public_config, save_config, update_progress
+from ferrycore.deps import REGISTRY as DEPENDENCIES, install as install_dependency, resolve as resolve_dependencies
 from ferrycore.engine import ENGINES_WITH_KEY, resolve_translate_settings, translate_entries
 from ferrycore.fontcheck import check_font, scan_fonts
 from ferrycore.glossary import BUILTIN_GLOSSARY, DEFAULT_GLOSSARY_EN_URL, DEFAULT_GLOSSARY_ZH_URL, fetch_glossary, load_user_glossary
@@ -387,6 +388,49 @@ def command_fontcheck(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_deps(args: argparse.Namespace) -> int:
+    """查看 / 安装汉化依赖。
+
+    故意设计成「不加 --install 就什么都不做」：一个汉化工具不该在用户
+    只是想看看装了什么的时候，顺手往 D 盘写 1GB。
+    """
+    if args.dep is None:
+        print("已知的汉化依赖（不是摆渡自己的依赖，只在特定游戏上才需要）：")
+        for dep_id, dep in DEPENDENCIES.items():
+            mark = "已装" if dep.installed else "未装"
+            path = dep.locate()
+            where = f" → {path}" if path else f" → {dep.target}"
+            print(f"  {dep_id:8} [{mark}] {dep.name}  {dep.size_mb:.0f} MB{where}")
+            print(f"           {dep.why}")
+        return 0
+
+    dep = DEPENDENCIES.get(args.dep)
+    if dep is None:
+        print(f"没有这个依赖：{args.dep}（可用：{'、'.join(DEPENDENCIES)}）", file=sys.stderr)
+        return 2
+    if dep.installed:
+        print(f"{dep.name} 已经装好了：{dep.locate()}")
+        return 0
+    if not args.install:
+        print(dep.prompt())
+        print("\n（要真装就加 --install --yes）")
+        return 0
+    if not args.yes:
+        print("非交互环境不替用户做决定：确认要装请加 --yes。", file=sys.stderr)
+        return 2
+
+    def progress(done: int, total: int) -> None:
+        if total:
+            pct = done * 100 // total
+            print(f"\r  下载中 {pct:3d}%  {done / 2**20:.1f} / {total / 2**20:.1f} MB", end="", flush=True)
+
+    print(f"开始安装 {dep.name} …")
+    ok, message = install_dependency(dep, progress=progress)
+    print()
+    print(message)
+    return 0 if ok else 1
+
+
 def command_config(args: argparse.Namespace) -> int:
     if args.init:
         if CONFIG_FILE.exists():
@@ -525,4 +569,18 @@ def build_parser() -> argparse.ArgumentParser:
     fontcheck.add_argument("path", nargs="?", default=".", help="游戏目录，或单个字体文件（.ttf/.otf/.ttc）")
     fontcheck.add_argument("--level", type=int, choices=[1, 2], default=1, help="用一级字（3755，默认）还是二级字（3008）做判据")
     fontcheck.set_defaults(func=command_fontcheck)
+
+    deps = sub.add_parser(
+        "deps",
+        help="查看/安装汉化依赖（有些游戏的文本改动需要外部工具）",
+        description=(
+            "汉化依赖不是摆渡的依赖，是**某些游戏**的依赖。"
+            "典型例子：HSP 游戏按 Shift-JIS 解码文本，要编 DLL 代理才能显示中文，那需要编译器。"
+            "不装的话，那类游戏会明确报「缺依赖」，其它游戏完全不受影响。"
+        ),
+    )
+    deps.add_argument("dep", nargs="?", default=None, help="要安装的依赖 id（不填则只列出状态）")
+    deps.add_argument("--install", action="store_true", help="真的下载安装；不加这个只显示会做什么")
+    deps.add_argument("--yes", action="store_true", help="跳过确认（非交互环境必须显式给出）")
+    deps.set_defaults(func=command_deps)
     return parser

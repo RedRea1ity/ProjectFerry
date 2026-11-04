@@ -67,7 +67,8 @@
 | `engine` | 448 | 各翻译引擎 API、批次翻译、重试、用量统计 |
 | `fontcheck` | ~330 | 字库覆盖检查：读 sfnt 的 cmap，算 GB2312 一级字（3755）覆盖率，判断翻完会不会满屏方块 |
 | `adapters/` | 5 个文件 | 引擎适配器（外挂模组）：`base` 契约 / `container` 字节层 / `tyrano` 具体引擎 / `hints` 认不出时给线索 / `__init__` 注册表 |
-| `localize` | ~170 | 非 MC 游戏的汉化编排：探测 → 抽取 → 翻译 → 回写 → 报缺口 |
+| `localize` | ~190 | 非 MC 游戏的汉化编排：探测 → 依赖闸 → 抽取 → 翻译 → 回写 → 报缺口 |
+| `deps` | 269 | 汉化依赖：有些游戏的文本改动需要外部工具（如编译器编 DLL 代理），缺了就弹窗问用户装不装 |
 | `packio` | 513 | 资源包生成 / 卸载 / 还原 / 让位，锁文件与质量检查 |
 | `cli` | 361 | `argparse` 与各 `command_*` |
 
@@ -124,7 +125,7 @@ python tools/split_module.py move <模块名> <符号1> <符号2> ...
 ### 2. 每拆一步就跑测试
 
 ```bash
-py -3 -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize test_fontcheck   # 163 项，必须全绿
+py -3 -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize test_fontcheck test_deps   # 188 项，必须全绿
 py -3 -m py_compile ProjectFerry.pyw mc_ai_translator.py ferrycore/*.py ferrycore/adapters/*.py
 ```
 
