@@ -65,6 +65,7 @@
 | `literalbridge` | 417 | LiteralBridge 探测已装版本、下载、自动升级 |
 | `online` | 65 | 在线汉化查询 |
 | `engine` | 448 | 各翻译引擎 API、批次翻译、重试、用量统计 |
+| `fontcheck` | ~330 | 字库覆盖检查：读 sfnt 的 cmap，算 GB2312 一级字（3755）覆盖率，判断翻完会不会满屏方块 |
 | `adapters/` | 5 个文件 | 引擎适配器（外挂模组）：`base` 契约 / `container` 字节层 / `tyrano` 具体引擎 / `hints` 认不出时给线索 / `__init__` 注册表 |
 | `localize` | ~170 | 非 MC 游戏的汉化编排：探测 → 抽取 → 翻译 → 回写 → 报缺口 |
 | `packio` | 513 | 资源包生成 / 卸载 / 还原 / 让位，锁文件与质量检查 |
@@ -123,9 +124,19 @@ python tools/split_module.py move <模块名> <符号1> <符号2> ...
 ### 2. 每拆一步就跑测试
 
 ```bash
-python -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize   # 158 项，必须全绿
-python -m py_compile ProjectFerry.pyw mc_ai_translator.py ferrycore/*.py ferrycore/adapters/*.py
+py -3 -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize test_fontcheck   # 163 项，必须全绿
+py -3 -m py_compile ProjectFerry.pyw mc_ai_translator.py ferrycore/*.py ferrycore/adapters/*.py
 ```
+
+**必须用带 tkinter 的解释器跑**（本机是 `py -3`，不是 WorkBuddy 自带的 python）。
+WorkBuddy 内置的 Python 3.13 没有 tkinter，6 个 GUI 测试会被 `setUpClass` 整体跳过 ——
+输出是 `Ran 0 tests / OK (skipped=1)`，看着是绿的，其实一项没跑。2026-11-04 之前
+这条命令一直写着「158 项全绿」，而 GUI 那 6 项从未真正执行过，藏着一个断言着旧路径的
+过期测试和一个 grid/pack 混用的布局崩溃。
+
+跳过条件也已收紧：只有 `ImportError`（没 tkinter）和异常里出现 `display` 才允许 skip，
+其余异常一律 `raise`。原来的 `except Exception: raise SkipTest` 会把任何崩溃
+（包括布局冲突）都伪装成「无桌面环境」。
 
 再顺手验一遍 GUI 的调用面（防止漏导出）：
 

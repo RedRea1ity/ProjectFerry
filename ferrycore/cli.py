@@ -15,6 +15,7 @@ from ferrycore.bridge import COLLECTED_MODID, COLLECTED_NAME, collected_entries,
 from ferrycore.community import community_corpus, fetch_community_baseline
 from ferrycore.config import DEFAULT_CONFIG, load_config, public_config, save_config, update_progress
 from ferrycore.engine import ENGINES_WITH_KEY, resolve_translate_settings, translate_entries
+from ferrycore.fontcheck import check_font, scan_fonts
 from ferrycore.glossary import BUILTIN_GLOSSARY, DEFAULT_GLOSSARY_EN_URL, DEFAULT_GLOSSARY_ZH_URL, fetch_glossary, load_user_glossary
 from ferrycore.localize import localize_game
 from ferrycore.models import LangFile, mod_status_label
@@ -340,6 +341,52 @@ def command_localize(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def command_fontcheck(args: argparse.Namespace) -> int:
+    """只查字库：这个游戏装得下中文吗。
+
+    单独一条命令而不是只塞进 `localize`，因为它能在一个字节都不碰的情况下
+    回答「翻完会不会满屏方块」—— 这是唯一能在花掉第一个 token 之前否掉整单的检查。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+    root = Path(args.path)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+
+    if root.is_file():
+        cov = check_font(root, level=args.level)
+        print(cov.summary())
+        if cov.level not in ("ok",) and cov.missing:
+            print(f"缺字示例（前 40 个）：{''.join(cov.missing[:40])}")
+        if cov.level == "unknown":
+            return 1
+        return 0 if cov.level in ("ok", "tight") else 1
+
+    scan = scan_fonts(root)
+    print(scan.summary())
+    for row in scan.found:
+        if row.level not in ("ok",) and row.missing:
+            print(f"  {row.path.name} 缺字示例：{''.join(row.missing[:40])}")
+
+    verdict = scan.verdict
+    if verdict == "broken":
+        print("结论：中文字形缺太多，翻完会满屏方块 —— 先换字体再开工。", file=sys.stderr)
+        return 1
+    if verdict == "unknown":
+        # 返回 0 而不是 1：「没验成」不等于「验出问题」。
+        # 内嵌字体的游戏占多数，当失败处理的话这命令就没法用在脚本里了。
+        print("结论：静态看不到字体，无法判断。字体可能内嵌在资源包里。", file=sys.stderr)
+        return 0
+    if verdict == "tight":
+        print("结论：能显示中文，但会有零星方块，挑个完整字体更好。", file=sys.stderr)
+    return 0
+
+
 def command_config(args: argparse.Namespace) -> int:
     if args.init:
         if CONFIG_FILE.exists():
@@ -465,4 +512,17 @@ def build_parser() -> argparse.ArgumentParser:
     localize.add_argument("--delay", type=float, default=None)
     localize.add_argument("--concurrency", type=int, default=None, help="并发翻译线程数（多模型加速），默认 1")
     localize.set_defaults(func=command_localize)
+
+    fontcheck = sub.add_parser(
+        "fontcheck",
+        help="只查字库：这个游戏的中文能不能显示出来（不翻译、不改文件）",
+        description=(
+            "读字体文件的字形表，算 GB2312 一级字（3755 个）的覆盖率。"
+            "一级字覆盖日常文本 99% 以上，缺多少直接决定翻完是否满屏方块。"
+            "找不到独立字体文件时不会给绿灯 —— 字体可能内嵌在资源包里，静态看不到。"
+        ),
+    )
+    fontcheck.add_argument("path", nargs="?", default=".", help="游戏目录，或单个字体文件（.ttf/.otf/.ttc）")
+    fontcheck.add_argument("--level", type=int, choices=[1, 2], default=1, help="用一级字（3755，默认）还是二级字（3008）做判据")
+    fontcheck.set_defaults(func=command_fontcheck)
     return parser

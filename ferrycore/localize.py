@@ -22,6 +22,7 @@ from pathlib import Path
 from . import adapters as adapter_registry
 from .adapters.base import Adapter, ProbeReport, VerifyReport
 from .engine import resolve_translate_settings, translate_entries
+from .fontcheck import FontScanResult, scan_fonts
 
 # 非 MC 游戏不需要资源包格式。给个中立值只是为了让版本探测别抛错 ——
 # 一个没有 version json 的目录会让 `resolve_pack_format` 直接 raise。
@@ -46,6 +47,8 @@ def localize_settings(config: dict, root: Path) -> dict:
 class LocalizeResult:
     adapter: str = ""
     probe: ProbeReport = field(default_factory=ProbeReport)
+    # 字库体检：翻得动但显示不出来，等于白翻，所以它跟 probe 同级
+    font: FontScanResult = field(default_factory=FontScanResult)
     entries: int = 0
     translated: int = 0
     applied: int = 0
@@ -62,6 +65,7 @@ class LocalizeResult:
 
     def summary(self) -> str:
         lines = [self.probe.summary() if self.probe.engine else "未识别引擎"]
+        lines.extend(self._font_lines())
         if self.entries:
             lines.append(f"抽出 {self.entries} 条文本单元")
         if self.translated:
@@ -74,6 +78,22 @@ class LocalizeResult:
             lines.append(f"{len(self.conflicts)} 处冲突未写回")
         lines.extend(self.notes)
         return "\n".join(lines)
+
+    def _font_lines(self) -> list[str]:
+        verdict = self.font.verdict
+        best = self.font.best
+        if verdict == "broken":
+            detail = best.summary() if best is not None else self.font.summary()
+            return [f"⚠ 字库告警：{detail}", "  翻完多半是满屏方块，建议先换字体再开工"]
+        if verdict == "tight":
+            detail = best.summary() if best is not None else self.font.summary()
+            return [f"字库注意：{detail}"]
+        if verdict == "ok" and best is not None:
+            return [f"字库：{best.path.name} 可显示中文"]
+        if self.font.bitmap:
+            return [f"字库：只找到 {len(self.font.bitmap)} 个疑似点阵字库，无法静态判断中文覆盖"]
+        # 没验成也要说一声：否则用户会以为「没提就是没问题」
+        return ["字库：未发现独立字体文件，可能内嵌在资源包里，无法静态判断"]
 
 
 def localize_game(
@@ -93,6 +113,9 @@ def localize_game(
     """
     root = Path(root)
     result = LocalizeResult(probe=ProbeReport(root=root))
+    # 字库体检最先跑：它不依赖引擎识别，认不出引擎时同样是有效信息 ——
+    # 「翻不动」和「看不了」是两件事，用户需要分开知道。
+    result.font = scan_fonts(root)
 
     if adapter is None:
         found = adapter_registry.detect(root, **(adapter_options or {}))

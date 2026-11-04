@@ -24,10 +24,19 @@ class GuiP0Tests(unittest.TestCase):
     def setUpClass(cls):
         try:
             cls.gui = load_gui()
+        except ImportError as exc:  # 没有 tkinter 是环境问题，跳过合理
+            raise unittest.SkipTest(f"没有 tkinter：{exc}") from exc
+        try:
             cls.window = cls.gui.FerryApp()
             cls.window.update_idletasks()
         except Exception as exc:
-            raise unittest.SkipTest(f"Tk 无可用桌面环境：{exc}") from exc
+            text = str(exc).lower()
+            # 只有「真的没有显示设备」才允许跳过。原来是 except Exception 一律 skip，
+            # 结果把布局冲突（grid/pack 混用）也伪装成「无桌面环境」——
+            # 2026-11-04 才发现这层假绿：GUI 起不来，测试却报 OK(skipped)。
+            if "display" in text or "no such file or directory: '/tmp" in text:
+                raise unittest.SkipTest(f"Tk 无可用桌面环境：{exc}") from exc
+            raise
 
     @classmethod
     def tearDownClass(cls):
@@ -44,10 +53,18 @@ class GuiP0Tests(unittest.TestCase):
             )
             self.window.path_var.set(str(instance))
             self.window.scan_cache[str(instance)] = scan
-            with patch.object(core, "resolve_translate_settings", return_value={"output_dir": str(instance / "resourcepacks"), "pack_name": "ai.zip"}), patch.object(core, "load_pack_translations", return_value={}), patch.object(core, "load_hardcoded_translations", return_value={}), patch.object(self.gui.messagebox, "showinfo"):
+            with patch.object(core, "resolve_translate_settings", return_value={"output_dir": str(instance / "resourcepacks"), "pack_name": "ai.zip"}), patch.object(core, "load_pack_translations", return_value={}), patch.object(core, "load_hardcoded_translations", return_value={}), patch.object(self.gui.messagebox, "showinfo"), patch.object(self.window, "_start_literalbridge_fetch", return_value=""):
                 self.window.export_bridge_mapping()
-            mapping_file = instance / "config" / "ferrybridge" / "translations.json"
-            self.assertEqual(json.loads(mapping_file.read_text(encoding="utf-8"))["map"]["Blue Sword"], "人工蓝剑")
+            # 摆渡桥读的是**游戏目录**下的外部映射表；config/ferrybridge/translations.json
+            # 是早期版本的位置，现在的桥根本不读那里（这条断言 2026-11-04 才第一次真正跑起来 ——
+            # 之前本机 Python 没有 tkinter，6 个 GUI 测试全部静默跳过，所以它一直断言着旧路径）。
+            mapping_file = instance / "ferrybridge-mappings.json"
+            self.assertTrue(mapping_file.exists(), "没写出摆渡桥外部映射表")
+            data = json.loads(mapping_file.read_text(encoding="utf-8"))
+            self.assertEqual(data["map"]["Blue Sword"], "人工蓝剑")
+            # LiteralBridge 规则另写一份，根节点只能是组
+            rules_file = instance / "config" / "literalbridge" / "ferry.json"
+            self.assertTrue(rules_file.exists(), "没写出 LiteralBridge 规则文件")
 
     def test_close_cancels_running_translation(self):
         self.window.translating = True
