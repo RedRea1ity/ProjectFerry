@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .base import Adapter, ApplyReport, ProbeReport, VerifyReport
 from .container import Container, Document, FolderGame, ZipInExe, locate_appended_zip, open_container, unique_output
+from .gamemaker import GameMakerAdapter
 from .hints import scan_hints
 from .hsp import HspAdapter
 from .renpy import RenpyAdapter
@@ -34,6 +35,7 @@ REGISTRY: list[type[Adapter]] = [
     TyranoAdapter,
     RenpyAdapter,
     RpgMakerAdapter,
+    GameMakerAdapter,
     HspAdapter,
 ]
 
@@ -76,6 +78,7 @@ __all__ = [
     "Container",
     "Document",
     "FolderGame",
+    "GameMakerAdapter",
     "HspAdapter",
     "ProbeReport",
     "RenpyAdapter",

@@ -198,7 +198,16 @@ class UndoLog:
 
 
 def _norm(rel_path: str) -> str:
-    return str(rel_path).replace("\\", "/").lstrip("./")
+    """相对路径归一化：反斜杠转正斜杠，去掉开头的 `./`。
+
+    这里**不能**写 `lstrip("./")` —— 它剥的是字符集合，不是前缀。
+    `.ferry-backup/x.csv` 会被剥成 `ferry-backup/x.csv`，于是备份路径
+    和真实路径混为一谈，报错时还会显示一个根本不存在的文件。
+    """
+    s = str(rel_path).replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+    return s.lstrip("/")
 
 
 def load(root: Path) -> dict | None:
