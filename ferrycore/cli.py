@@ -342,6 +342,34 @@ def command_localize(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def command_revert(args: argparse.Namespace) -> int:
+    """撤销上一次汉化：删副本，或把被原地改过的文件一个个还原。
+
+    这条命令能存在，是因为 `apply` 动手之前先落了 `.ferry-undo.json`。
+    没有那份记录就只能靠猜，而猜错等于删用户的游戏。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+    root = Path(args.game)
+    if not root.is_dir():
+        print(f"路径不存在或不是目录：{root}", file=sys.stderr)
+        return 2
+
+    report = engine_adapters.revert_game(root, dry_run=args.dry_run)
+    print(report.summary())
+    for note in report.notes:
+        print(f"  {note}")
+    for failure in report.failed:
+        print(f"  失败：{failure}", file=sys.stderr)
+    if args.dry_run:
+        return 0
+    return 0 if report.ok else 1
+
+
 def command_fontcheck(args: argparse.Namespace) -> int:
     """只查字库：这个游戏装得下中文吗。
 
@@ -556,6 +584,18 @@ def build_parser() -> argparse.ArgumentParser:
     localize.add_argument("--delay", type=float, default=None)
     localize.add_argument("--concurrency", type=int, default=None, help="并发翻译线程数（多模型加速），默认 1")
     localize.set_defaults(func=command_localize)
+
+    revert = sub.add_parser(
+        "revert",
+        help="撤销上一次汉化（删副本 / 还原被改的文件），游戏回到原样",
+        description=(
+            "只撤摆渡自己做过的事：照游戏目录里的 .ferry-undo.json 干活。"
+            "没有记录就拒绝，不猜、不清理。还原后逐个校验 md5，对不上会报失败而不是假装成功。"
+        ),
+    )
+    revert.add_argument("game", nargs="?", default=".", help="游戏目录（不是副本目录）")
+    revert.add_argument("--dry-run", action="store_true", help="只说会做什么，不动文件")
+    revert.set_defaults(func=command_revert)
 
     fontcheck = sub.add_parser(
         "fontcheck",

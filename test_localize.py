@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -378,6 +379,426 @@ class LocalizeFlowTests(unittest.TestCase):
             found = adapters.detect(root)
             self.assertIsNotNone(found)
             self.assertEqual(found.name, "tyrano")
+
+
+class UndoLogTests(unittest.TestCase):
+    """撤销记录 —— 「汉化完能跑路」全靠这一层，所以逐条钉死。"""
+
+    def _log(self, root: Path, engine: str = "test") -> adapters.UndoLog:
+        return adapters.UndoLog(root, engine=engine)
+
+    def test_no_record_refuses_to_guess(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "game.exe").write_bytes(b"MZ")
+            report = adapters.revert_game(root)
+            self.assertFalse(report.ok)
+            self.assertIn("没有汉化记录", report.notes[0])
+            # 拒绝的时候一个文件都不能动
+            self.assertTrue((root / "game.exe").exists())
+
+    def test_modified_file_is_backed_up_before_write(self):
+        """备份必须发生在写之前：写到一半崩了要能还原。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "eve" / "sn1.txt"
+            target.parent.mkdir()
+            target.write_bytes(b"original")
+            log = self._log(root)
+            log.will_modify("eve/sn1.txt")
+            # 此刻备份已经落盘，记录也已经写出来了
+            self.assertTrue((root / ".ferry-undo.json").exists())
+            self.assertTrue((root / ".ferry-backup" / "eve" / "sn1.txt").exists())
+            target.write_bytes(b"translated")
+            log.did_write("eve/sn1.txt")
+            log.finish()
+
+            report = adapters.revert_game(root)
+            self.assertTrue(report.ok, report.failed)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertEqual(report.restored, 1)
+            # 收工后现场清干净
+            self.assertFalse((root / ".ferry-undo.json").exists())
+            self.assertFalse((root / ".ferry-backup").exists())
+
+    def test_added_file_is_removed_on_revert(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dll = root / "msimg32.dll"
+            log = self._log(root)
+            log.will_add("msimg32.dll")
+            log.save()
+            dll.write_bytes(b"proxy")
+            log.did_write("msimg32.dll")
+            log.finish()
+
+            report = adapters.revert_game(root)
+            self.assertTrue(report.ok, report.failed)
+            self.assertFalse(dll.exists())
+            self.assertEqual(report.removed, 1)
+
+    def test_added_file_touched_by_user_is_not_deleted(self):
+        """我加的 DLL 用户后来自己换了版本 —— 那是他的东西了，不能删。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dll = root / "msimg32.dll"
+            log = self._log(root)
+            log.will_add("msimg32.dll")
+            log.save()
+            dll.write_bytes(b"proxy")
+            log.did_write("msimg32.dll")
+            log.finish()
+            dll.write_bytes(b"user replaced this")
+
+            report = adapters.revert_game(root)
+            self.assertFalse(report.ok)
+            self.assertTrue(dll.exists())
+            self.assertIn("改过", report.failed[0])
+            # 失败时记录要留着，否则凭据也没了
+            self.assertTrue((root / ".ferry-undo.json").exists())
+
+    def test_copy_is_removed_and_record_appends(self):
+        """两次汉化产出两份副本，一次 revert 全撤掉。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "game"
+            root.mkdir()
+            (root / "game.exe").write_bytes(b"MZ")
+            first = base / "game.cn"
+            second = base / "game.cn2"
+            for target in (first, second):
+                target.mkdir()
+                (target / "game.exe").write_bytes(b"MZ")
+
+            log = self._log(root)
+            log.did_copy(first)
+            log.finish()
+            log2 = adapters.UndoLog.open(root, engine="test")
+            log2.did_copy(second)
+            log2.finish()
+            self.assertEqual(len(adapters.UndoLog.open(root).actions), 2)
+
+            report = adapters.revert_game(root)
+            self.assertTrue(report.ok, report.failed)
+            self.assertFalse(first.exists())
+            self.assertFalse(second.exists())
+            self.assertTrue((root / "game.exe").exists())
+
+    def test_refuses_to_delete_the_game_root_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = self._log(root)
+            with self.assertRaises(ValueError):
+                log.did_copy(root)
+
+    def test_dry_run_touches_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "a.txt"
+            target.write_text("orig", encoding="utf-8")
+            log = self._log(root)
+            log.will_modify("a.txt")
+            target.write_text("new", encoding="utf-8")
+            log.did_write("a.txt")
+            log.finish()
+
+            report = adapters.revert_game(root, dry_run=True)
+            self.assertIn("预演", report.notes[-1])
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+            self.assertTrue((root / ".ferry-undo.json").exists())
+
+    def test_apply_leaves_a_record_that_revert_can_use(self):
+        """Tyrano 产出的副本必须能被 revert 删掉 —— 契约闭环。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_folder(Path(tmp))
+            adapter = adapters.TyranoAdapter()
+            entries = adapter.collect(root)
+            self.assertTrue(entries)
+            translations = {e.key: "中文" for e in entries if e.english}
+            applied = adapter.apply(root, translations)
+            self.assertIsNotNone(applied.out_path)
+            self.assertTrue(applied.undo_path is not None and applied.undo_path.exists())
+
+            report = adapter.revert(root)
+            self.assertTrue(report.ok, report.failed)
+            self.assertFalse(applied.out_path.exists())
+            # 原游戏照旧
+            self.assertTrue((root / "data" / "scenario" / "first.ks").exists())
+
+
+class RenpyAdapterTests(unittest.TestCase):
+    """Ren'Py：明文 UTF-8，改原文 + 删 .rpyc。"""
+
+    SCRIPT = """# 注释不该被抽走
+define e = Character("Eileen")
+
+label start:
+    scene bg room
+    play music "piano.ogg"
+    "雨が降っている。"
+    e "こんにちは、[player_name]さん。"
+    e happy "今日はいい天気だね。{b}本当に{/b}"
+    $ gold = 100
+    jump chapter2
+
+label chapter2:
+    menu:
+        "はい":
+            jump yes
+        "いいえ":
+            return
+    voice "voice/001.ogg"
+    n "ナレーション。"
+"""
+
+    def make(self, base: Path) -> Path:
+        root = base / "renpy_game"
+        game = root / "game"
+        game.mkdir(parents=True)
+        (game / "script.rpy").write_text(self.SCRIPT, encoding="utf-8")
+        (game / "script.rpyc").write_bytes(b"compiled cache")
+        return root
+
+    @staticmethod
+    def translations(entries, overrides: dict[str, str]) -> dict[str, str]:
+        """按原文给译文，转成以 Entry.key 为键的表。
+
+        必须走 key：`apply` 先查 key 再退回原文，两种键混在一张表里时
+        key 永远赢 —— 直接写 `{"原文": "译文"}` 会被上一轮铺的默认值盖掉。
+        """
+        return {e.key: overrides.get(e.english, e.english) for e in entries}
+
+    def test_probe_recognizes_renpy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            report = adapters.RenpyAdapter().probe(root)
+            self.assertTrue(report.readable)
+            self.assertTrue(report.writable)
+            self.assertEqual(report.unit_count, 6)
+            self.assertEqual(report.container, "folder")
+
+    def test_collect_skips_code_and_resource_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            entries = adapters.RenpyAdapter().collect(root)
+            texts = [e.english for e in entries]
+            self.assertIn("雨が降っている。", texts)
+            self.assertIn("はい", texts)
+            # 这些是文件名/变量/注释，翻了就崩
+            for banned in ("piano.ogg", "voice/001.ogg", "chapter2", "Eileen", "gold"):
+                self.assertNotIn(banned, texts)
+            kinds = {e.kind for e in entries}
+            self.assertEqual(kinds, {"say", "menu"})
+
+    def test_apply_keeps_indent_and_speaker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RenpyAdapter()
+            entries = adapter.collect(root)
+            translations = self.translations(entries, {
+                "雨が降っている。": "下着雨。",
+                "こんにちは、[player_name]さん。": "你好，[player_name]。",
+                "はい": "是",
+            })
+            applied = adapter.apply(root, translations)
+            self.assertEqual(applied.applied, 6)
+            self.assertTrue(applied.in_place)
+
+            text = (root / "game" / "script.rpy").read_text(encoding="utf-8")
+            self.assertIn('    "下着雨。"', text)
+            self.assertIn('    e "你好，[player_name]。"', text)
+            self.assertIn('        "是":', text)
+            # 代码行原样不动
+            self.assertIn('    jump chapter2', text)
+            self.assertIn("$ gold = 100", text)
+            # 缓存必须删，否则 Ren'Py 继续用旧文本且不报错
+            self.assertFalse((root / "game" / "script.rpyc").exists())
+
+    def test_revert_restores_original_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RenpyAdapter()
+            entries = adapter.collect(root)
+            adapter.apply(root, {e.key: e.english for e in entries})
+            report = adapters.revert_game(root)
+            self.assertTrue(report.ok, report.failed)
+            self.assertEqual((root / "game" / "script.rpy").read_text(encoding="utf-8"), self.SCRIPT)
+
+    def test_rejects_translation_that_drops_format_tags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RenpyAdapter()
+            entries = adapter.collect(root)
+            # 把 {b}...{/b} 丢了 —— 游戏里会变成裸露的格式符
+            translations = self.translations(entries, {"今日はいい天気だね。{b}本当に{/b}": "今天天气真好"})
+            applied = adapter.apply(root, translations)
+            self.assertTrue(any("格式标签" in c for c in applied.conflicts))
+            text = (root / "game" / "script.rpy").read_text(encoding="utf-8")
+            self.assertIn("{b}本当に{/b}", text)
+
+    def test_rejects_straight_quote_in_translation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RenpyAdapter()
+            entries = adapter.collect(root)
+            translations = self.translations(entries, {"雨が降っている。": '下着"s"雨'})
+            applied = adapter.apply(root, translations)
+            self.assertTrue(any("引号" in c for c in applied.conflicts))
+
+    def test_non_renpy_folder_is_not_claimed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "readme.txt").write_text("hello", encoding="utf-8")
+            self.assertFalse(adapters.RenpyAdapter().probe(root).readable)
+
+    def test_detect_prefers_the_matching_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            found = adapters.detect(root)
+            self.assertIsNotNone(found)
+            self.assertEqual(found.name, "renpy")
+
+
+class RpgMakerAdapterTests(unittest.TestCase):
+    """RPG Maker MV/MZ：明文 JSON，按「文件 + 结构位置 + 指令码」三重定位。"""
+
+    MAP = {
+        "displayName": "城下町",
+        "events": [None, {"id": 1, "pages": [{"list": [
+            {"code": 101, "parameters": ["", 0, 0, 2]},
+            {"code": 401, "parameters": ["おお、勇者よ。"]},
+            {"code": 102, "parameters": [["はい", "いいえ"], 0, 0, 2, 0]},
+            {"code": 355, "parameters": ["$gameVariables.setValue(1, 10)"]},
+            {"code": 405, "parameters": ["長い説明の続き。"]},
+        ]}]}],
+    }
+    SYSTEM = {
+        "gameTitle": "冒険の書",
+        "terms": {"basic": ["レベル", "HP"], "commands": ["戦う"]},
+    }
+    ACTORS = [
+        None,
+        {"id": 1, "name": "アレン", "nickname": "勇者", "profile": "主人公。", "classId": 1},
+        {"id": 2, "name": "", "profile": "", "classId": 1},
+    ]
+
+    def make(self, base: Path, mv: bool = False) -> Path:
+        root = base / "rm_game"
+        data = (root / "www" / "data") if mv else (root / "data")
+        data.mkdir(parents=True)
+        for name, payload in (("Map001.json", self.MAP), ("System.json", self.SYSTEM),
+                              ("Actors.json", self.ACTORS)):
+            (data / name).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return root
+
+    def test_probe_recognizes_mz_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            report = adapters.RpgMakerAdapter().probe(root)
+            self.assertTrue(report.readable)
+            self.assertTrue(report.writable)
+            self.assertGreater(report.unit_count, 0)
+
+    def test_probe_recognizes_mv_www_data_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp), mv=True)
+            report = adapters.RpgMakerAdapter().probe(root)
+            self.assertTrue(report.readable)
+            keys = [e.key for e in adapters.RpgMakerAdapter().collect(root)]
+            # 相对路径要挂在项目根上，不管数据目录是不是 www/data
+            self.assertTrue(all(k.startswith("www/data/") for k in keys), keys[:3])
+            self.assertTrue((root / "www" / "data" / "System.json").exists())
+
+    def test_collect_ignores_script_and_empty_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            texts = [e.english for e in adapters.RpgMakerAdapter().collect(root)]
+            self.assertIn("おお、勇者よ。", texts)
+            self.assertIn("はい", texts)
+            self.assertIn("長い説明の続き。", texts)
+            # 脚本行是代码，翻了游戏直接崩
+            self.assertNotIn("$gameVariables.setValue(1, 10)", texts)
+            # 空字段不该占位
+            self.assertEqual(sum(1 for t in texts if not t.strip()), 0)
+
+    def test_apply_patches_by_pointer_and_keeps_everything_else(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RpgMakerAdapter()
+            entries = adapter.collect(root)
+            overrides = {"おお、勇者よ。": "哦，勇者啊。", "はい": "是", "冒険の書": "冒险之书",
+                         "アレン": "艾伦"}
+            translations = {e.key: overrides.get(e.english, e.english) for e in entries}
+            applied = adapter.apply(root, translations)
+            self.assertEqual(applied.applied, len(entries))
+            self.assertTrue(applied.in_place)
+
+            payload = json.loads((root / "data" / "Map001.json").read_text(encoding="utf-8"))
+            instructions = payload["events"][1]["pages"][0]["list"]
+            self.assertEqual(instructions[1]["parameters"][0], "哦，勇者啊。")
+            self.assertEqual(instructions[2]["parameters"][0], ["是", "いいえ"])
+            # 脚本行原样
+            self.assertEqual(instructions[3]["parameters"][0], "$gameVariables.setValue(1, 10)")
+            self.assertEqual(payload["displayName"], "城下町")
+
+            system = json.loads((root / "data" / "System.json").read_text(encoding="utf-8"))
+            self.assertEqual(system["gameTitle"], "冒险之书")
+            actors = json.loads((root / "data" / "Actors.json").read_text(encoding="utf-8"))
+            self.assertEqual(actors[1]["name"], "艾伦")
+            self.assertEqual(actors[2], {"id": 2, "name": "", "profile": "", "classId": 1})
+
+    def test_written_file_stays_compact(self):
+        """RM 读紧凑 JSON。缩进版能让文件涨几十倍，还会让 diff 彻底不可用。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RpgMakerAdapter()
+            entries = adapter.collect(root)
+            adapter.apply(root, {e.key: e.english for e in entries})
+            text = (root / "data" / "System.json").read_text(encoding="utf-8")
+            self.assertNotIn("\n", text)
+            self.assertNotIn(", ", text)
+
+    def test_revert_restores_all_touched_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RpgMakerAdapter()
+            entries = adapter.collect(root)
+            adapter.apply(root, {e.key: "中文" + e.english for e in entries})
+            report = adapters.revert_game(root)
+            self.assertTrue(report.ok, report.failed)
+            self.assertEqual(report.restored, 3)
+            payload = json.loads((root / "data" / "Map001.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["events"][1]["pages"][0]["list"][1]["parameters"][0], "おお、勇者よ。")
+            self.assertEqual(payload["displayName"], "城下町")
+
+    def test_rejects_quote_that_would_corrupt_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            adapter = adapters.RpgMakerAdapter()
+            entries = adapter.collect(root)
+            translations = {e.key: e.english for e in entries}
+            target = next(e for e in entries if e.english == "おお、勇者よ。")
+            translations[target.key] = '哦，"勇者"啊。'
+            applied = adapter.apply(root, translations)
+            self.assertTrue(any("引号" in c for c in applied.conflicts))
+            payload = json.loads((root / "data" / "Map001.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["events"][1]["pages"][0]["list"][1]["parameters"][0], "おお、勇者よ。")
+
+    def test_pointer_roundtrip(self):
+        from ferrycore.adapters.rpgmaker import parse_pointer, set_pointer
+
+        payload = {"a": [{"b": ["x"]}]}
+        set_pointer(payload, "/a/0/b/0", "y")
+        self.assertEqual(payload["a"][0]["b"][0], "y")
+        self.assertEqual(parse_pointer("/a/0/b"), ["a", "0", "b"])
+        with self.assertRaises(IndexError):
+            set_pointer(payload, "/a/9/b/0", "z")
+
+    def test_non_rm_folder_is_not_claimed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "readme.txt").write_text("hello", encoding="utf-8")
+            self.assertFalse(adapters.RpgMakerAdapter().probe(root).readable)
 
 
 if __name__ == "__main__":

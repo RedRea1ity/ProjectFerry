@@ -98,6 +98,11 @@ class LocalizeResult:
         return "\n".join(lines)
 
     def _font_lines(self) -> list[str]:
+        if self.probe.unicode_engine:
+            # Unicode 内核不存在「字节按哪个代码页解释」这回事，
+            # 唯一要担心的是装的字体缺中文字形 —— 那不是静态扫描能答的，
+            # 所以这里只说明一句，不制造告警。
+            return ["字库：该引擎是 Unicode 内核，中文不存在编码问题（字体缺字形需进游戏看）"]
         verdict = self.font.verdict
         best = self.font.best
         if verdict == "broken":

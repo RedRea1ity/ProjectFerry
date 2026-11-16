@@ -23,6 +23,7 @@ from pathlib import Path
 from ..models import Entry
 from .base import Adapter, ApplyReport, ProbeReport, VerifyReport
 from .container import Container, open_container, unique_output
+from .undo import UNDO_NAME, UndoLog
 
 # 标签 / 注释行：以 [ @ * 开头是标签订阅，; 和 // 是注释
 _MARKUP_LINE = re.compile(r"^\s*(?:\[|@|\*)")
@@ -294,6 +295,15 @@ class TyranoAdapter(Adapter):
         except FileExistsError as exc:
             report.notes.append(str(exc))
             return report
+        # 记一笔「我产出了这份副本」。原游戏的数据文件没动，但用户要能
+        # 一句话找到并撤掉副本 —— 没这条记录，他只能自己翻目录找。
+        try:
+            log = UndoLog.open(root, engine=self.name)
+            log.did_copy(report.out_path)
+            log.finish()
+            report.undo_path = Path(root) / UNDO_NAME
+        except OSError as exc:
+            report.notes.append(f"副本已产出，但撤销记录没写成（{exc}）；删副本请手动")
         report.notes.extend(container.notes)
         return report
 

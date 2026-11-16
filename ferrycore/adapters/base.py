@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..models import Entry
+from .undo import RevertReport
+from .undo import revert as undo_revert
 
 
 @dataclass
@@ -46,6 +48,11 @@ class ProbeReport:
     # 容器形态 / 文本格式，两个正交维度，分开报
     container: str = ""
     text_format: str = ""
+    # 内核是不是 Unicode 原生。Ren'Py（Python 3）和 RM MV/MZ（JS）都是 True。
+    # 为 True 时字库检查只需确认「装的字体里有中文字形」，不必按 GB2312 覆盖率
+    # 判死 —— 那套判据是给 ANSI 引擎（把字节交给 GDI 按 SJIS 解释）准备的，
+    # 套在 Unicode 引擎上会给出一个没有意义的告警。
+    unicode_engine: bool = False
     # 这台机器上必须先装好的外部工具（id 见 `ferrycore/deps.py`）。
     # 适配器自己最清楚要什么：HSP 要编译器编 DLL 代理，别的引擎可能什么都不需要。
     # 声明在这里而不是全局扫，是为了「只在真需要时打扰用户」。
@@ -76,8 +83,14 @@ class ApplyReport:
     applied: int = 0
     missed: int = 0
     skipped: int = 0
-    # 产出的副本路径（原游戏一个字节都不动）
+    # 产出位置。副本型是副本路径，原地型就是游戏目录本身。
     out_path: Path | None = None
+    # 原地改的标记。True 意味着原游戏已经被动过了 ——
+    # 用户必须知道这件事，而且 revert 是唯一退路。
+    in_place: bool = False
+    # 撤销记录落点（`.ferry-undo.json`）。没写记录就说自己原地改过，
+    # 等于给用户一个回不去的状态，这种实现要按缺陷算。
+    undo_path: Path | None = None
     conflicts: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -122,6 +135,15 @@ class Adapter:
     def verify(self, root: Path) -> VerifyReport:
         """默认不验证。能做自动验证的引擎（nw.js / Electron）覆盖它。"""
         return VerifyReport(ok=False, ran=False, notes=["该引擎没有自动验证通道"])
+
+    def revert(self, root: Path, dry_run: bool = False) -> RevertReport:
+        """撤销上一次 apply。默认实现照 `.ferry-undo.json` 还原。
+
+        绝大多数适配器**不要覆盖这个方法**——它只看记录、不认识引擎，
+        副本型和原地型都能撤。真要覆盖（比如还要删注册表项），
+        必须比默认实现更保守：宁可拒绝，不可猜。
+        """
+        return undo_revert(root, dry_run=dry_run)
 
     # ---- 子类常用的小工具 ----
 

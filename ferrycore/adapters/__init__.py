@@ -22,11 +22,17 @@ from pathlib import Path
 from .base import Adapter, ApplyReport, ProbeReport, VerifyReport
 from .container import Container, Document, FolderGame, ZipInExe, locate_appended_zip, open_container, unique_output
 from .hints import scan_hints
+from .renpy import RenpyAdapter
+from .rpgmaker import RpgMakerAdapter
 from .tyrano import TyranoAdapter
+from .undo import UNDO_NAME, RevertReport, UndoLog
+from .undo import revert as revert_game
 
 # 数字小的先探测。认领越具体的排越前，通用兜底排最后。
 REGISTRY: list[type[Adapter]] = [
     TyranoAdapter,
+    RenpyAdapter,
+    RpgMakerAdapter,
 ]
 
 
@@ -69,7 +75,12 @@ __all__ = [
     "Document",
     "FolderGame",
     "ProbeReport",
+    "RenpyAdapter",
+    "RevertReport",
+    "RpgMakerAdapter",
     "TyranoAdapter",
+    "UNDO_NAME",
+    "UndoLog",
     "VerifyReport",
     "ZipInExe",
     "detect",
@@ -77,6 +88,7 @@ __all__ = [
     "locate_appended_zip",
     "open_container",
     "registered",
+    "revert_game",
     "scan_hints",
     "unique_output",
 ]
