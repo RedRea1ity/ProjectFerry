@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .base import Adapter, ApplyReport, ProbeReport, VerifyReport
+from .blackberry import BlackBerryAdapter, is_blackberry_bar, is_blackberry_cod
 from .console import (
     NdsAdapter,
     PspAdapter,
@@ -65,7 +66,15 @@ from .retro_win import RetroWinAdapter, is_alicesoft_ald, is_director_container,
 from .rpgmaker import RpgMakerAdapter
 from .rpgmaker_2k import RpgMaker2kAdapter
 from .rpgmaker_ace import RpgMakerAceAdapter
-from .symbian import SymbianAdapter, is_symbian_e32image, is_symbian_sis
+from .symbian import (
+    SymbianAdapter,
+    extract_sisx_compressed_blocks,
+    is_symbian_e32image,
+    is_symbian_sis,
+    parse_qt_qm,
+    rebuild_qt_qm,
+    rebuild_sisx_with_blocks,
+)
 from .tyrano import TyranoAdapter
 from .undo import UNDO_NAME, RevertReport, UndoLog
 from .undo import revert as revert_game
@@ -85,6 +94,7 @@ REGISTRY: list[type[Adapter]] = [
     ApkAdapter,
     IpaAdapter,
     J2meAdapter,
+    BlackBerryAdapter,
     SymbianAdapter,
     PsvAdapter,
     PspAdapter,
@@ -151,6 +161,7 @@ __all__ = [
     "ApplyReport",
     "ArtemisAdapter",
     "AsarContainer",
+    "BlackBerryAdapter",
     "Container",
     "Document",
     "FlashAdapter",

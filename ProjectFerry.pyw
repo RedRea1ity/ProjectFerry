@@ -24,7 +24,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "2.0.0-alpha.4"
+APP_VERSION = "2.0.0-alpha.5"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -1500,10 +1500,10 @@ class FerryApp(tk.Tk):
 
     def _loc_choose_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="选择游戏镜像 / 安装包（.apk/.ipa/.vpk/.iso/.cso/.nds/.jar/.sis/.swf/.hdi/.dir）或单 EXE 游戏",
+            title="选择游戏镜像 / 安装包（.apk/.ipa/.vpk/.iso/.cso/.nds/.jar/.sis/.cod/.bar/.swf/.hdi/.dir）或单 EXE 游戏",
             filetypes=[
-                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx *.swf *.hdi *.fdi *.nhd *.dir *.dxr *.cst *.ald *.love *.xp3 *.pck *.pfs *.locres *.exe *.com *.dat"),
-                ("移动端与掌机包 (.apk / .ipa / .vpk / .iso / .cso / .nds / .jar / .sis)", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx"),
+                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx *.cod *.bar *.swf *.hdi *.fdi *.nhd *.dir *.dxr *.cst *.ald *.love *.xp3 *.pck *.pfs *.locres *.exe *.com *.dat"),
+                ("移动端 / 功能机 / 掌机包 (.apk/.ipa/.vpk/.iso/.cso/.nds/.jar/.sis/.cod/.bar)", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx *.cod *.bar"),
                 ("Flash / 复古 Win3.1 / PC-98 (.swf / .dir / .dxr / .ald / .hdi / .fdi / .nhd)", "*.swf *.dir *.dxr *.cst *.ald *.hdi *.fdi *.nhd"),
                 ("所有文件", "*.*"),
             ],

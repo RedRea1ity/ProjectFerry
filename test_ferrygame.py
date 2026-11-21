@@ -1766,6 +1766,142 @@ class RetroMobileFlashAndSelfTranslateTests(unittest.TestCase):
             self.assertEqual(rc3, 0)
             self.assertEqual(dir_path.read_bytes(), orig_blob)
 
+    def test_symbian_sisx_tlv_zlib_and_anna_belle_qt_qm(self):
+        import zlib
+        from ferrycore.adapters import detect
+        from ferrycore.adapters.symbian import (
+            QT_QM_MAGIC,
+            SYMBIAN_9_SIS_UID1,
+            extract_sisx_compressed_blocks,
+            parse_qt_qm,
+        )
+
+        # 构造一个 Qt .qm (Messages section 0x69: SourceText 0x06 + Translation 0x03 + End 0x01)
+        src_str = b"Defend the northern fortress at all costs!"
+        tr_str = "Defend the northern fortress at all costs!".encode("utf-16-be")
+        msg_rec = (
+            b"\x06" + struct.pack(">I", len(src_str)) + src_str
+            + b"\x03" + struct.pack(">I", len(tr_str)) + tr_str
+            + b"\x01"
+        )
+        qm_blob = QT_QM_MAGIC + b"\x69" + struct.pack(">I", len(msg_rec)) + msg_rec
+
+        # 塞进 Symbian 9+ (S60v3/v5/Anna/Belle) .sisx 的 SISCompressed (0x0018) zlib TLV 块中
+        comp_payload = zlib.compress(qm_blob, 6)
+        sis_comp_chunk = (
+            struct.pack("<HI", 0x0018, 12 + len(comp_payload))
+            + struct.pack("<IQ", 1, len(qm_blob))
+            + comp_payload
+        )
+        sisx_blob = struct.pack("<IIII", SYMBIAN_9_SIS_UID1, 0, 0, 0) + sis_comp_chunk
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sisx_path = root / "AnnaQuest.sisx"
+            sisx_path.write_bytes(sisx_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "symbian")
+            entries = adapter.collect(root)
+            self.assertEqual([e.english for e in entries], ["Defend the northern fortress at all costs!"])
+
+            ap = adapter.apply(
+                root,
+                {"Defend the northern fortress at all costs!": "不惜一切代价守住北方要塞！（安娜/贝拉 Qt .qm 变长测试）"},
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 1)
+            self.assertTrue(ap.out_path.name.endswith(".cn.sisx"))
+
+            # 解开产出的 .cn.sisx 内部 TLV zlib 块，验证 Qt .qm 已被无损重建为 UTF-16BE 中文
+            out_blocks = extract_sisx_compressed_blocks(ap.out_path.read_bytes())
+            self.assertEqual(len(out_blocks), 1)
+            parsed_qm = parse_qt_qm(out_blocks[0].decompressed)
+            self.assertEqual(parsed_qm[0].translation, "不惜一切代价守住北方要塞！（安娜/贝拉 Qt .qm 变长测试）")
+
+            self.assertTrue(revert_game(root).ok)
+            self.assertFalse(ap.out_path.exists())
+
+    def test_blackberry_cod_jad_sha1_and_bb10_bar_roundtrip(self):
+        import hashlib
+        import zipfile
+        from ferrycore.adapters import detect
+        from ferrycore.adapters.blackberry import RIM_COD_MAGIC
+
+        # 1. BlackBerry OS 4~7 .cod (0xDEC0FFFF) + .jad (RIM-COD-SHA1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cod_path = root / "BrickBreaker.cod"
+            jad_path = root / "BrickBreaker.jad"
+            cod_blob = (
+                RIM_COD_MAGIC
+                + b"\x00" * 16
+                + b"The encrypted message has been intercepted by headquarters.\x00"
+                + b"New Game\x00"
+            )
+            cod_path.write_bytes(cod_blob)
+            jad_path.write_text(
+                "MIDlet-Name: BrickBreaker\n"
+                f"RIM-COD-URL: {cod_path.name}\n"
+                f"RIM-COD-Size: {len(cod_blob)}\n"
+                "RIM-COD-SHA1: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n",
+                encoding="utf-8",
+            )
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "blackberry")
+            texts = [e.english for e in adapter.collect(root)]
+            self.assertIn("The encrypted message has been intercepted by headquarters.", texts)
+            self.assertIn("New Game", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "The encrypted message has been intercepted by headquarters.": "那份加密电报已被总部截获。",
+                    "New Game": "开始",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            self.assertTrue(ap.out_path.name.endswith(".cn.cod"))
+            self.assertIn("那份加密电报已被总部截获。".encode("utf-8"), ap.out_path.read_bytes())
+
+            # 验证 .cn.jad 的 RIM-COD-SHA1 已按新 .cn.cod 字节精确重算
+            out_jad = ap.out_path.with_suffix(".jad")
+            self.assertTrue(out_jad.is_file())
+            expected_sha1 = " ".join(f"{b:02x}" for b in hashlib.sha1(ap.out_path.read_bytes()).digest())
+            self.assertIn(f"RIM-COD-SHA1: {expected_sha1}", out_jad.read_text(encoding="utf-8"))
+
+            self.assertTrue(revert_game(root).ok)
+            self.assertFalse(ap.out_path.exists())
+            self.assertFalse(out_jad.exists())
+
+        # 2. BlackBerry 10 / PlayBook .bar (QNX Cascades QML)
+        with tempfile.TemporaryDirectory() as tmp2:
+            root2 = Path(tmp2)
+            bar_path = root2 / "CascadesRpg.bar"
+            with zipfile.ZipFile(bar_path, "w") as zf:
+                zf.writestr("META-INF/MANIFEST.MF", "Package-Name: com.example.rpg\nEntry-Point-Type: Qnx/Elf\n")
+                zf.writestr(
+                    "app/native/assets/main.qml",
+                    'import bb.cascades 1.2\nPage { Label { text: qsTr("Enter the Shadow Realm") } }\n',
+                )
+
+            adapter2 = detect(root2)
+            self.assertIsNotNone(adapter2)
+            self.assertEqual(adapter2.name, "blackberry")
+            entries2 = adapter2.collect(root2)
+            self.assertEqual([e.english for e in entries2], ["Enter the Shadow Realm"])
+
+            ap2 = adapter2.apply(root2, {"Enter the Shadow Realm": "踏入暗影领域"})
+            self.assertTrue(ap2.ok)
+            self.assertTrue(ap2.out_path.name.endswith(".cn.bar"))
+            with zipfile.ZipFile(ap2.out_path, "r") as zout:
+                self.assertIn('qsTr("踏入暗影领域")', zout.read("app/native/assets/main.qml").decode("utf-8"))
+            self.assertTrue(revert_game(root2).ok)
+
 
 if __name__ == "__main__":
     unittest.main()

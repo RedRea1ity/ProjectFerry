@@ -3,15 +3,15 @@
 > 人无语言则茫然无依，故为摆渡。
 > Where words fail, we ferry.
 
-**开发中 · v2.0.0-alpha.4（早期测试版）**
+**开发中 · v2.0.0-alpha.5（早期测试版）**
 
 摆渡计划已经从最初单纯的「Minecraft 模组临时汉化器」，正式演进为**双轨制跨平台全语种游戏本地化工作台**（`ferrycore` 模组主线 + `ferrygame` 通用游戏线）。首次打开时从左侧导航栏或「项目工作台」选择要处理的轨道；两条线共用底层 AI 翻译引擎与密钥配置，但探测、提示词、写回与无损还原各自独立、互不污染：
 
-- **通用游戏汉化（28 类全球主流 / 独立 / 复古 / 移动 / 掌机 / 功能机 / Flash 引擎适配）**：
+- **通用游戏汉化（29 类全球主流 / 独立 / 复古 / 移动 / 掌机 / 塞班全世代 / 黑莓全世代 / 功能机 / Flash 引擎适配）**：
   - **欧美与全球主流/独立引擎**：**Unreal Engine 4/5 (`.locres` v0~v3)**、**Unity (`StreamingAssets` + Mono `#US` + IL2CPP `global-metadata.dat` → XUnity)**、**Godot 3/4 (`.pck` + `.tscn`)**、**GameMaker (`data.win` IFF `STRG`)**、**LÖVE / Love2D (`.love` / 融合 EXE / `.lua`)**、**全球叙事引擎集群（Inkle's Ink `.ink.json`、Yarn Spinner `.yarn`、Twine `.html`、Godot Dialogic `.dtl`、Adventure Game Studio `.trs`）**、**Adobe / Macromedia Flash (`.swf` `FWS`/`CWS` + Projector `.exe` AS2/AS3 常量池变长重建)**、**通用 Gettext `.po / .json / .csv`**；
   - **日系同人与视觉小说引擎**：**Kirikiri 2/Z 吉里吉里 (`.xp3` + UTF-16LE `patch.xp3`)**、**Ren'Py (`.rpa / .rpy`)**、**RPG Maker 全家桶（2000/2003 `.ldb/.lmu`、XP/VX/Ace `.rgss3a/.rvdata2`、MV/MZ `.json`）**、**TyranoScript / Electron `app.asar`**、**ONScripter (`nscript.dat` `0x84` XOR / `0.txt`)**、**WOLF RPG Editor (`Data/*.dat/.mps`)**、**Artemis Engine (`.pfs` + `.ast`)**、**HSP (`DPMX` + 替身 DLL)**；
   - **复古电脑（PC-98 / Win3.1 / Win95 / Win98）**：**NEC PC-98 (`.hdi/.fdi/.nhd` FAT12/16 + 内置 `anex86.bmp` 字库底板)**、**Macromedia Director（`RIFX`/`XFIR` `.dir/.dxr/.cst` 及 Projector EXE —— 覆盖 Win3.1《东脑》《中天》等同代多媒体邪典）**、**Windows 3.1 16 位 `NE` 程序**、**Win95/98 AliceSoft System 1/2/3/3.5 (`*.ald` 扇区归档)**；
-  - **移动端、掌机与功能机老古董**：**Java ME / J2ME ("jvav" `.jar` `.class` `0xCAFEBABE` 常量池变长重建 + `.jad` 字节大小自动同步)**、**塞班 Symbian OS（S60 / N-Gage / UIQ `.sis / .sisx / .rsc / .r01 / E32Image .app`）**、**Android `.apk`（`strings.xml` + `resources.arsc` + `classes.dex` 重算校验 + `global-metadata.dat`）**、**iOS `.ipa`（明文与 `bplist00` 二进制 `.strings` + `0755` 权限保持）**、**PS Vita (`.vpk` + `rePatch/<TITLE_ID>/`)**、**PSP (`.iso` & `.cso` CISO 压缩镜像 LBA 扇区写回)**、**Nintendo DS (`.nds` NitroROM FNT/FAT 写回)**；
+  - **移动端、掌机与塞班/黑莓/Java 老古董**：**塞班 Symbian 全世代（从 S60v1/v2/N-Gage `.sis/.app/.rsc`、S60v3/v5 `.sisx` TLV `SISCompressed` zlib 内置解包重打包，一直通杀到 Symbian^3 / 安娜 Anna / 贝拉 Belle 的 Qt `.qm` 编译语言包与 `.qml`）**、**黑莓 BlackBerry 全世代（经典 BBOS 4~7 单模块/多模块捆绑 `.cod` + `.jad` `RIM-COD-SHA1` 自动重算，以及 BlackBerry 10 / PlayBook `.bar`）**、**Java ME / J2ME ("jvav" `.jar` `.class` `0xCAFEBABE` 常量池变长重建 + `.jad` 字节大小同步)**、**Android `.apk`（`strings.xml` + `resources.arsc` + `classes.dex` 重算校验 + `global-metadata.dat`）**、**iOS `.ipa`（明文与 `bplist00` 二进制 `.strings` + `0755` 权限保持）**、**PS Vita (`.vpk` + `rePatch/<TITLE_ID>/`)**、**PSP (`.iso` & `.cso` CISO 压缩镜像 LBA 扇区写回)**、**Nintendo DS (`.nds` NitroROM FNT/FAT 写回)**；
   - **测试版专属功能 —— 0 Token「文本提取 → 自翻译 → 回录重打包」**：一键将任意受支持游戏/镜像的文本提取为 Excel 直读的 UTF-8-BOM **`ferry_tl.tsv`** 与 **`ferry_tl.json`**，在 Excel / 记事本 / ParaTranz / 网页大模型自翻后，一键回录并自动重打包回原格式镜像或安装包！
 - **Minecraft 模组汉化**：选择 Minecraft 实例，扫描整合包的中文缺口。默认避让人工译文；社区汉化、质量检查、术语表和桥接工具在「资源与桥接」。
 - **翻译引擎**：管理接口、密钥和预设，测试连接，配置并发与模型池。
@@ -278,14 +278,15 @@ py mc_ai_translator.py translate --instance "..." --only-modid tacz,jei
 4. **手工精修 `ferry_tl.json` → 0 Token 重刷**：翻译完成后，可随时点击「编辑译文表」修改 `ferry_tl.json` 中的 `dst`，再点「写回译文表」瞬间重刷进游戏，不花一分钱 Token。
 5. **一键无损撤销（`.ferry-undo.json`）**：所有原地修改（先备份 MD5 再落盘）和副本生成都记录在 `.ferry-undo.json`，随时点「撤销还原」100% 恢复原状。
 
-### 已支持的 28 类全球引擎与平台适配器总表
+### 已支持的 29 类全球引擎与平台适配器总表
 
 | 优先级 | 适配器标识 | 覆盖平台 / 引擎 / 容器 | 核心机制与回写策略 |
 | :---: | :--- | :--- | :--- |
 | `11` | `apk` | **Android `.apk`** / 解包目录 | 抽取 `res/values*/strings.xml`、**`resources.arsc` (`ResStringPool` `0x0001`)**、`assets/` 内嵌游戏剧本、**`classes.dex` 字符串池**及 Unity IL2CPP `global-metadata.dat`；写回 `.cn.apk` 时自动重算 DEX SHA-1 与 Adler32、保持 `resources.arsc` 为 `ZIP_STORED` 无压缩并剥除旧 `META-INF` 签名块 |
 | `12` | `ipa` | **iOS `.ipa`** / `Payload/*.app` | 原生支持 Apple `*.lproj/*.strings`（**明文 UTF-8/UTF-16 与编译后 `bplist00` 二进制格式**）及包内游戏剧本与 `global-metadata.dat`；重建 `.cn.ipa` 严格保留 Mach-O `0755` 可执行权限位 |
 | `13` | `j2me` | **Java ME / J2ME ("jvav" `.jar / .jad`)** | 识别 `META-INF/MANIFEST.MF` 的 `MIDlet-` 清单，纯标准库解析并**任意长度重建 `.class` (`0xCAFEBABE`) 的 `CONSTANT_Utf8` 常量池**（不破坏字节码下标），产出 `.cn.jar` 并自动同步修正 `.cn.jad` 的 `MIDlet-Jar-Size` |
-| `13` | `symbian` | **塞班 Symbian OS (`.sis / .sisx / .rsc / .r01 / .app`)** | 覆盖 S60v1/v2 (`0x10000419`)、S60v3/v5 (`0x10201A7A`)、UIQ 与 N-Gage，支持 `.rsc / .r01..r99` 资源表与 EPOC `E32Image` (`.app`) `_LIT16 / _LIT8` 台词抽取与定长回写 |
+| `13` | `blackberry` | **黑莓 BlackBerry 全世代 (`.cod / .jad / .bar`)** | 同时支持 **BBOS 4~7 单模块 `.cod` (`0xDEC0FFFF`) 与多模块 ZIP 捆绑 `.cod`**（写回 `.cn.cod` 时自动同步重算 `.cn.jad` 的 `RIM-COD-Size` 与 20 字节 `RIM-COD-SHA1`），以及 **BlackBerry 10 / PlayBook `.bar`**（含 Qt Cascades `.qm / .qml` 与 `app/native/` 资源） |
+| `13` | `symbian` | **塞班 Symbian 全世代 (S60v1~安娜/贝拉)** | 覆盖 S60v1/v2 (`0x10000419`)、S60v3/v5/Symbian^3/安娜/贝拉 (`0x10201A7A` **内置 `.sisx` TLV `SISCompressed` `zlib` 数据流自动解包与重打包**)，支持 `.rsc / .r01..r99`、`E32Image` (`.app`) 以及**安娜/贝拉专属的 Qt `.qm` (`UTF-16BE` 任意长度重建) 与 `.qml`** |
 | `13` | `psv` | **PS Vita `.vpk`** / 解包目录 | 解析 `sce_sys/param.sfo`（`\x00PSF` 标题与 `TITLE_ID`），鉴别 `SCE\x00` 加密与明文 ELF，抽取明文词表与多编码二进制剧本；输出 `.cn.vpk` 或实机/Vita3K 标准 **`rePatch/<TITLE_ID>/`** 补丁目录 |
 | `14` | `psp` | **PSP `.iso` & `.cso`** / `PSP_GAME` | 纯标准库解析 **ISO-9660 光盘文件系统**与 **`CISO` (`.cso`) 分扇区 deflate 压缩流**，读取 `/PSP_GAME/PARAM.SFO` 与 `USRDIR` 脚本，在 `.cn.iso / .cn.cso` 对应 LBA 扇区区间内原位写回，PPSSPP 与实机直读 |
 | `14` | `nds` | **Nintendo DS `.nds`** (NitroROM) | 纯标准库解析 NDS 卡带头部的 **FNT（文件名表 `0x40`）与 FAT（文件分配表 `0x48`）**，抽取内部脚本并在 FAT 区间原位定长覆写产出 `.cn.nds` |
@@ -363,6 +364,16 @@ py mc_ai_translator.py config --init   # 生成默认配置
 - 列宽可拖，排序不重置宽度，窗口大小位置会记住。
 
 ## 更新日志
+
+**v2.0.0-alpha.5（早期测试版）**
+
+- **塞班全世代（S60v1 → 安娜 Anna / 贝拉 Belle）彻底打通**：
+  - 内置 Symbian 9+ `.sisx` (`0x10201A7A`) 的 **TLV `SISCompressed` (`0x0018`) `zlib` 数据流自动解包与重压缩**，无需外部 `SISContents` 或 `unsis` 即可直接深入 `.sisx` 压缩块内部抽取并回写 `.cn.sisx`；
+  - 新增塞班^3 / 安娜 / 贝拉（以及 PC Qt 游戏）通用的 **Qt `.qm` 编译语言包（魔数 `3C B8 64 18...`）解析器与 `UTF-16BE` 任意长度重建器**，以及 **Qt Quick `.qml` (`qsTr(...)`)** 抽取与回写。
+- **新增黑莓 BlackBerry 全世代适配器 (`blackberry`)（冲至 29 类适配器）**：
+  - **经典 BBOS 4.x ~ 7.1 (`.cod` + `.jad`)**：同时支持单模块裸二进制 `.cod`（魔数 `DE C0 FF FF`）与超过 64KB 的多模块 ZIP 捆绑 `.cod`；产出 `.cn.cod` 时自动同步更新 `.cn.jad` 的 `RIM-COD-Size` 并**重算 20 字节 `RIM-COD-SHA1` 校验值**；
+  - **后期 BlackBerry 10 & PlayBook (`.bar`)**：支持 QNX `.bar` 容器内的 Qt Cascades `.qm / .qml`、`app/native/` 多语言词表与二进制剧本抽取回写。
+- 全仓自动化回归测试扩充至 **307 项全绿**。
 
 **v2.0.0-alpha.4（早期测试版）**
 
@@ -464,7 +475,7 @@ py mc_ai_translator.py config --init   # 生成默认配置
 ## 开发 / 测试
 
 - Python 3.11+，只用标准库（`tomllib`、`plistlib`、`zlib`、`struct`、tkinter 等），**无第三方依赖**。
-- 跑全量测试（当前 **305 项全绿**）：
+- 跑全量测试（当前 **307 项全绿**）：
 
 ```powershell
 py -3 -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize test_fontcheck test_deps test_gamemaker test_hsp test_rpa_renpy test_rpgmaker_ace test_localized_resume test_ferrygame
