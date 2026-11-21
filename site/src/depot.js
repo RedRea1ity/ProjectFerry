@@ -1,4 +1,44 @@
 // The cover is an enhancement: reading and downloading never wait for motion.
+// CD bonus track. Keep normal clicks inert; assistive activation has no click count.
+(() => {
+  const trigger = document.querySelector('.disc-trigger');
+  const dialog = document.querySelector('#bonus-track');
+  if (!trigger || !dialog?.showModal) return;
+  const pictures = dialog.querySelectorAll('.bonus-screen img');
+  const letter = dialog.querySelector('.bonus-letter');
+  const count = dialog.querySelector('.bonus-count');
+  const next = dialog.querySelector('.bonus-next');
+  let timer, track = 0, lastTap = null;
+
+  function show(index) {
+    clearTimeout(timer);
+    track = index;
+    pictures[0].hidden = index !== 0;
+    pictures[1].hidden = index === 0;
+    letter.hidden = index !== 2;
+    count.textContent = ['01 / 03', '02 / 03', '03 / 03'][index];
+    next.textContent = index === 2 ? '重播 ↺' : '下一轨 ▸';
+    if (index < 2) timer = setTimeout(() => { if (dialog.open) show(index + 1); }, index === 0 ? 1800 : 2600);
+  }
+  function playBonus() {
+    if (dialog.open) return;
+    lastTap = null;
+    dialog.showModal();
+    show(0);
+  }
+  trigger.hidden = false;
+  trigger.addEventListener('dblclick', playBonus);
+  trigger.addEventListener('click', event => { if (event.detail === 0) playBonus(); });
+  trigger.addEventListener('pointerup', event => {
+    if (event.pointerType !== 'touch' || !event.isPrimary) return;
+    const {timeStamp: t, clientX: x, clientY: y} = event;
+    if (lastTap && t - lastTap.t < 450 && Math.hypot(x - lastTap.x, y - lastTap.y) < 28) playBonus();
+    else lastTap = {t, x, y};
+  });
+  trigger.addEventListener('pointercancel', () => { lastTap = null; });
+  next.addEventListener('click', () => show((track + 1) % 3));
+  dialog.addEventListener('close', () => { clearTimeout(timer); if (!dialog.open) trigger.focus({preventScroll:true}); });
+})();
 (() => {
   const dialog=document.querySelector('#art-view');if(!dialog||!dialog.showModal)return;
   const enlarged=dialog.querySelector('img');let opener;
