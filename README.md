@@ -3,11 +3,15 @@
 > 人无语言则茫然无依，故为摆渡。
 > Where words fail, we ferry.
 
-**开发中 · v2.0.0-alpha.2（早期测试版）**
+**开发中 · v2.0.0-alpha.3（早期测试版）**
 
-摆渡计划已经从最初单纯的「Minecraft 模组临时汉化器」，正式演进为**双轨制跨平台游戏本地化工作台**（`ferrycore` 模组主线 + `ferrygame` 通用游戏线）。首次打开时从左侧导航栏或「项目工作台」选择要处理的轨道；两条线共用底层 AI 翻译引擎与密钥配置，但探测、提示词、写回与无损还原各自独立、互不污染：
+摆渡计划已经从最初单纯的「Minecraft 模组临时汉化器」，正式演进为**双轨制跨平台全语种游戏本地化工作台**（`ferrycore` 模组主线 + `ferrygame` 通用游戏线）。首次打开时从左侧导航栏或「项目工作台」选择要处理的轨道；两条线共用底层 AI 翻译引擎与密钥配置，但探测、提示词、写回与无损还原各自独立、互不污染：
 
-- **通用游戏汉化（17 类引擎与平台适配）**：支持从主流引擎（**吉里吉里 `.xp3`、Ren'Py `.rpa/.rpy`、RPG Maker 2000/2003/XP/VX/Ace/MV/MZ、TyranoScript / Electron `app.asar`、Godot 3/4 `.pck`、Unity `StreamingAssets + #US → XUnity`、GameMaker `data.win`、HSP、通用 `.po/.json/.csv`**）到复古猎奇平台（**NEC PC-98 `.hdi/.fdi/.nhd` 磁盘镜像 + 内置 `anex86.bmp` 字库底板**），再到移动端与掌机（**Android `.apk` + `classes.dex`、iOS `.ipa` + `bplist00`、PS Vita `.vpk / rePatch`、PSP `.iso` ISO-9660 光盘镜像**）。体检在花第一个 Token 之前先答清「能不能读、能不能写回」，支持导出 `ferry_tl.json` 手工改完 **0 Token 重刷进游戏**，所有改动均写入 `.ferry-undo.json` 支持**一键无损撤销**。
+- **通用游戏汉化（24 类全球主流 / 独立 / 复古 / 移动 / 掌机引擎适配）**：
+  - **欧美与全球主流/独立引擎**：**Unreal Engine 4/5 (`.locres` v0~v3)**、**Unity (`StreamingAssets` + Mono `#US` + IL2CPP `global-metadata.dat` → XUnity)**、**Godot 3/4 (`.pck` + `.tscn`)**、**GameMaker (`data.win` IFF `STRG`)**、**LÖVE / Love2D (`.love` / 融合 EXE / `.lua`)**、**全球叙事引擎集群（Inkle's Ink `.ink.json`、Yarn Spinner `.yarn`、Twine `.html`、Godot Dialogic `.dtl`、Adventure Game Studio `.trs`）**、**通用 Gettext `.po / .json / .csv`**；
+  - **日系同人与视觉小说引擎**：**Kirikiri 2/Z 吉里吉里 (`.xp3` + UTF-16LE `patch.xp3`)**、**Ren'Py (`.rpa / .rpy`)**、**RPG Maker 全家桶（2000/2003 `.ldb/.lmu`、XP/VX/Ace `.rgss3a/.rvdata2`、MV/MZ `.json`）**、**TyranoScript / Electron `app.asar`**、**ONScripter (`nscript.dat` `0x84` XOR / `0.txt`)**、**WOLF RPG Editor (`Data/*.dat/.mps`)**、**Artemis Engine (`.pfs` + `.ast`)**、**HSP (`DPMX` + 替身 DLL)**；
+  - **复古、移动端与掌机平台**：**NEC PC-98 (`.hdi/.fdi/.nhd` FAT12/16 + 内置 `anex86.bmp` 字库底板)**、**Android `.apk`（含 `strings.xml`、`resources.arsc` 二进制字符串池、`classes.dex` 重算校验与内嵌 `global-metadata.dat`）**、**iOS `.ipa`（含明文与 `bplist00` 二进制 `.strings` 及 `0755` 权限保持）**、**PS Vita (`.vpk` + `rePatch/<TITLE_ID>/`)**、**PSP (`.iso` & `.cso` CISO 压缩镜像 LBA 扇区写回)**、**Nintendo DS (`.nds` NitroROM FNT/FAT 写回)**；
+  - **全球多编码裸二进制兜底 (`rawbin` + `recon`)**：同时支持 **Shift-JIS → GBK**、**欧美 UTF-8/ASCII → UTF-8**、**Windows 宽字符 UTF-16LE → UTF-16LE** 的定长原位覆写。
 - **Minecraft 模组汉化**：选择 Minecraft 实例，扫描整合包的中文缺口。默认避让人工译文；社区汉化、质量检查、术语表和桥接工具在「资源与桥接」。
 - **翻译引擎**：管理接口、密钥和预设，测试连接，配置并发与模型池。
 
@@ -273,27 +277,34 @@ py mc_ai_translator.py translate --instance "..." --only-modid tacz,jei
 4. **手工精修 `ferry_tl.json` → 0 Token 重刷**：翻译完成后，可随时点击「编辑译文表」修改 `ferry_tl.json` 中的 `dst`，再点「写回译文表」瞬间重刷进游戏，不花一分钱 Token。
 5. **一键无损撤销（`.ferry-undo.json`）**：所有原地修改（先备份 MD5 再落盘）和副本生成都记录在 `.ferry-undo.json`，随时点「撤销还原」100% 恢复原状。
 
-### 已支持的 17 类引擎与平台适配器总表
+### 已支持的 24 类全球引擎与平台适配器总表
 
 | 优先级 | 适配器标识 | 覆盖平台 / 引擎 / 容器 | 核心机制与回写策略 |
 | :---: | :--- | :--- | :--- |
-| `11` | `apk` | **Android `.apk`** / 解包目录 | 抽取 `res/values*/strings.xml`、`assets/` 内嵌游戏剧本（RM/Tyrano/Godot/JSON/CSV）及 **`classes.dex` 字符串池**；写回 `.cn.apk` 时自动重算 DEX SHA-1 与 Adler32、保持 `resources.arsc` 为 `ZIP_STORED` 无压缩并剥除旧 `META-INF` 签名块 |
-| `12` | `ipa` | **iOS `.ipa`** / `Payload/*.app` | 原生支持 Apple `*.lproj/*.strings`（**明文 UTF-8/UTF-16 与编译后 `bplist00` 二进制格式**）及包内游戏剧本；重建 `.cn.ipa` 严格保留 Mach-O `0755` 可执行权限位 |
-| `13` | `psv` | **PS Vita `.vpk`** / 解包目录 | 解析 `sce_sys/param.sfo`（`\x00PSF` 标题与 `TITLE_ID`），鉴别 `SCE\x00` 加密与明文 ELF，抽取明文词表与裸二进制剧本；输出 `.cn.vpk` 或实机/Vita3K 标准 **`rePatch/<TITLE_ID>/`** 补丁目录 |
-| `14` | `psp` | **PSP `.iso`** / `PSP_GAME` | 纯标准库解析 **ISO-9660 光盘文件系统**（扇区 16 `CD001` 主卷描述符与目录树），解析 `/PSP_GAME/PARAM.SFO` 与 `USRDIR` 脚本，在 `.cn.iso` 对应 LBA 扇区区间内原位定长写回，PPSSPP 与实机直读 |
+| `11` | `apk` | **Android `.apk`** / 解包目录 | 抽取 `res/values*/strings.xml`、**`resources.arsc` (`ResStringPool` `0x0001`)**、`assets/` 内嵌游戏剧本、**`classes.dex` 字符串池**及 Unity IL2CPP `global-metadata.dat`；写回 `.cn.apk` 时自动重算 DEX SHA-1 与 Adler32、保持 `resources.arsc` 为 `ZIP_STORED` 无压缩并剥除旧 `META-INF` 签名块 |
+| `12` | `ipa` | **iOS `.ipa`** / `Payload/*.app` | 原生支持 Apple `*.lproj/*.strings`（**明文 UTF-8/UTF-16 与编译后 `bplist00` 二进制格式**）及包内游戏剧本与 `global-metadata.dat`；重建 `.cn.ipa` 严格保留 Mach-O `0755` 可执行权限位 |
+| `13` | `psv` | **PS Vita `.vpk`** / 解包目录 | 解析 `sce_sys/param.sfo`（`\x00PSF` 标题与 `TITLE_ID`），鉴别 `SCE\x00` 加密与明文 ELF，抽取明文词表与多编码二进制剧本；输出 `.cn.vpk` 或实机/Vita3K 标准 **`rePatch/<TITLE_ID>/`** 补丁目录 |
+| `14` | `psp` | **PSP `.iso` & `.cso`** / `PSP_GAME` | 纯标准库解析 **ISO-9660 光盘文件系统**与 **`CISO` (`.cso`) 分扇区 deflate 压缩流**，读取 `/PSP_GAME/PARAM.SFO` 与 `USRDIR` 脚本，在 `.cn.iso / .cn.cso` 对应 LBA 扇区区间内原位写回，PPSSPP 与实机直读 |
+| `14` | `nds` | **Nintendo DS `.nds`** (NitroROM) | 纯标准库解析 NDS 卡带头部的 **FNT（文件名表 `0x40`）与 FAT（文件分配表 `0x48`）**，抽取内部脚本并在 FAT 区间原位定长覆写产出 `.cn.nds` |
 | `15` | `pc98` | **NEC PC-98** (`.hdi/.fdi/.nhd`) | 纯标准库解析 FAT12 / FAT16 磁盘镜像，内置 524KB **`anex86.bmp` 汉化字库底板**，把 CP932 缺字动态映射至 JIS 第二水准冷僻汉字格并自动修正 16 位汇编 `LODSW` 双字节偶对齐，输出镜像副本 + 定制 `anex86.bmp` |
+| `17` | `onscripter` | **ONScripter / NScripter** | 支持 **`nscript.dat`（单字节 `0x84` XOR 自动加解密）** 与 `0.txt / 00.txt`，抽取 `caption`、`select/csel` 选项与正文台词 |
 | `18` | `kirikiri` | **Kirikiri 2 / Z（吉里吉里）** | 纯标准库解包与打包 `.xp3` 归档（支持 zlib 压缩索引与加密滤镜鉴别），回写 `.ks` 统一采用 **UTF-16LE with BOM (`0xFF 0xFE`)** 生成 `patch.xp3`，无需转区或注入 DLL 直接原生渲染简体中文 |
+| `19` | `wolfrpg` | **WOLF RPG Editor** | 自动鉴别 `.wolf` (DXArchive) 与解包 `Data/BasicData/*.dat`、`Data/MapData/*.mps`，抽取并定长写回数据库与事件台词 |
+| `19` | `artemis` | **Artemis Engine** (`.pfs / .ast`) | 纯标准库解析 `pf8 / pf6` (`.pfs`) 归档索引，抽取 `.ast` Lua 表结构剧本台词与选项，写出高优先级覆盖脚本 |
 | `20` | `tyrano` | **TyranoScript / TyranoBuilder** | 覆盖散装目录、`zip-in-exe` 尾部追加包、以及现代 **Electron `resources/app.asar`**（Chromium Pickle 头解析与 SHA-256 完整性重算） |
 | `20` | `renpy` | **Ren'Py** (`.rpy` / `.rpa` v2 & v3) | 解包 `RPA-2.0 / RPA-3.0` 归档，生成非侵入式 `game/tl/chinese/` 官方多语言挂载脚本 |
 | `21` | `rpgmaker_2k` | **RPG Maker 2000 / 2003** | 解析 LCF BER 变长块结构，只抽取 `RPG_RT.ldb` 玩家可见块（`11..15, 17, 18, 21, 25`）与 `Map*.lmu` 事件块（`81`），硬跳过图块矩阵与开关变量名，定长原地写回 |
 | `22` | `rpgmaker_ace` | **RPG Maker XP / VX / VX Ace** | 纯标准库解包 `RGSSADv1 / v3`（`.rgssad / .rgss2a / .rgss3a`），原生反序列化与重打包 Ruby Marshal 4.8（`.rxdata / .rvdata / .rvdata2`） |
+| `24` | `love2d` | **LÖVE (Love2D / Lua)** | 覆盖 `.love` 归档、融合 `zip-in-exe` 与散装 `main.lua`，智能抽取 `.lua` 表值与 UI/剧情字面量（跳过 `require`、资源路径与表键） |
 | `25` | `rpgmaker` | **RPG Maker MV / MZ** | 按文件 + JSON Pointer + 事件指令码（`401/405/102/320/324/325`）三重精确定位 `data/*.json` 与 `www/data/*.json`，不碰 `plugins.js` 与代码行 |
+| `26` | `unreal` | **Unreal Engine 4 / 5** (`.locres`) | 纯标准库解析并重建 UE4/UE5 `.locres`（支持 Legacy v0 与 Optimized v1/v2/v3 `LOCRES_MAGIC`），以负数长度 **`FString` UTF-16LE 宽字符**无损重建任意长度中文字符串池，保持前置 CRC32/CityHash64 键索引完整 |
 | `27` | `godot` | **Godot Engine 3.x / 4.x** | 纯标准库解析并重建 `GDPC` v1 / v2 `.pck` 资源包（含 Godot 4 相对 `file_base` 与 MD5 重算），抽取并回写 `.tscn` 场景节点文本属性 |
-| `28` | `unity` | **Unity Engine** | 原生解析 `Managed/Assembly-CSharp.dll` 的 ECMA-335 `BSJB` 元数据根与 `#US`（User Strings）UTF-16LE 字符串流及 `StreamingAssets` 词表；原地更新并自动生成 **XUnity.AutoTranslator** 静态预翻译包 `BepInEx/Translation/zh/Text/_PreTranslated.txt` |
+| `28` | `unity` | **Unity Engine (Mono & IL2CPP)** | 同时支持 **`StreamingAssets` 词表**、Mono **`Assembly-CSharp.dll` (`BSJB` `#US` UTF-16LE 流)**、以及 **IL2CPP `global-metadata.dat` (`0xFAB11BAF` `stringLiteral` 任意长度重建)**，并同步生成 **XUnity.AutoTranslator** `_PreTranslated.txt` 预翻译包 |
+| `29` | `narrative` | **欧美独立叙事引擎集群** | 一站式支持 **Inkle's Ink (`.ink.json` `^` 节点)**、**Yarn Spinner (`.yarn` 台词与 `->` 选项)**、**Twine (`.html` `<tw-passagedata>`)**、**Godot Dialogic (`.dtl`)** 与 **Adventure Game Studio (`.trs`)** |
 | `30` | `gamemaker` | **GameMaker Studio** | 解析并重建 IFF `FORM` 容器（`data.win / game.unx / game.ios`）的 `STRG` 字符串池与外部 CSV/JSON 词表 |
 | `35` | `i18n_table` | **通用 i18n 词表** | 支持跨引擎标准 GNU Gettext `.po`（含多行拼接）、`locales/*.json`、`i18n/*.csv` 抽取与原地写回 |
 | `40` | `hsp` | **Hot Soup Processor (HSP)** | 解包 `DPMX` / `#HSP3` 字节码字符串池，配合按需编译的 GDI 替身 DLL 在渲染层实时拦截替换 |
-| `90` | `rawbin` | **未知复古 / 同人引擎裸二进制兜底** | 扫描 `.exe / .dat / .bin / .mes / .scn` 中的 Shift-JIS 剧情句与操作菜单，按原字节长度补齐定长覆写，不改任意指针偏移 |
+| `90` | `rawbin` | **全球多编码裸二进制兜底** | 在 `.exe / .dat / .bin / .mes / .scn` 中同时扫描 **Shift-JIS（→GBK）**、**欧美 UTF-8/ASCII 自然英文句与菜单（→UTF-8）**、**Windows UTF-16LE 宽字符（→UTF-16LE）**，按原字节长度补齐定长覆写，不改任意指针偏移 |
 
 ### 通用游戏线命令行（`ferrygame` & `mc_ai_translator.py`）
 
@@ -345,6 +356,20 @@ py mc_ai_translator.py config --init   # 生成默认配置
 - 列宽可拖，排序不重置宽度，窗口大小位置会记住。
 
 ## 更新日志
+
+**v2.0.0-alpha.3（早期测试版）**
+
+- **欧美与全球主流/独立引擎补齐（冲至 24 类适配器）**：
+  - **Unreal Engine 4 / 5 (`unreal`)**：纯标准库解析并重建 `.locres`（Legacy v0 与 Optimized v1/v2/v3），以 `FString` UTF-16LE 宽字符无损重建任意长度中文字符串池。
+  - **欧美独立叙事引擎集群 (`narrative`)**：原生支持 **Inkle's Ink (`.ink.json`)**、**Yarn Spinner (`.yarn`)**、**Twine 互动小说 (`.html`)**、**Godot Dialogic (`.dtl`)** 与 **Adventure Game Studio (`.trs`)**。
+  - **LÖVE / Love2D (`love2d`)**：支持 `.love` 归档、融合 `zip-in-exe` 与散装 `main.lua` 的 Lua 字面量智能抽取与回写。
+  - **全球多编码二进制兜底 (`rawbin`)**：打破「只能扫日文 Shift-JIS」的限制，新增欧美 **UTF-8 / ASCII 自然英文句与菜单**及 **Windows UTF-16LE 宽字符**的双轨二进制扫描与定长对齐覆写。
+- **深度二进制与掌机/VN 死角清扫**：
+  - **Unity IL2CPP `global-metadata.dat`**：直接解析 `0xFAB11BAF` 元数据头并重建 `stringLiteral` 与 `stringLiteralData` 表，支持任意长度 UTF-8 中文静态写回（同时覆盖 PC、APK 与 IPA 内嵌的 IL2CPP 游戏）。
+  - **Android `resources.arsc`**：支持直接解析与原位覆写编译后 `ResStringPool` (`0x0001`) 字符串池。
+  - **PSP `.cso` (`CISO`) 与 Nintendo DS `.nds` (NitroROM)**：PSP 适配器新增 `.cso` 分扇区 deflate 透明解压与重打包；新增 `NdsAdapter` 解析 NDS 卡带 FNT/FAT 文件表并输出 `.cn.nds`。
+  - **ONScripter (`nscript.dat` `0x84` XOR)、WOLF RPG Editor (`Data/*.dat/.mps`)、Artemis Engine (`.pfs / .ast`)** 全部纳入标准库适配。
+- 全仓自动化回归测试扩充至 **300 项全绿**。
 
 **v2.0.0-alpha.2（早期测试版）**
 
@@ -420,7 +445,7 @@ py mc_ai_translator.py config --init   # 生成默认配置
 ## 开发 / 测试
 
 - Python 3.11+，只用标准库（`tomllib`、`plistlib`、`zlib`、`struct`、tkinter 等），**无第三方依赖**。
-- 跑全量测试（当前 **295 项全绿**）：
+- 跑全量测试（当前 **300 项全绿**）：
 
 ```powershell
 py -3 -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize test_fontcheck test_deps test_gamemaker test_hsp test_rpa_renpy test_rpgmaker_ace test_localized_resume test_ferrygame

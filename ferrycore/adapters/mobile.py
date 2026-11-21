@@ -45,7 +45,11 @@ from .kirikiri import apply_ks, parse_ks
 from .rpgmaker import iter_texts as iter_rm_texts
 from .rpgmaker import set_pointer
 from .undo import UNDO_NAME, UndoLog
-from .unity import is_unity_translatable
+from .unity import (
+    extract_il2cpp_metadata_strings,
+    is_unity_translatable,
+    rebuild_il2cpp_metadata,
+)
 
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 _STRINGS_LINE_RE = re.compile(
@@ -190,6 +194,144 @@ def patch_dex_strings(dex_bytes: bytes, replacements: dict[str, str]) -> tuple[b
         struct.pack_into("<I", buf, 8, adler)
 
     return bytes(buf), applied, conflicts
+
+
+# ============================================================================
+# Android resources.arsc (ResStringPool 0x0001) 解析与定长原位覆写
+# ============================================================================
+
+
+def _read_arsc_len8(blob: bytes | bytearray, pos: int) -> tuple[int, int]:
+    b0 = blob[pos]
+    if b0 & 0x80:
+        return ((b0 & 0x7F) << 8) | blob[pos + 1], pos + 2
+    return b0, pos + 1
+
+
+def extract_arsc_strings(arsc_bytes: bytes) -> list[tuple[int, str]]:
+    """从 Android `resources.arsc` 的顶层 `ResStringPool` (`0x0001`) 抽取可翻译字符串。"""
+    if len(arsc_bytes) < 40:
+        return []
+    t_type, t_hdr_size, _t_size = struct.unpack_from("<HHI", arsc_bytes, 0)
+    if t_type != 0x0002 or t_hdr_size < 12 or t_hdr_size + 28 > len(arsc_bytes):
+        return []
+    pool_off = t_hdr_size
+    p_type, p_hdr_size, p_size, str_count, _style_count, flags, strings_start, _styles_start = (
+        struct.unpack_from("<HHIIIIII", arsc_bytes, pool_off)
+    )
+    if p_type != 0x0001 or p_hdr_size < 28 or pool_off + p_size > len(arsc_bytes):
+        return []
+
+    is_utf8 = bool(flags & 0x100)
+    offsets_base = pool_off + p_hdr_size
+    data_base = pool_off + strings_start
+    results: list[tuple[int, str]] = []
+
+    for idx in range(min(str_count, 200000)):
+        if offsets_base + (idx + 1) * 4 > len(arsc_bytes):
+            break
+        rel_off = struct.unpack_from("<I", arsc_bytes, offsets_base + idx * 4)[0]
+        pos = data_base + rel_off
+        if pos >= pool_off + p_size:
+            continue
+        try:
+            if is_utf8:
+                _u16_len, pos = _read_arsc_len8(arsc_bytes, pos)
+                u8_len, pos = _read_arsc_len8(arsc_bytes, pos)
+                if pos + u8_len > len(arsc_bytes):
+                    continue
+                text = arsc_bytes[pos : pos + u8_len].decode("utf-8")
+            else:
+                u16_len = struct.unpack_from("<H", arsc_bytes, pos)[0]
+                pos += 2
+                if u16_len & 0x8000:
+                    low = struct.unpack_from("<H", arsc_bytes, pos)[0]
+                    pos += 2
+                    u16_len = ((u16_len & 0x7FFF) << 16) | low
+                byte_len = u16_len * 2
+                if pos + byte_len > len(arsc_bytes):
+                    continue
+                text = arsc_bytes[pos : pos + byte_len].decode("utf-16-le")
+        except (IndexError, UnicodeDecodeError, struct.error):
+            continue
+
+        if text.startswith("res/") or text.startswith("androidx.") or text.startswith("com."):
+            continue
+        if is_unity_translatable(text):
+            results.append((idx, text))
+    return results
+
+
+def patch_arsc_strings(arsc_bytes: bytes, replacements: dict[str, str]) -> tuple[bytes, int]:
+    """在 `resources.arsc` 顶层 `ResStringPool` 内执行定长原位覆写。"""
+    if len(arsc_bytes) < 40:
+        return arsc_bytes, 0
+    t_type, t_hdr_size, _t_size = struct.unpack_from("<HHI", arsc_bytes, 0)
+    if t_type != 0x0002 or t_hdr_size + 28 > len(arsc_bytes):
+        return arsc_bytes, 0
+    pool_off = t_hdr_size
+    p_type, p_hdr_size, p_size, str_count, _style_count, flags, strings_start, _styles_start = (
+        struct.unpack_from("<HHIIIIII", arsc_bytes, pool_off)
+    )
+    if p_type != 0x0001 or pool_off + p_size > len(arsc_bytes):
+        return arsc_bytes, 0
+
+    is_utf8 = bool(flags & 0x100)
+    offsets_base = pool_off + p_hdr_size
+    data_base = pool_off + strings_start
+    buf = bytearray(arsc_bytes)
+    applied = 0
+
+    for idx in range(min(str_count, 200000)):
+        if offsets_base + (idx + 1) * 4 > len(buf):
+            break
+        rel_off = struct.unpack_from("<I", buf, offsets_base + idx * 4)[0]
+        pos = data_base + rel_off
+        if pos >= pool_off + p_size:
+            continue
+        try:
+            if is_utf8:
+                u16_pos = pos
+                _u16_len, u8_pos = _read_arsc_len8(buf, pos)
+                u8_len, str_pos = _read_arsc_len8(buf, u8_pos)
+                if (u8_pos - u16_pos) != 1 or (str_pos - u8_pos) != 1:
+                    continue
+                raw_str = bytes(buf[str_pos : str_pos + u8_len])
+                src_text = raw_str.decode("utf-8")
+                tr = replacements.get(f"ARSC:{idx}") or replacements.get(src_text)
+                if not tr or not tr.strip() or tr == src_text:
+                    continue
+                new_u8 = tr.encode("utf-8")
+                if len(new_u8) > u8_len or len(tr) >= 128:
+                    continue
+                pad = u8_len - len(new_u8)
+                padded_tr = tr + (" " * pad)
+                padded_u8 = padded_tr.encode("utf-8")
+                if len(padded_u8) != u8_len or len(padded_tr) >= 128:
+                    continue
+                buf[u16_pos] = len(padded_tr)
+                buf[u8_pos] = len(padded_u8)
+                buf[str_pos : str_pos + u8_len] = padded_u8
+                applied += 1
+            else:
+                u16_len = struct.unpack_from("<H", buf, pos)[0]
+                if u16_len & 0x8000:
+                    continue
+                str_pos = pos + 2
+                byte_len = u16_len * 2
+                src_text = bytes(buf[str_pos : str_pos + byte_len]).decode("utf-16-le")
+                tr = replacements.get(f"ARSC:{idx}") or replacements.get(src_text)
+                if not tr or not tr.strip() or tr == src_text:
+                    continue
+                if len(tr) > u16_len:
+                    continue
+                padded_tr = tr.ljust(u16_len, " ")
+                buf[str_pos : str_pos + byte_len] = padded_tr.encode("utf-16-le")
+                applied += 1
+        except Exception:
+            continue
+
+    return (bytes(buf) if applied > 0 else arsc_bytes), applied
 
 
 # ============================================================================
@@ -354,6 +496,38 @@ def collect_entries_from_virtual_files(
                         kind="dex",
                         rel_path=rel,
                         json_pointer=f"DEX:{s_idx}",
+                    )
+                )
+            continue
+
+        # 3b. Android resources.arsc
+        if fname.lower() == "resources.arsc":
+            for s_idx, val in extract_arsc_strings(raw):
+                entries.append(
+                    Entry(
+                        modid=modid,
+                        key=f"{rel}#ARSC:{s_idx}",
+                        english=val,
+                        source="game",
+                        kind="arsc",
+                        rel_path=rel,
+                        json_pointer=f"ARSC:{s_idx}",
+                    )
+                )
+            continue
+
+        # 3c. Unity IL2CPP global-metadata.dat
+        if fname.lower() == "global-metadata.dat":
+            for s_idx, val in extract_il2cpp_metadata_strings(raw):
+                entries.append(
+                    Entry(
+                        modid=modid,
+                        key=f"{rel}#IL2CPP:{s_idx}",
+                        english=val,
+                        source="game",
+                        kind="il2cpp_meta",
+                        rel_path=rel,
+                        json_pointer=f"IL2CPP:{s_idx}",
                     )
                 )
             continue
@@ -557,6 +731,36 @@ def patch_virtual_files(
                     modified[rel] = new_dex
                     total_applied += count
 
+        elif kind == "arsc":
+            arsc_map: dict[str, str] = {}
+            for e in file_entries:
+                tr = translations.get(e.key) or translations.get(e.english)
+                if tr and tr.strip():
+                    arsc_map[e.json_pointer] = tr
+                    arsc_map[e.english] = tr
+                else:
+                    total_missed += 1
+            if arsc_map:
+                new_arsc, count = patch_arsc_strings(raw, arsc_map)
+                if count > 0:
+                    modified[rel] = new_arsc
+                    total_applied += count
+
+        elif kind == "il2cpp_meta":
+            meta_map: dict[str, str] = {}
+            for e in file_entries:
+                tr = translations.get(e.key) or translations.get(e.english)
+                if tr and tr.strip():
+                    meta_map[e.json_pointer] = tr
+                    meta_map[e.english] = tr
+                else:
+                    total_missed += 1
+            if meta_map:
+                new_meta, count = rebuild_il2cpp_metadata(raw, meta_map)
+                if count > 0:
+                    modified[rel] = new_meta
+                    total_applied += count
+
         elif kind == " json" or kind == "json" or kind.startswith("rm_"):
             try:
                 payload = json.loads(raw.decode("utf-8-sig"))
@@ -658,7 +862,7 @@ def patch_virtual_files(
 def _is_candidate_zip_entry(rel: str) -> bool:
     low = rel.lower()
     fname = Path(low).name
-    if fname == "classes.dex" or fname == "strings.xml":
+    if fname in ("classes.dex", "resources.arsc", "strings.xml", "global-metadata.dat"):
         return True
     if low.endswith((".strings", ".ks", ".tscn", ".po", ".csv")):
         return True

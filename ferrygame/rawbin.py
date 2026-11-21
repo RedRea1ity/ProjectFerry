@@ -63,6 +63,34 @@ JP_MENU_TERMS = {
     "健康", "疲労", "仮死", "死亡", "病気", "Ｑ熱", "中毒", "修行", "布教活動", "投資", "休憩",
 }
 
+# 欧美/全球游戏高频操作菜单与 UI 词：允许短词在二进制常量池中被精准认领
+EN_MENU_TERMS = {
+    "New Game", "Start Game", "Continue", "Load Game", "Save Game", "Quick Save", "Quick Load",
+    "Options", "Settings", "Preferences", "Controls", "Keybindings", "Audio", "Sound", "Music",
+    "Graphics", "Video", "Display", "Fullscreen", "Windowed", "Resolution", "Language",
+    "Return to Title", "Main Menu", "Title Screen", "Resume Game", "Pause",
+    "Exit Game", "Quit Game", "Quit to Desktop", "Confirm", "Cancel", "Back",
+    "Inventory", "Equipment", "Skills", "Abilities", "Status", "Character", "Party",
+    "Quests", "Journal", "Codex", "Map", "Shop", "Craft", "Crafting",
+    "Game Over", "Victory", "Defeat", "Level Up", "Chapter", "Prologue", "Epilogue",
+}
+
+_PE_BOILERPLATE_RE = re.compile(
+    r"(?:This program cannot be run in DOS mode"
+    r"|Runtime Error!|Microsoft Visual C\+\+|R60\d\d"
+    r"|GetLastError|GetProcAddress|LoadLibrary|VirtualAlloc|HeapAlloc"
+    r"|FileDescription|FileVersion|ProductName|ProductVersion|CompanyName"
+    r"|LegalCopyright|InternalName|OriginalFilename|VS_VERSION_INFO"
+    r"|StringFileInfo|VarFileInfo|Translation|requestedExecutionLevel"
+    r"|urn:schemas-microsoft-com|assemblyIdentity|trustInfo"
+    r"|invalid string position|string too long|vector<T> too long"
+    r"|bad allocation|unknown exception|Complete Object Locator"
+    r"|Class Hierarchy Descriptor|Base Class Array|Type Descriptor)",
+    re.IGNORECASE,
+)
+_EN_WORD_RE = re.compile(r"\b[A-Za-z][a-z]{1,18}\b")
+_EN_SENTENCE_PUNCT_RE = re.compile(r"[.!?\"'’,;:\-—…]$|[.!?\"']\s")
+
 _KANA_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _JP_PUNCT_RE = re.compile(r"[。、！？「」『』…‥・ー～（）【】]")
@@ -281,12 +309,191 @@ def scan_sjis_strings(blob: bytes, rel_path: str = "", target_encoding: str = "g
     return units
 
 
+def _is_valid_en_or_global_text(text: str) -> bool:
+    """判定 UTF-8 / ASCII / UTF-16LE 字符串是否为自然语言台词或菜单（排除 PE 编译器废话与代码符号）。"""
+    if not text or len(text) < 3 or len(text) > 2048:
+        return False
+    if _CTRL_CHAR_RE.search(text):
+        return False
+    s = text.strip()
+    if not s:
+        return False
+    if s in EN_MENU_TERMS or s in JP_MENU_TERMS:
+        return True
+    if _PE_BOILERPLATE_RE.search(s) or _FILE_LIKE_RE.match(s) or _CODE_NOISE_RE.search(s):
+        return False
+    if any(tok in s for tok in ("http://", "https://", "www.", "%s%s", "0x", "::", "->", "__", "\\\\", "//")):
+        return False
+    if any(ch in s for ch in "{};<>|$`~^=@#"):
+        return False
+
+    # 如果包含中日韩或西里尔字母（俄文等）
+    if _KANA_RE.search(s) or _CJK_RE.search(s) or re.search(r"[\u0400-\u04ff]", s):
+        return len(s) >= 2 and not _ADJACENT_ASCII_GARBAGE_RE.search(s)
+
+    # 英文/拉丁文自然句子判据：首字母大写或带引号，至少 3 个自然单词，含空格与标点
+    if " " not in s:
+        return False
+    if not (s[0].isupper() or s[0] in ("\"", "'", "“", "‘", "(", "[")):
+        return False
+    words = _EN_WORD_RE.findall(s)
+    if len(words) < 3:
+        return False
+    # 排除全大写宏或驼峰标识符堆叠
+    tokens = s.split()
+    if sum(1 for t in tokens if "_" in t or (len(t) > 2 and t.isupper())) > len(tokens) // 3:
+        return False
+    if len(words) >= 5 or _EN_SENTENCE_PUNCT_RE.search(s):
+        return True
+    return False
+
+
+def scan_utf8_strings(blob: bytes, rel_path: str = "") -> list[Unit]:
+    """在二进制字节流中扫描以 `0x00` 结尾的 UTF-8 / ASCII 欧美及全球多语言台词与菜单。"""
+    units: list[Unit] = []
+    n = len(blob)
+    i = 0
+    order = 0
+    while i < n:
+        b = blob[i]
+        if not (0x20 <= b <= 0x7E or 0xC2 <= b <= 0xF4):
+            i += 1
+            continue
+        start = i
+        while i < n and blob[i] != 0x00:
+            cur = blob[i]
+            if 0x20 <= cur <= 0x7E or cur in (0x09, 0x0A, 0x0D) or (0x80 <= cur <= 0xF4):
+                i += 1
+            else:
+                break
+        end = i
+        if end < n and blob[end] == 0x00 and 4 <= (end - start) <= 2048:
+            raw = blob[start:end]
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = ""
+            if text and _is_valid_en_or_global_text(text):
+                order += 1
+                kind = "menu" if text.strip() in (EN_MENU_TERMS | JP_MENU_TERMS) else classify(text)
+                key = f"{rel_path}@0x{start:x}" if rel_path else f"0x{start:x}"
+                units.append(
+                    Unit(
+                        key=key,
+                        src=text,
+                        kind=kind,
+                        file=rel_path,
+                        order=order,
+                        max_bytes=len(raw),
+                        encoding="utf-8",
+                        meta={
+                            "offset": start,
+                            "length": len(raw),
+                            "src_encoding": "utf-8",
+                            "raw_hex": raw.hex(),
+                            "pad": "nul",
+                        },
+                    )
+                )
+        i = max(i + 1, end + 1)
+    return units
+
+
+def scan_utf16le_strings(blob: bytes, rel_path: str = "") -> list[Unit]:
+    """在二进制字节流中扫描 2 字节对齐、以 `\\x00\\x00` 结尾的 UTF-16LE 宽字符台词与菜单。"""
+    units: list[Unit] = []
+    n = len(blob) - 1
+    i = 0
+    order = 0
+    while i < n:
+        lo, hi = blob[i], blob[i + 1]
+        is_ascii_w = (0x20 <= lo <= 0x7E and hi == 0x00)
+        is_cjk_w = (0x30 <= hi <= 0x9F or 0xFF == hi)
+        if not (is_ascii_w or is_cjk_w):
+            i += 2
+            continue
+        start = i
+        chars = 0
+        while i < n:
+            c_lo, c_hi = blob[i], blob[i + 1]
+            if c_lo == 0 and c_hi == 0:
+                break
+            code = c_lo | (c_hi << 8)
+            if (0x20 <= code <= 0x7E) or code in (0x09, 0x0A, 0x0D) or (0x0400 <= code <= 0x04FF) or (0x2000 <= code <= 0x9FFF) or (0xFF01 <= code <= 0xFF5E):
+                chars += 1
+                i += 2
+            else:
+                break
+        end = i
+        if end + 1 < len(blob) and blob[end] == 0 and blob[end + 1] == 0 and 3 <= chars <= 1024:
+            raw = blob[start:end]
+            try:
+                text = raw.decode("utf-16-le")
+            except UnicodeDecodeError:
+                text = ""
+            if text and (_is_valid_sjis_text(text) or _is_valid_en_or_global_text(text)):
+                order += 1
+                kind = "menu" if text.strip() in (EN_MENU_TERMS | JP_MENU_TERMS) else classify(text)
+                key = f"{rel_path}@0x{start:x}" if rel_path else f"0x{start:x}"
+                units.append(
+                    Unit(
+                        key=key,
+                        src=text,
+                        kind=kind,
+                        file=rel_path,
+                        order=order,
+                        max_bytes=len(raw),
+                        encoding="utf-16-le",
+                        meta={
+                            "offset": start,
+                            "length": len(raw),
+                            "src_encoding": "utf-16-le",
+                            "raw_hex": raw.hex(),
+                            "pad": "nul",
+                        },
+                    )
+                )
+        i = max(start + 2, end + 2)
+    return units
+
+
+def scan_binary_strings(blob: bytes, rel_path: str = "", target_encoding: str = "gbk") -> list[Unit]:
+    """多编码全球二进制扫描：自动融合 Shift-JIS、UTF-16LE 与 UTF-8/ASCII 自然语言台词，并剔除重叠区间。"""
+    sjis_units = scan_sjis_strings(blob, rel_path=rel_path, target_encoding=target_encoding)
+    u16_units = scan_utf16le_strings(blob, rel_path=rel_path)
+    utf8_units = scan_utf8_strings(blob, rel_path=rel_path)
+
+    occupied: list[tuple[int, int]] = []
+    merged: list[Unit] = []
+
+    def _overlaps(s: int, e: int) -> bool:
+        for os_start, os_end in occupied:
+            if s < os_end and os_start < e:
+                return True
+        return False
+
+    # 优先级：Shift-JIS 双字节 > UTF-16LE 宽字符 > UTF-8/ASCII 英文句
+    for group in (sjis_units, u16_units, utf8_units):
+        for u in group:
+            off = int(u.meta.get("offset", 0))
+            ln = int(u.meta.get("length") or u.max_bytes or 0)
+            if ln <= 0 or _overlaps(off, off + ln):
+                continue
+            occupied.append((off, off + ln))
+            merged.append(u)
+
+    merged.sort(key=lambda u: int(u.meta.get("offset", 0)))
+    for idx, u in enumerate(merged, start=1):
+        u.order = idx
+    return merged
+
+
 def encode_padded(text: str, max_bytes: int, encoding: str = "gbk", pad: str = "space") -> bytes | None:
     """把译文编码并严格补齐到 `max_bytes` 字节。
 
     - 超出 `max_bytes` → 返回 None（绝不截断，截断必出半个汉字乱码）
     - 短于 `max_bytes`：
-      - `pad="nul"`：尾巴补 `0x00`（适用于 C 字符串，提前结束完全合法）
+      - `pad="nul"`：尾巴补 `0x00`（适用于 C / UTF-8 / UTF-16LE 字符串，提前结束完全合法）
       - `pad="space"`：优先用全角空格（2 字节）补齐偶数差额，剩 1 字节补半角空格 `0x20`
         （适用于没有 `\0` 终止符、按固定长度读字节的 PC-98 / 老脚本引擎）
     """
@@ -301,6 +508,11 @@ def encode_padded(text: str, max_bytes: int, encoding: str = "gbk", pad: str = "
         return raw
     if pad == "nul":
         return raw + (b"\x00" * diff)
+    if encoding.lower().replace("_", "-") in ("utf-16-le", "utf-16le"):
+        pairs, rem = divmod(diff, 2)
+        return raw + (b" \x00" * pairs) + (b"\x00" * rem)
+    if encoding.lower().replace("_", "-") in ("utf-8", "utf8", "ascii"):
+        return raw + (b" " * diff)
     # 全角空格在 GBK 是 0xA1A1，在 Shift-JIS 是 0x8140
     try:
         fw_space = "\u3000".encode(encoding)
@@ -391,7 +603,7 @@ class RawBinaryAdapter(Adapter):
             except OSError:
                 continue
             rel = path.relative_to(base).as_posix()
-            found = scan_sjis_strings(blob, rel_path=rel, target_encoding=self.target_encoding)
+            found = scan_binary_strings(blob, rel_path=rel, target_encoding=self.target_encoding)
             # 一个文件里至少要有 3 条正经台词或菜单才算数，防止在纯代码 DLL 里抓出 1 个巧合词
             if len(found) >= 3:
                 all_units.extend(found)

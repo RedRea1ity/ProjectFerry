@@ -1117,5 +1117,383 @@ class MobileAndConsoleAdapterTests(unittest.TestCase):
             self.assertFalse(ap.out_path.exists())
 
 
+def _build_minimal_locres_v2(strings: list[str]) -> bytes:
+    """构造一个符合 UE4/UE5 Optimized v2 规范的 .locres 二进制块。"""
+    from ferrycore.adapters.unreal import LOCRES_MAGIC, write_fstring
+
+    dummy_index_body = struct.pack("<II", 0, 0)
+    str_array_off = 16 + 1 + 8 + len(dummy_index_body)
+    head = LOCRES_MAGIC + struct.pack("<Bq", 2, str_array_off) + dummy_index_body
+    arr = bytearray(struct.pack("<I", len(strings)))
+    for s in strings:
+        arr.extend(write_fstring(s))
+        arr.extend(struct.pack("<i", 1))  # ref_count = 1
+    return head + bytes(arr)
+
+
+def _build_minimal_il2cpp_metadata(strings: list[str]) -> bytes:
+    """构造一个符合 Unity IL2CPP global-metadata.dat (0xFAB11BAF) 规范的最小二进制块。"""
+    lit_off = 24
+    lit_size = len(strings) * 8
+    data_off = lit_off + lit_size
+    lits = bytearray()
+    data = bytearray()
+    for s in strings:
+        raw = s.encode("utf-8")
+        lits.extend(struct.pack("<II", len(raw), len(data)))
+        data.extend(raw)
+    head = struct.pack("<IiIIII", 0xFAB11BAF, 29, lit_off, lit_size, data_off, len(data))
+    return head + bytes(lits) + bytes(data)
+
+
+def _build_minimal_arsc(strings: list[str]) -> bytes:
+    """构造一个含 ResTable_header (0x0002) 与 UTF-8 ResStringPool (0x0001) 的最小 resources.arsc。"""
+    offsets = bytearray()
+    str_data = bytearray()
+    for s in strings:
+        offsets.extend(struct.pack("<I", len(str_data)))
+        raw = s.encode("utf-8")
+        str_data.append(len(s))
+        str_data.append(len(raw))
+        str_data.extend(raw)
+        str_data.append(0)
+    while len(str_data) % 4 != 0:
+        str_data.append(0)
+
+    strings_start = 28 + len(offsets)
+    pool_size = strings_start + len(str_data)
+    pool_hdr = struct.pack(
+        "<HHIIIIII",
+        0x0001,
+        28,
+        pool_size,
+        len(strings),
+        0,
+        0x100,  # UTF8_FLAG
+        strings_start,
+        0,
+    )
+    table_size = 12 + pool_size
+    table_hdr = struct.pack("<HHII", 0x0002, 12, table_size, 0)
+    return table_hdr + pool_hdr + bytes(offsets) + bytes(str_data)
+
+
+def _build_minimal_nds_rom(title: str, code: str, files: dict[str, bytes]) -> bytes:
+    """构造一个含 NitroROM FNT (0x40) 与 FAT (0x48) 的最小合法 Nintendo DS .nds 镜像。"""
+    rom = bytearray(0x400)
+    rom[0x00:0x0C] = title.encode("ascii")[:12].ljust(12, b"\x00")
+    rom[0x0C:0x10] = code.encode("ascii")[:4].ljust(4, b"\x00")
+
+    fnt_main = struct.pack("<IHH", 8, 0, 1)
+    fnt_sub = bytearray()
+    for name in files:
+        nb = name.encode("ascii")
+        fnt_sub.append(len(nb))
+        fnt_sub.extend(nb)
+    fnt_sub.append(0)
+    fnt = fnt_main + bytes(fnt_sub)
+    while len(fnt) % 4 != 0:
+        fnt += b"\x00"
+
+    fnt_off = len(rom)
+    rom.extend(fnt)
+    fat_off = len(rom)
+    fat_size = len(files) * 8
+    rom.extend(b"\x00" * fat_size)
+
+    for idx, (_name, raw) in enumerate(files.items()):
+        while len(rom) % 4 != 0:
+            rom.append(0)
+        start = len(rom)
+        rom.extend(raw)
+        end = len(rom)
+        struct.pack_into("<II", rom, fat_off + idx * 8, start, end)
+
+    struct.pack_into("<IIII", rom, 0x40, fnt_off, len(fnt), fat_off, fat_size)
+    struct.pack_into("<I", rom, 0x80, len(rom))
+    return bytes(rom)
+
+
+class GlobalAndExtendedEngineTests(unittest.TestCase):
+    def test_rawbin_multi_encoding_western_utf8_and_utf16le(self):
+        from ferrygame import patch_blob, scan_binary_strings
+
+        blob = b"".join([
+            b"WESTERN_RPG_V1\x00",
+            b"The ancient oak door is locked from the inside.\x00",
+            b"New Game\x00",
+            b"Quit Game\x00",
+            b"\x00\x00",
+            "You found a rusted iron key beneath the altar.".encode("utf-16-le") + b"\x00\x00",
+            b"END_MARK\x00",
+        ])
+        units = scan_binary_strings(blob, rel_path="game.exe")
+        srcs = [u.src for u in units]
+        self.assertIn("The ancient oak door is locked from the inside.", srcs)
+        self.assertIn("New Game", srcs)
+        self.assertIn("Quit Game", srcs)
+        self.assertIn("You found a rusted iron key beneath the altar.", srcs)
+
+        tr_map = {
+            "The ancient oak door is locked from the inside.": "那扇古老的橡木门从里面锁上了。",
+            "New Game": "开始",
+            "Quit Game": "退出",
+            "You found a rusted iron key beneath the altar.": "你在祭坛下方找到了一把生锈的铁钥匙。",
+        }
+        for u in units:
+            u.dst = tr_map.get(u.src, "")
+
+        patched, count, conflicts = patch_blob(blob, units)
+        self.assertEqual(count, 4)
+        self.assertEqual(conflicts, [])
+        self.assertEqual(len(patched), len(blob))
+        self.assertIn("那扇古老的橡木门从里面锁上了。".encode("utf-8"), patched)
+        self.assertIn("你在祭坛下方找到了一把生锈的铁钥匙。".encode("utf-16-le"), patched)
+
+    def test_unreal_locres_v2_extract_and_utf16_rebuild(self):
+        from ferrycore.adapters import detect, parse_locres
+
+        locres_blob = _build_minimal_locres_v2([
+            "The kingdom has fallen into eternal darkness.",
+            "Press Start to Continue",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loc_dir = root / "Content" / "Localization" / "Game" / "en"
+            loc_dir.mkdir(parents=True)
+            loc_path = loc_dir / "Game.locres"
+            loc_path.write_bytes(locres_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "unreal")
+            entries = adapter.collect(root)
+            self.assertEqual(
+                [e.english for e in entries],
+                ["The kingdom has fallen into eternal darkness.", "Press Start to Continue"],
+            )
+
+            ap = adapter.apply(
+                root,
+                {
+                    "The kingdom has fallen into eternal darkness.": "王国已坠入永恒的黑暗之中。",
+                    "Press Start to Continue": "按开始键继续",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+
+            re_parsed = parse_locres(loc_path.read_bytes())
+            self.assertEqual(
+                [s.text for s in re_parsed.strings],
+                ["王国已坠入永恒的黑暗之中。", "按开始键继续"],
+            )
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertEqual(loc_path.read_bytes(), locres_blob)
+
+    def test_narrative_ink_yarn_and_twine_roundtrip(self):
+        from ferrycore.adapters import detect
+
+        ink_json = json.dumps({
+            "inkVersion": 21,
+            "root": [["^The lighthouse keeper nods slowly.", "\n", ["ev", "^Ask about the storm", "/ev"]]],
+        })
+        yarn_text = (
+            "title: Harbor\n"
+            "---\n"
+            "Captain: The fog is too thick to set sail tonight. #line:101\n"
+            "-> We cannot wait until morning! #line:102\n"
+            "===\n"
+        )
+        twine_html = (
+            '<tw-storydata name="Moor" startnode="1">'
+            '<tw-passagedata pid="1" name="Start">'
+            "A cold wind blows across the abandoned moor.\n"
+            "[[enter_cabin]]"
+            "</tw-passagedata></tw-storydata>"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "story.ink.json").write_text(ink_json, encoding="utf-8")
+            (root / "harbor.yarn").write_text(yarn_text, encoding="utf-8")
+            (root / "index.html").write_text(twine_html, encoding="utf-8")
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "narrative")
+            entries = adapter.collect(root)
+            texts = [e.english for e in entries]
+            self.assertIn("The lighthouse keeper nods slowly.", texts)
+            self.assertIn("Ask about the storm", texts)
+            self.assertIn("The fog is too thick to set sail tonight.", texts)
+            self.assertIn("We cannot wait until morning!", texts)
+            self.assertIn("A cold wind blows across the abandoned moor.", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "The lighthouse keeper nods slowly.": "灯塔看守人缓缓点了点头。",
+                    "Ask about the storm": "询问关于暴风雨的事",
+                    "The fog is too thick to set sail tonight.": "今晚雾太浓了，没法起航。",
+                    "We cannot wait until morning!": "我们等不到明天早上了！",
+                    "A cold wind blows across the abandoned moor.": "寒风吹过荒废的旷野。",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 5)
+
+            patched_ink = json.loads((root / "story.ink.json").read_text(encoding="utf-8"))
+            self.assertEqual(patched_ink["root"][0][0], "^灯塔看守人缓缓点了点头。")
+            patched_yarn = (root / "harbor.yarn").read_text(encoding="utf-8")
+            self.assertIn("Captain: 今晚雾太浓了，没法起航。 #line:101", patched_yarn)
+            self.assertIn("-> 我们等不到明天早上了！ #line:102", patched_yarn)
+            patched_twine = (root / "index.html").read_text(encoding="utf-8")
+            self.assertIn("寒风吹过荒废的旷野。", patched_twine)
+            self.assertIn("[[enter_cabin]]", patched_twine)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertEqual((root / "harbor.yarn").read_text(encoding="utf-8"), yarn_text)
+
+    def test_love2d_archive_and_onscripter_xor_roundtrip(self):
+        import zipfile
+        from ferrycore.adapters import detect
+        from ferrycore.adapters.vn_engines import xor_nscript_dat
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            love_path = root / "balatro_like.love"
+            lua_src = (
+                'local bg = love.graphics.newImage("assets/bg.png")\n'
+                'local title = "Chronicles of the Void"\n'
+                'local menu = { ["btn_new"] = "New Game", ["btn_quit"] = "Quit Game" }\n'
+            )
+            with zipfile.ZipFile(love_path, "w") as zf:
+                zf.writestr("main.lua", lua_src)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "love2d")
+            texts = [e.english for e in adapter.collect(root)]
+            self.assertIn("Chronicles of the Void", texts)
+            self.assertIn("New Game", texts)
+            self.assertNotIn("assets/bg.png", texts)
+            self.assertNotIn("btn_new", texts)
+
+            ap = adapter.apply(root, {"Chronicles of the Void": "虚空编年史", "New Game": "新游戏"})
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            self.assertTrue(ap.out_path.name.endswith(".cn.love"))
+            with zipfile.ZipFile(ap.out_path, "r") as zout:
+                patched_lua = zout.read("main.lua").decode("utf-8")
+                self.assertIn('"虚空编年史"', patched_lua)
+                self.assertIn('["btn_new"] = "新游戏"', patched_lua)
+
+            self.assertTrue(revert_game(root).ok)
+            self.assertFalse(ap.out_path.exists())
+
+        with tempfile.TemporaryDirectory() as tmp2:
+            root2 = Path(tmp2)
+            ons_plain = (
+                '*define\n'
+                'caption "遠野物語"\n'
+                'game\n'
+                '*start\n'
+                '「先輩、今日はとても月が綺麗ですね。」\\\n'
+            ).encode("cp932")
+            nscript_path = root2 / "nscript.dat"
+            nscript_path.write_bytes(xor_nscript_dat(ons_plain))
+
+            adapter2 = detect(root2)
+            self.assertIsNotNone(adapter2)
+            self.assertEqual(adapter2.name, "onscripter")
+            texts2 = [e.english for e in adapter2.collect(root2)]
+            self.assertIn("遠野物語", texts2)
+            self.assertIn("「先輩、今日はとても月が綺麗ですね。」\\", texts2)
+
+            ap2 = adapter2.apply(
+                root2,
+                {
+                    "遠野物語": "远野物语",
+                    "「先輩、今日はとても月が綺麗ですね。」\\": "「前辈，今晚的月色真美呢。」\\",
+                },
+            )
+            self.assertTrue(ap2.ok)
+            self.assertEqual(ap2.applied, 2)
+            decrypted = xor_nscript_dat(nscript_path.read_bytes()).decode("gbk")
+            self.assertIn('caption "远野物语"', decrypted)
+            self.assertIn("「前辈，今晚的月色真美呢。」\\", decrypted)
+
+            self.assertTrue(revert_game(root2).ok)
+            self.assertEqual(nscript_path.read_bytes(), xor_nscript_dat(ons_plain))
+
+    def test_unity_il2cpp_arsc_psp_cso_and_nds_rom(self):
+        from ferrycore.adapters import (
+            compress_cso,
+            detect,
+            extract_arsc_strings,
+            extract_il2cpp_metadata_strings,
+            patch_arsc_strings,
+            rebuild_il2cpp_metadata,
+        )
+
+        meta_blob = _build_minimal_il2cpp_metadata(["PlayerController", "Welcome to the Citadel of Stars!"])
+        extracted_meta = extract_il2cpp_metadata_strings(meta_blob)
+        self.assertEqual(extracted_meta, [(1, "Welcome to the Citadel of Stars!")])
+        rebuilt_meta, count = rebuild_il2cpp_metadata(
+            meta_blob, {"Welcome to the Citadel of Stars!": "欢迎来到群星堡垒！这是一段更长的中文译文测试。"}
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            extract_il2cpp_metadata_strings(rebuilt_meta),
+            [(1, "欢迎来到群星堡垒！这是一段更长的中文译文测试。")],
+        )
+
+        arsc_blob = _build_minimal_arsc(["res/layout/main.xml", "「冒険を始めますか？」"])
+        self.assertEqual(extract_arsc_strings(arsc_blob), [(1, "「冒険を始めますか？」")])
+        patched_arsc, a_count = patch_arsc_strings(arsc_blob, {"「冒険を始めますか？」": "「要开始冒险吗？」"})
+        self.assertEqual(a_count, 1)
+        self.assertEqual(extract_arsc_strings(patched_arsc)[0][1].strip(), "「要开始冒险吗？」")
+
+        sfo = _build_param_sfo({"TITLE": "Monster Hunter", "DISC_ID": "ULJM05800"})
+        script = b"MH_SCR\x00" + "「集会所へようこそ、ハンターさん！」".encode("cp932") + b"\x00"
+        cso_blob = compress_cso(_build_minimal_psp_iso(sfo, script))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "mh.cso").write_bytes(cso_blob)
+            adapter = detect(root)
+            self.assertEqual(adapter.name, "psp")
+            ap = adapter.apply(root, {"「集会所へようこそ、ハンターさん！」": "「欢迎来到集会所，猎人先生！」"})
+            self.assertTrue(ap.ok)
+            self.assertTrue(ap.out_path.name.endswith(".cn.cso"))
+            self.assertTrue(revert_game(root).ok)
+
+        with tempfile.TemporaryDirectory() as tmp_nds:
+            root_nds = Path(tmp_nds)
+            nds_script = b"NDS_MSG\x00" + "「異議あり！その証言には矛盾があります！」".encode("cp932") + b"\x00"
+            nds_blob = _build_minimal_nds_rom("GYAKUTEN", "AGYJ", {"data/case01.bin": nds_script})
+            (root_nds / "gyakuten.nds").write_bytes(nds_blob)
+
+            nds_adapter = detect(root_nds)
+            self.assertIsNotNone(nds_adapter)
+            self.assertEqual(nds_adapter.name, "nds")
+            entries = nds_adapter.collect(root_nds)
+            self.assertEqual([e.english for e in entries], ["「異議あり！その証言には矛盾があります！」"])
+
+            ap_nds = nds_adapter.apply(
+                root_nds,
+                {"「異議あり！その証言には矛盾があります！」": "「反对！那份证词里存在明显的矛盾！」"},
+            )
+            self.assertTrue(ap_nds.ok)
+            self.assertEqual(ap_nds.applied, 1)
+            self.assertTrue(ap_nds.out_path.name.endswith(".cn.nds"))
+            self.assertIn("「反对！那份证词里存在明显的矛盾！」".encode("gbk"), ap_nds.out_path.read_bytes())
+            self.assertTrue(revert_game(root_nds).ok)
+            self.assertFalse(ap_nds.out_path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from .base import Adapter, ApplyReport, ProbeReport, VerifyReport
-from .console import PspAdapter, PsvAdapter, parse_iso9660, parse_param_sfo
+from .console import (
+    NdsAdapter,
+    PspAdapter,
+    PsvAdapter,
+    compress_cso,
+    decompress_cso,
+    parse_iso9660,
+    parse_nds_rom,
+    parse_param_sfo,
+)
 from .container import (
     AsarContainer,
     Container,
@@ -40,7 +49,16 @@ from .hints import scan_hints
 from .hsp import HspAdapter
 from .i18n_table import I18nTableAdapter
 from .kirikiri import KirikiriAdapter
-from .mobile import ApkAdapter, IpaAdapter, extract_dex_strings, patch_dex_strings
+from .love2d import Love2dAdapter
+from .mobile import (
+    ApkAdapter,
+    IpaAdapter,
+    extract_arsc_strings,
+    extract_dex_strings,
+    patch_arsc_strings,
+    patch_dex_strings,
+)
+from .narrative import NarrativeAdapter
 from .renpy import RenpyAdapter
 from .rpgmaker import RpgMakerAdapter
 from .rpgmaker_2k import RpgMaker2kAdapter
@@ -48,7 +66,13 @@ from .rpgmaker_ace import RpgMakerAceAdapter
 from .tyrano import TyranoAdapter
 from .undo import UNDO_NAME, RevertReport, UndoLog
 from .undo import revert as revert_game
-from .unity import UnityAdapter
+from .unity import (
+    UnityAdapter,
+    extract_il2cpp_metadata_strings,
+    rebuild_il2cpp_metadata,
+)
+from .unreal import UnrealAdapter, parse_locres, rebuild_locres
+from .vn_engines import ArtemisAdapter, OnscripterAdapter, WolfRpgAdapter
 from ferrygame.pc98 import PC98Adapter
 from ferrygame.rawbin import RawBinaryAdapter
 
@@ -58,15 +82,22 @@ REGISTRY: list[type[Adapter]] = [
     IpaAdapter,
     PsvAdapter,
     PspAdapter,
+    NdsAdapter,
     PC98Adapter,
-    TyranoAdapter,
+    OnscripterAdapter,
     KirikiriAdapter,
+    WolfRpgAdapter,
+    ArtemisAdapter,
+    TyranoAdapter,
     RenpyAdapter,
     RpgMaker2kAdapter,
     RpgMakerAceAdapter,  # rgss3a / rvdata2，必须在 MV/MZ 明文适配器之前
+    Love2dAdapter,
     RpgMakerAdapter,
+    UnrealAdapter,
     GodotAdapter,
     UnityAdapter,
+    NarrativeAdapter,
     GameMakerAdapter,
     I18nTableAdapter,
     HspAdapter,
@@ -110,6 +141,7 @@ __all__ = [
     "Adapter",
     "ApkAdapter",
     "ApplyReport",
+    "ArtemisAdapter",
     "AsarContainer",
     "Container",
     "Document",
@@ -120,6 +152,10 @@ __all__ = [
     "I18nTableAdapter",
     "IpaAdapter",
     "KirikiriAdapter",
+    "Love2dAdapter",
+    "NarrativeAdapter",
+    "NdsAdapter",
+    "OnscripterAdapter",
     "PC98Adapter",
     "ProbeReport",
     "PspAdapter",
@@ -134,19 +170,30 @@ __all__ = [
     "UNDO_NAME",
     "UndoLog",
     "UnityAdapter",
+    "UnrealAdapter",
     "VerifyReport",
+    "WolfRpgAdapter",
     "ZipInExe",
+    "compress_cso",
+    "decompress_cso",
     "detect",
+    "extract_arsc_strings",
     "extract_dex_strings",
+    "extract_il2cpp_metadata_strings",
     "find_asar",
     "get",
     "locate_appended_zip",
     "open_container",
     "parse_asar",
     "parse_iso9660",
+    "parse_locres",
+    "parse_nds_rom",
     "parse_param_sfo",
+    "patch_arsc_strings",
     "patch_dex_strings",
     "rebuild_asar",
+    "rebuild_il2cpp_metadata",
+    "rebuild_locres",
     "registered",
     "revert_game",
     "scan_hints",

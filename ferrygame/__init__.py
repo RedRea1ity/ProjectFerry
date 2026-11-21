@@ -22,7 +22,15 @@ from .pipeline import (
     translate_project,
 )
 from .project import TL_NAME, Project, load, merge
-from .rawbin import RawBinaryAdapter, encode_padded, patch_blob, scan_sjis_strings
+from .rawbin import (
+    RawBinaryAdapter,
+    encode_padded,
+    patch_blob,
+    scan_binary_strings,
+    scan_sjis_strings,
+    scan_utf8_strings,
+    scan_utf16le_strings,
+)
 from .recon import ReconReport, inspect_game, shannon_entropy
 from .translate import TranslateReport, translate_units
 from .units import Unit, classify, detect_source_lang

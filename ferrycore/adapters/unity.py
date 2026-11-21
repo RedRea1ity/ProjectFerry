@@ -159,6 +159,97 @@ def extract_dotnet_us_strings(pe_bytes: bytes) -> list[tuple[int, str]]:
     return results
 
 
+def extract_il2cpp_metadata_strings(blob: bytes) -> list[tuple[int, str]]:
+    """解析 Unity IL2CPP `global-metadata.dat`（魔数 `0xFAB11BAF`）的 `stringLiteral` 字符串常量池。"""
+    if len(blob) < 24:
+        return []
+    sanity, version, lit_off, lit_size, data_off, data_size = struct.unpack_from("<IiIIII", blob, 0)
+    if sanity != 0xFAB11BAF or version < 16 or version > 40:
+        return []
+    if lit_size == 0 or (lit_size % 8) != 0:
+        return []
+    if lit_off + lit_size > len(blob) or data_off + data_size > len(blob):
+        return []
+
+    count = lit_size // 8
+    results: list[tuple[int, str]] = []
+    for idx in range(min(count, 500000)):
+        length, rel_data_off = struct.unpack_from("<II", blob, lit_off + idx * 8)
+        if length < 2 or length > 4096 or rel_data_off + length > data_size:
+            continue
+        raw = blob[data_off + rel_data_off : data_off + rel_data_off + length]
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if is_unity_translatable(text):
+            results.append((idx, text))
+    return results
+
+
+def rebuild_il2cpp_metadata(blob: bytes, replacements: dict[str, str]) -> tuple[bytes, int]:
+    """重建 Unity IL2CPP `global-metadata.dat` 的 `stringLiteral` 与 `stringLiteralData` 表。
+
+    由于 `stringLiteral` 索引表固定为每项 8 字节 `(length, data_index)`，将新的 `stringLiteralData`
+    UTF-8 数据块放置于原区间或追加至文件末尾并更新 Header Offset 16/20，即可支持任意长度简体中文而不破坏任何其它元数据偏移！
+    """
+    if len(blob) < 24:
+        return blob, 0
+    sanity, version, lit_off, lit_size, data_off, data_size = struct.unpack_from("<IiIIII", blob, 0)
+    if sanity != 0xFAB11BAF or (lit_size % 8) != 0:
+        return blob, 0
+    if lit_off + lit_size > len(blob) or data_off + data_size > len(blob):
+        return blob, 0
+
+    count = lit_size // 8
+    new_lits = bytearray(lit_size)
+    new_data = bytearray()
+    applied = 0
+
+    for idx in range(count):
+        length, rel_data_off = struct.unpack_from("<II", blob, lit_off + idx * 8)
+        raw = blob[data_off + rel_data_off : data_off + rel_data_off + length]
+        tr = replacements.get(f"IL2CPP:{idx}")
+        if tr is None and 2 <= length <= 4096:
+            try:
+                src_text = raw.decode("utf-8")
+                tr = replacements.get(src_text)
+                if tr == src_text:
+                    tr = None
+            except UnicodeDecodeError:
+                tr = None
+        if tr and tr.strip():
+            raw = tr.encode("utf-8")
+            applied += 1
+        new_rel_off = len(new_data)
+        new_data.extend(raw)
+        struct.pack_into("<II", new_lits, idx * 8, len(raw), new_rel_off)
+
+    if applied == 0:
+        return blob, 0
+
+    buf = bytearray(blob)
+    buf[lit_off : lit_off + lit_size] = new_lits
+    if data_off + data_size == len(blob) or len(new_data) <= data_size:
+        # 原 stringLiteralData 在文件末尾或新数据能直接放进原区间
+        out = buf[:data_off] + new_data + buf[data_off + data_size :]
+        if data_off + data_size == len(blob):
+            struct.pack_into("<I", out, 20, len(new_data))
+        elif len(new_data) <= data_size:
+            out = buf
+            out[data_off : data_off + len(new_data)] = new_data
+            struct.pack_into("<I", out, 20, len(new_data))
+        return bytes(out), applied
+
+    # 追加到文件末尾（4 字节对齐）并更新 Header offset 16 (stringLiteralDataOffset) 与 20 (stringLiteralDataSize)
+    while len(buf) % 4 != 0:
+        buf.append(0)
+    new_data_off = len(buf)
+    buf.extend(new_data)
+    struct.pack_into("<II", buf, 16, new_data_off, len(new_data))
+    return bytes(buf), applied
+
+
 def escape_xunity_text(text: str) -> str:
     """转义 XUnity.AutoTranslator 键值对中的换行与等号。"""
     out = text.replace("\\", "\\\\").replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\r")
@@ -240,6 +331,17 @@ class UnityAdapter(Adapter):
                     if candidate.is_file():
                         dlls.append(candidate)
         return dlls
+
+    def _find_il2cpp_metadata(self, root: Path) -> list[Path]:
+        metas: list[Path] = []
+        for data_dir in self._find_data_dirs(root):
+            candidate = data_dir / "il2cpp_data" / "Metadata" / "global-metadata.dat"
+            if candidate.is_file():
+                metas.append(candidate)
+        direct = Path(root) / "global-metadata.dat"
+        if direct.is_file() and direct not in metas:
+            metas.append(direct)
+        return metas
 
     def probe(self, root: Path) -> ProbeReport:
         root = Path(root)
@@ -363,6 +465,29 @@ class UnityAdapter(Adapter):
                     )
                 )
 
+        # 3. IL2CPP global-metadata.dat (stringLiteral 常量池)
+        for meta_path in self._find_il2cpp_metadata(root):
+            rel = meta_path.relative_to(root).as_posix()
+            try:
+                meta_bytes = meta_path.read_bytes()
+            except OSError:
+                continue
+            for lit_idx, text in extract_il2cpp_metadata_strings(meta_bytes):
+                if text in seen_dll_texts:
+                    continue
+                seen_dll_texts.add(text)
+                entries.append(
+                    Entry(
+                        modid=root.name,
+                        key=f"{rel}#IL2CPP:{lit_idx}",
+                        english=text,
+                        source="game",
+                        kind="il2cpp_meta",
+                        rel_path=rel,
+                        json_pointer=f"IL2CPP:{lit_idx}",
+                    )
+                )
+
         return entries
 
     def apply(
@@ -442,6 +567,27 @@ class UnityAdapter(Adapter):
                         continue
                     xunity_pairs[entry.english] = tr
                     report.applied += 1
+
+            elif kind == "il2cpp_meta":
+                try:
+                    meta_blob = full_path.read_bytes()
+                except OSError as exc:
+                    report.conflicts.append(f"{rel_path}: {exc}")
+                    continue
+                meta_map: dict[str, str] = {}
+                for entry in file_entries:
+                    tr = translations.get(entry.key) or translations.get(entry.english)
+                    if not tr or not tr.strip():
+                        report.missed += 1
+                        continue
+                    meta_map[entry.json_pointer] = tr
+                    meta_map[entry.english] = tr
+                    xunity_pairs[entry.english] = tr
+                if meta_map:
+                    rebuilt_meta, count = rebuild_il2cpp_metadata(meta_blob, meta_map)
+                    if count > 0:
+                        pending_writes[rel_path] = rebuilt_meta
+                        report.applied += count
 
         if not report.applied:
             report.notes.append("没有任何译文命中，未修改游戏文件")

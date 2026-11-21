@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import struct
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from ferrygame.rawbin import patch_blob, scan_sjis_strings
+from ferrygame.rawbin import patch_blob, scan_binary_strings, scan_sjis_strings
 from ferrygame.units import Unit
 
 from ..models import Entry
@@ -176,6 +177,63 @@ def parse_iso9660(blob: bytes) -> dict[str, IsoFileEntry]:
     return files
 
 
+def decompress_cso(cso_blob: bytes) -> bytes:
+    """将 PSP `CISO` (`.cso`) 压缩光盘镜像解压为标准 ISO-9660 字节流。"""
+    if len(cso_blob) < 24 or cso_blob[:4] != b"CISO":
+        raise ValueError("不是合法的 PSP CISO (.cso) 镜像")
+    _hdr_size, total_bytes, block_size, _ver, align = struct.unpack_from("<IQIBB", cso_blob, 4)
+    if block_size == 0 or total_bytes == 0 or total_bytes > 4 * 1024 * 1024 * 1024:
+        raise ValueError("CISO 头参数异常")
+    total_blocks = int(total_bytes // block_size)
+    idx_table_end = 24 + (total_blocks + 1) * 4
+    if idx_table_end > len(cso_blob):
+        raise ValueError("CISO 索引表越界")
+
+    indices = struct.unpack_from(f"<{total_blocks + 1}I", cso_blob, 24)
+    out = bytearray()
+    for b_idx in range(total_blocks):
+        cur_val = indices[b_idx]
+        nxt_val = indices[b_idx + 1]
+        is_plain = bool(cur_val & 0x80000000)
+        read_pos = (cur_val & 0x7FFFFFFF) << align
+        read_end = (nxt_val & 0x7FFFFFFF) << align
+        chunk = cso_blob[read_pos:read_end]
+        if is_plain:
+            out.extend(chunk[:block_size].ljust(block_size, b"\x00"))
+        else:
+            decomp = zlib.decompress(chunk, -15)
+            out.extend(decomp[:block_size].ljust(block_size, b"\x00"))
+    return bytes(out)
+
+
+def compress_cso(iso_blob: bytes, block_size: int = ISO_SECTOR_SIZE) -> bytes:
+    """将标准 ISO-9660 字节流压缩打包为 PSP `CISO` (`.cso`) 镜像。"""
+    total_bytes = len(iso_blob)
+    total_blocks = (total_bytes + block_size - 1) // block_size
+    data_start = 24 + (total_blocks + 1) * 4
+    indices: list[int] = []
+    chunks: list[bytes] = []
+    cursor = data_start
+
+    for b_idx in range(total_blocks):
+        sector = iso_blob[b_idx * block_size : (b_idx + 1) * block_size].ljust(block_size, b"\x00")
+        cobj = zlib.compressobj(6, zlib.DEFLATED, -15)
+        comp = cobj.compress(sector) + cobj.flush()
+        if len(comp) >= block_size:
+            indices.append(0x80000000 | cursor)
+            chunks.append(sector)
+            cursor += len(sector)
+        else:
+            indices.append(cursor)
+            chunks.append(comp)
+            cursor += len(comp)
+    indices.append(cursor)
+
+    header = b"CISO" + struct.pack("<IQIBB2s", 24, total_bytes, block_size, 1, 0, b"\x00\x00")
+    idx_bytes = struct.pack(f"<{total_blocks + 1}I", *indices)
+    return header + idx_bytes + b"".join(chunks)
+
+
 # ============================================================================
 # 掌机二进制 + 明文混合抽取与回写辅助
 # ============================================================================
@@ -208,7 +266,7 @@ def _collect_console_all(
             continue
         if not _is_console_binary_candidate(rel, raw):
             continue
-        units = scan_sjis_strings(raw, rel_path=rel)
+        units = scan_binary_strings(raw, rel_path=rel)
         if not units:
             continue
         bin_units_by_file[rel] = units
@@ -456,15 +514,17 @@ class PspAdapter(Adapter):
     def _find_psp_iso(self, root: Path) -> Path | None:
         root = Path(root)
         candidates: list[Path] = []
-        if root.is_file() and root.suffix.lower() == ".iso" and ".cn" not in root.stem.lower():
+        if root.is_file() and root.suffix.lower() in (".iso", ".cso") and ".cn" not in root.stem.lower():
             candidates.append(root)
         elif root.is_dir():
-            candidates.extend(
-                p for p in sorted(root.glob("*.iso")) if p.is_file() and ".cn" not in p.stem.lower()
-            )
+            for ext in ("*.iso", "*.cso"):
+                candidates.extend(
+                    p for p in sorted(root.glob(ext)) if p.is_file() and ".cn" not in p.stem.lower()
+                )
         for iso_path in candidates:
             try:
-                blob = iso_path.read_bytes()
+                raw = iso_path.read_bytes()
+                blob = decompress_cso(raw) if raw[:4] == b"CISO" else raw
                 iso_files = parse_iso9660(blob)
                 if any(k.upper() == "PSP_GAME/PARAM.SFO" for k in iso_files):
                     return iso_path
@@ -487,7 +547,8 @@ class PspAdapter(Adapter):
     ) -> tuple[Path | None, bytes | None, dict[str, IsoFileEntry], dict[str, bytes], dict[str, str | int]]:
         iso_path = self._find_psp_iso(root)
         if iso_path is not None:
-            blob = iso_path.read_bytes()
+            raw_img = iso_path.read_bytes()
+            blob = decompress_cso(raw_img) if raw_img[:4] == b"CISO" else raw_img
             iso_index = parse_iso9660(blob)
             virtual_files: dict[str, bytes] = {}
             sfo_meta: dict[str, str | int] = {}
@@ -609,11 +670,14 @@ class PspAdapter(Adapter):
                     struct.pack_into("<I", new_iso, pos, len(new_raw))
                     struct.pack_into(">I", new_iso, pos + 4, len(new_raw))
 
-            default_out = iso_path.with_name(f"{iso_path.stem}.cn.iso")
+            is_cso = iso_path.suffix.lower() == ".cso" or iso_path.read_bytes()[:4] == b"CISO"
+            out_ext = ".cso" if is_cso else ".iso"
+            default_out = iso_path.with_name(f"{iso_path.stem}.cn{out_ext}")
             target_out = unique_output(Path(out) if out else default_out)
             if target_out.is_dir():
                 target_out = unique_output(target_out / default_out.name)
-            target_out.write_bytes(bytes(new_iso))
+            final_bytes = compress_cso(bytes(new_iso)) if is_cso else bytes(new_iso)
+            target_out.write_bytes(final_bytes)
             undo.did_copy(target_out)
             report.undo_path = undo.finish()
             report.out_path = target_out
@@ -630,4 +694,207 @@ class PspAdapter(Adapter):
         report.out_path = root
         report.in_place = True
         report.notes.append(f"已原地更新 PSP_GAME 目录 [{disc_id}] 共 {len(modified)} 个文件。")
+        return report
+
+
+# ============================================================================
+# Nintendo DS (.nds NitroROM FNT + FAT) 适配器
+# ============================================================================
+
+
+@dataclass
+class NdsFileEntry:
+    path: str
+    file_id: int
+    offset: int
+    size: int
+
+
+def parse_nds_rom(blob: bytes) -> tuple[str, str, dict[str, NdsFileEntry]]:
+    """解析 Nintendo DS `.nds` NitroROM 头部、文件名表 (FNT, 0x40) 与文件分配表 (FAT, 0x48)。"""
+    if len(blob) < 0x200:
+        raise ValueError("NDS ROM 过小")
+    title = blob[0x00:0x0C].rstrip(b"\x00").decode("ascii", errors="replace").strip()
+    game_code = blob[0x0C:0x10].rstrip(b"\x00").decode("ascii", errors="replace").strip()
+    fnt_off, fnt_size, fat_off, fat_size = struct.unpack_from("<IIII", blob, 0x40)
+    if (
+        fnt_off < 0x200
+        or fat_off < 0x200
+        or fnt_size < 8
+        or fat_size < 8
+        or (fat_size % 8) != 0
+        or fnt_off + fnt_size > len(blob)
+        or fat_off + fat_size > len(blob)
+    ):
+        raise ValueError("不是合法的 Nintendo DS NitroROM 镜像")
+
+    file_count = fat_size // 8
+    entries: dict[str, NdsFileEntry] = {}
+
+    def _walk_fnt_dir(dir_id: int, prefix: str, visited: set[int]) -> None:
+        if dir_id in visited:
+            return
+        visited.add(dir_id)
+        idx = dir_id & 0x0FFF
+        main_pos = fnt_off + idx * 8
+        if main_pos + 8 > fnt_off + fnt_size:
+            return
+        sub_rel, first_file_id, _parent_or_count = struct.unpack_from("<IHH", blob, main_pos)
+        pos = fnt_off + sub_rel
+        cur_file_id = first_file_id
+
+        while pos < fnt_off + fnt_size:
+            type_len = blob[pos]
+            pos += 1
+            if type_len == 0:
+                break
+            name_len = type_len & 0x7F
+            is_dir = bool(type_len & 0x80)
+            if pos + name_len > fnt_off + fnt_size:
+                break
+            name = blob[pos : pos + name_len].decode("ascii", errors="replace")
+            pos += name_len
+            rel = f"{prefix}/{name}" if prefix else name
+            if is_dir:
+                if pos + 2 > fnt_off + fnt_size:
+                    break
+                sub_dir_id = struct.unpack_from("<H", blob, pos)[0]
+                pos += 2
+                _walk_fnt_dir(sub_dir_id, rel, visited)
+            else:
+                if cur_file_id < file_count:
+                    f_start, f_end = struct.unpack_from("<II", blob, fat_off + cur_file_id * 8)
+                    if 0 <= f_start <= f_end <= len(blob):
+                        entries[rel] = NdsFileEntry(
+                            path=rel,
+                            file_id=cur_file_id,
+                            offset=f_start,
+                            size=f_end - f_start,
+                        )
+                cur_file_id += 1
+
+    _walk_fnt_dir(0xF000, "", set())
+    return title, game_code, entries
+
+
+class NdsAdapter(Adapter):
+    """Nintendo DS (`.nds` NitroROM) 掌机镜像适配器。"""
+
+    name = "nds"
+    priority = 14
+
+    def _find_nds(self, root: Path) -> Path | None:
+        root = Path(root)
+        candidates: list[Path] = []
+        if root.is_file() and root.suffix.lower() == ".nds" and ".cn" not in root.stem.lower():
+            candidates.append(root)
+        elif root.is_dir():
+            candidates.extend(
+                p for p in sorted(root.glob("*.nds")) if p.is_file() and ".cn" not in p.stem.lower()
+            )
+        for p in candidates:
+            try:
+                parse_nds_rom(p.read_bytes())
+                return p
+            except Exception:
+                continue
+        return None
+
+    def _load_rom(
+        self, root: Path
+    ) -> tuple[Path | None, bytes | None, str, str, dict[str, NdsFileEntry], dict[str, bytes]]:
+        nds_path = self._find_nds(root)
+        if nds_path is None:
+            return None, None, "", "", {}, {}
+        blob = nds_path.read_bytes()
+        title, code, nds_index = parse_nds_rom(blob)
+        virtual_files: dict[str, bytes] = {}
+        for rel, ent in nds_index.items():
+            if rel.lower().endswith(_STRUCTURED_SUFFIXES + _BINARY_SCRIPT_SUFFIXES + (".txt",)):
+                virtual_files[rel] = blob[ent.offset : ent.offset + ent.size]
+        return nds_path, blob, title, code, nds_index, virtual_files
+
+    def probe(self, root: Path) -> ProbeReport:
+        root = Path(root).resolve()
+        nds_path, _blob, title, code, nds_index, files = self._load_rom(root)
+        if nds_path is None:
+            return ProbeReport(engine=self.name, root=root, notes=["未找到合法的 Nintendo DS (.nds) NitroROM 镜像"])
+
+        entries, _ = _collect_console_all(root.name, files)
+        label = f"Nintendo DS ({title or nds_path.stem} [{code}])"
+        if not entries:
+            return ProbeReport(
+                engine=label,
+                root=root,
+                readable=False,
+                writable=False,
+                container="nds (NitroROM)",
+                notes=[f"已解析 NitroROM 文件系统（共 {len(nds_index)} 个内部文件），但未在标准脚本中检出明文台词"],
+            )
+
+        return ProbeReport(
+            engine=label,
+            root=root,
+            readable=True,
+            writable=True,
+            unit_count=len(entries),
+            container="nds (NitroROM)",
+            text_format="NitroROM FAT extent",
+            unicode_engine=False,
+            in_place=False,
+            notes=[
+                f"NDS 卡带镜像：{title} [{code}]，NitroROM 内含 {len(nds_index)} 个文件，共检出 {len(entries)} 条文本。",
+                "回写采用 NitroROM FAT 区间原位定长覆盖产出 .cn.nds 副本，DeSmuME / melonDS / 烧录卡直读。",
+            ],
+        )
+
+    def collect(self, root: Path) -> list[Entry]:
+        root = Path(root).resolve()
+        _path, _blob, _title, _code, _idx, files = self._load_rom(root)
+        entries, _ = _collect_console_all(root.name, files)
+        return entries
+
+    def apply(self, root: Path, translations: dict[str, str], out: Path | None = None) -> ApplyReport:
+        root = Path(root).resolve()
+        base = root.parent if root.is_file() else root
+        nds_path, blob, _title, code, nds_index, files = self._load_rom(root)
+        report = ApplyReport()
+        if nds_path is None or blob is None:
+            report.notes.append("未找到 NDS ROM")
+            return report
+
+        entries, bin_units = _collect_console_all(root.name, files)
+        modified, applied, missed, conflicts = _patch_console_all(
+            files, entries, bin_units, translations
+        )
+        report.applied = applied
+        report.missed = missed
+        report.conflicts.extend(conflicts)
+        if not modified:
+            report.notes.append("未命中任何译文，未生成 NDS 镜像")
+            return report
+
+        new_rom = bytearray(blob)
+        for rel, new_raw in modified.items():
+            ent = nds_index.get(rel)
+            if ent is None:
+                continue
+            if len(new_raw) > ent.size:
+                report.conflicts.append(f"{rel}：修改后字节 ({len(new_raw)}) 超出 FAT 分配空间 ({ent.size})")
+                continue
+            padded = new_raw.ljust(ent.size, b"\x00")
+            new_rom[ent.offset : ent.offset + ent.size] = padded
+
+        default_out = nds_path.with_name(f"{nds_path.stem}.cn.nds")
+        target_out = unique_output(Path(out) if out else default_out)
+        if target_out.is_dir():
+            target_out = unique_output(target_out / default_out.name)
+        target_out.write_bytes(bytes(new_rom))
+
+        undo = UndoLog.open(base, engine=self.name)
+        undo.did_copy(target_out)
+        report.undo_path = undo.finish()
+        report.out_path = target_out
+        report.in_place = False
+        report.notes.append(f"已生成 Nintendo DS 汉化镜像 [{code}]：{target_out.name}。")
         return report
