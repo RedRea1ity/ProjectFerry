@@ -1,0 +1,54 @@
+name: Sync Ferry release site
+on:
+  push:
+    branches: [main]
+    paths: ['README.md', 'site/**', '.github/workflows/pages-sync.yml']
+  release:
+    types: [published, edited, deleted, unpublished, released, prereleased]
+  workflow_run:
+    workflows: [release, bridge]
+    types: [completed]
+  workflow_dispatch:
+concurrency:
+  group: ferry-release-site
+  cancel-in-progress: false
+permissions:
+  contents: write
+  pages: write
+jobs:
+  publish:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: source
+          sparse-checkout: site
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: publish
+      - name: Build the public HTML from the current Releases and README
+        working-directory: source/site
+        env:
+          FERRY_SITE_OUT: ${{ github.workspace }}/publish
+          FERRY_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node snapshot.mjs
+          node pack-y2k.mjs
+      - name: Publish only index.html and request the Pages build
+        working-directory: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add -- index.html
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Sync Ferry release catalog and README'
+            git push origin HEAD:gh-pages
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/pages/builds" --silent
