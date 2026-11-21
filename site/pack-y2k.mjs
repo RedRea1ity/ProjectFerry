@@ -5,7 +5,7 @@ import C from './src/catalog.cjs';
 const root=path.dirname(fileURLToPath(import.meta.url));
 const read=file=>fs.readFileSync(path.join(root,file),'utf8');
 const inline=(file,mime)=>`data:${mime};base64,${fs.readFileSync(path.join(root,'public',file)).toString('base64')}`;
-const notes=`ProjectFerry icon/workbench: Copyright (c) 2026 摆渡计划 / ProjectFerry contributors.\n${read('project-license.txt')}\nOptical layout and local cursor choreography adapted for this page. Motion inspiration: Joel Califa's Swarm; DhvanilPatel/swarm-cursors; cxyax/swarm-cursors-skills. No third-party runtime, typeface or tracking script is fetched.`;
+const notes=`ProjectFerry icon/workbench: Copyright (c) 2026 摆渡计划 / ProjectFerry contributors.\n${read('project-license.txt')}\nNo third-party runtime, typeface or tracking script is fetched.`;
 const snapshot=JSON.parse(read('src/snapshot.json'));
 const current=snapshot.rows.find(x=>x.kind==='app');if(!current||!snapshot.notes[current.tag])console.warn('No matching README notes or desktop release.');
 const css=read('src/depot.css').replace("url('../public/sleeve.webp')",'none')+'\n'+read('src/dispatch.css')+'\n'+read('src/gallery.css');

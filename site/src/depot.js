@@ -49,30 +49,27 @@
     enlarged.src=img.currentSrc||img.src;enlarged.alt=img.alt;dialog.showModal();
   })}dialog.addEventListener('close',()=>{enlarged.removeAttribute('src');opener?.focus()});
 })();
-const cover=document.querySelector('.cover'), replay=document.querySelector('#replay');
-const motion=matchMedia('(prefers-reduced-motion: reduce)');
-const trades=[['.issue','校对','#8f3760'],['.latin','排字','#126475'],['.motto','入库','#655183']];
-let workers=[],animations=[],manualOff=false;
-try{manualOff=localStorage.getItem('ferry-fx')==='off'}catch{}
-const fxSwitch=document.querySelector('#fx-switch');
-function clear(){for(const a of animations)a.cancel();animations=[];for(const w of workers)w.remove();workers=[]}
-function play(){
-  clear();if(manualOff||motion.matches||!Element.prototype.animate)return;
-  const bounds=cover.getBoundingClientRect();
-  trades.forEach(([selector,label,color],i)=>{
-    const target=cover.querySelector(selector), r=target.getBoundingClientRect();
-    const x=r.left-bounds.left+Math.min(r.width-12,90+15*i), y=r.top-bounds.top+r.height-2;
-    const w=document.createElement('span');w.className='worker';w.setAttribute('aria-hidden','true');w.style.setProperty('--cursor',color);w.style.color=color;
-    const tag=document.createElement('b');tag.textContent=label;w.append(tag);cover.append(w);workers.push(w);
-    const pos=(a,b)=>`translate(${a}px,${b}px)`;
-    const a=w.animate([{transform:pos(bounds.width*.76,16+32*i),opacity:0},{offset:.12,opacity:1},{offset:.52,transform:pos(x-22,y),opacity:1},{offset:.78,transform:pos(x,y),opacity:1},{transform:pos(x+28,y-9),opacity:0}],{duration:1820,delay:i*155,fill:'both',easing:'ease-in-out'});
-    animations.push(a);a.onfinish=()=>w.remove();
-    animations.push(target.animate([{outline:'1px solid transparent'},{outline:`1px solid ${color}`},{outline:'1px solid transparent'}],{duration:720,delay:820+i*155}));
+(() => {
+  const button = document.querySelector('#fx-switch');
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  let off = false;
+  try { off = localStorage.getItem('ferry-fx') === 'off'; } catch {}
+  function sync() {
+    const on = !off && !motion.matches;
+    document.documentElement.classList.toggle('fx-on', on);
+    button.hidden = false;
+    button.disabled = motion.matches;
+    button.setAttribute('aria-pressed', String(on));
+    button.textContent = motion.matches ? '系统已减弱动态' : `特效：${on ? '开' : '关'}`;
+  }
+  button.addEventListener('click', () => {
+    off = !off;
+    try { localStorage.setItem('ferry-fx', off ? 'off' : 'on'); } catch {}
+    sync();
   });
-}
-function sync(){clear();const on=!manualOff&&!motion.matches;document.documentElement.classList.toggle('fx-on',on);replay.hidden=!on||!Element.prototype.animate;fxSwitch.hidden=false;fxSwitch.disabled=motion.matches;fxSwitch.setAttribute('aria-pressed',String(on));fxSwitch.textContent=motion.matches?'系统已减弱动态':`特效：${on?'开':'关'}`}
-fxSwitch.addEventListener('click',()=>{manualOff=!manualOff;try{localStorage.setItem('ferry-fx',manualOff?'off':'on')}catch{}sync();if(!manualOff)play()});
-replay.addEventListener('click',()=>{cover.scrollIntoView({block:'start',behavior:'instant'});play()});motion.addEventListener('change',sync);sync();play();
+  motion.addEventListener('change', sync);
+  sync();
+})();
 (() => {
   const C=FerryCatalog, $=s=>document.querySelector(s), el=(name,value)=>{const n=document.createElement(name);n.textContent=value;return n};
   const snapshot=JSON.parse($('#ferry-snapshot').textContent);

@@ -11,6 +11,63 @@
   deck.volume = 0.55;
   bgm.volume = 0.55;
 
+  function clock(seconds) {
+    const whole = Math.floor(seconds || 0);
+    return `${String(Math.floor(whole / 60)).padStart(2, '0')}:${String(whole % 60).padStart(2, '0')}`;
+  }
+  function enhance(audio, status) {
+    const controls = document.querySelector('#transport-template').content.firstElementChild.cloneNode(true);
+    const play = controls.querySelector('.play-key'), mute = controls.querySelector('.mute-key');
+    const seek = controls.querySelector('.seek'), volume = controls.querySelector('.volume');
+    const lcd = controls.querySelector('.deck-lcd');
+    controls.setAttribute('aria-label', audio.getAttribute('aria-label'));
+    for (const control of [play, mute, seek, volume]) control.setAttribute('aria-controls', audio.id);
+
+    function syncTime() {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      seek.disabled = !duration;
+      seek.max = String(duration);
+      seek.value = String(audio.currentTime);
+      const now = clock(audio.currentTime);
+      lcd.textContent = now;
+      seek.setAttribute('aria-valuetext', `${now} / ${clock(duration)}`);
+    }
+    function syncPlay() {
+      const playing = !audio.paused && !audio.ended;
+      play.classList.toggle('playing', playing);
+      play.title = playing ? '暂停' : '播放';
+      play.setAttribute('aria-label', play.title);
+    }
+    function syncVolume() {
+      const silent = audio.muted || audio.volume === 0;
+      volume.value = String(Math.round(audio.volume * 100));
+      volume.setAttribute('aria-valuetext', volume.value + '%');
+      mute.setAttribute('aria-pressed', String(silent));
+      mute.title = silent ? '取消静音' : '静音';
+    }
+    play.addEventListener('click', () => {
+      if (!audio.paused && !audio.ended) { audio.pause(); return; }
+      audio.play().catch(error => {
+        if (error.name !== 'AbortError') status.textContent = '未能播放这首音频，请再试一次。';
+      });
+    });
+    mute.addEventListener('click', () => {
+      if (audio.volume === 0) { audio.volume = 0.55; audio.muted = false; }
+      else audio.muted = !audio.muted;
+    });
+    volume.addEventListener('input', () => { audio.volume = volume.valueAsNumber / 100; audio.muted = false; syncVolume(); });
+    seek.addEventListener('input', () => { if (!seek.disabled) audio.currentTime = seek.valueAsNumber; });
+    for (const event of ['loadedmetadata', 'durationchange', 'timeupdate', 'seeked', 'emptied']) audio.addEventListener(event, syncTime);
+    for (const event of ['play', 'pause', 'ended', 'emptied', 'error']) audio.addEventListener(event, syncPlay);
+    audio.addEventListener('volumechange', syncVolume);
+    syncTime(); syncPlay(); syncVolume();
+    audio.after(controls);
+    audio.controls = false;
+    audio.hidden = true;
+  }
+  enhance(deck, message);
+  enhance(bgm, bgmStatus);
+
   function playDeck() {
     deck.play().catch(error => {
       if (error.name !== 'AbortError') message.textContent = '请用播放键开始，或选择浏览器支持的音频。';
