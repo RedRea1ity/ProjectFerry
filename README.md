@@ -1,45 +1,51 @@
 # 摆渡计划 · ProjectFerry
 
-**给还没有中文的小众游戏做汉化的桌面工作台。** 摆渡能从游戏里提取对白和菜单，导出双语表让人翻译、校对，再把译文放回游戏。它最早为 Minecraft 模组而写；从 2.0 起，视觉小说、独立游戏和老平台游戏有了自己的工作区，不需要安装 Minecraft。
+> 人无语言则茫然无依，故为摆渡。
 
-**[进入「渡口通信」发布页](https://redrea1ity.github.io/ProjectFerry/)** · [下载 Windows 版](https://redrea1ity.github.io/ProjectFerry/#downloads) · [GitHub 历史版本](https://github.com/RedRea1ity/ProjectFerry/releases) · [反馈问题](https://github.com/RedRea1ity/ProjectFerry/issues)
+**[进「渡口通信」发布页](https://redrea1ity.github.io/ProjectFerry/)** · [下载 Windows 工作台](https://redrea1ity.github.io/ProjectFerry/#downloads) · [翻版本记录](https://redrea1ity.github.io/ProjectFerry/#archive) · [报个毛病](https://github.com/RedRea1ity/ProjectFerry/issues)
 
-> 人无语言则茫然无依，故为摆渡。这里的机器译文是临时替补；有译稿就用译稿，愿意自己翻也不需要 API Key。
+## 作者真正的人话省流
 
-## 从哪里开始
+我一开始只是想让 Minecraft 里的模组物品说句中文。写着写着，现在我能把一部吉里吉里游戏的台词扒成双语表，自己翻完再塞回去了。苦力怕在这件事里没有任何贡献，也不用装 Minecraft。
 
-下载并运行 `ProjectFerry.exe`，在左侧选择你手里的项目：
+**摆渡现在是个 Windows 游戏汉化工作台。** 左边的「游戏汉化」管视觉小说、独立游戏、老电脑和掌机游戏的文本；「模组汉化」继续给 MC 整合包补中文。两边共用翻译引擎。手里有译稿就用自己的，没买 API 也能做通用游戏的提取和回录。
 
-| 你想做什么 | 选哪个入口 | 最后拿到什么 |
-| --- | --- | --- |
-| 翻一款没有中文的游戏，或把已经校好的台词放回去 | **游戏汉化**：选游戏目录、镜像或程序，先点「检测游戏」 | 双语表，以及该格式允许生成的翻译副本、补丁或写回结果。[通用游戏手册](docs/GAME-LOCALIZATION.md) |
-| 给 Minecraft 整合包里的模组补中文 | **模组汉化**：选实例，扫描模组自带译文和已有资源包 | 摆渡自己的中文资源包；部分不走语言文件的文字另用桥接。[Minecraft 手册](docs/MINECRAFT.md) |
+至于为什么还留着机翻，就一句老话：**别人熬夜翻的字，我一个都不敢碰；没人翻的那部分，我拿 AI 顶两天班，等正主回来了我自己滚。**
 
-**选版本：** 要用双轨工作台，请从发布页选择 **2.0 系列**。其中 [v2.0.0-alpha.5](https://github.com/RedRea1ity/ProjectFerry/releases/tag/v2.0.0-alpha.5) 是早期实验版，新增的塞班和黑莓写回尚缺实机验证，稳定性低于 alpha.4。只做 MC 资源包也可选较早的正式版。发行附件里的桥接 JAR 不是桌面程序。
+## 第一次开船：先让一句话变成中文
 
-## 通用游戏：先试译一条，再决定是否翻完整作
+从[下载区](https://redrea1ity.github.io/ProjectFerry/#downloads)拿 2.0 系列的 `ProjectFerry.exe`，打开后按你手里的东西选入口。旁边那个桥接 JAR 是给匹配的 MC 实例装的，不是桌面程序。
 
-比如你想翻一部吉里吉里视觉小说：先复制游戏目录，在副本上检测。若报告显示可读、可写，点「提取文本(自翻)」，在 `ferry_tl.tsv` 的 `dst` 列改一行主菜单。保存后点「导入外部译文…」并重打包，进游戏看这行字有没有显示、缺字或挤出按钮。**这趟流程不用调用翻译服务。** 确认效果后，可以继续手译，也可以用翻译引擎出初稿，再逐条校对。
+### 手里是一部游戏，跟方块没关系
 
-适配范围包括吉里吉里、Ren’Py、RPG Maker、Godot、Unity 等游戏引擎，也包括 PC-98 磁盘、PSP/PS Vita/NDS 镜像和部分手机游戏包。这里说的是 **Windows 工作台能处理的游戏文件**，不是说工作台能装到这些设备上。认出格式、读到文字、写回成功和真机能跑是四件事；只读到文本时，先停在导出这一步。[按引擎或平台查范围](docs/GAME-LOCALIZATION.md#哪些格式值得先试)
+假设你想翻一部没中文的视觉小说。先不管那几万句告白，拿标题画面的「はじめから」开刀。失败了重来，总比读到真结局才发现女主从头到尾都叫「□□」划算。
 
-## Minecraft：只补缺口，不动原模组
+1. **复制游戏目录和存档**，在「游戏汉化」里选副本，点「检测游戏」。看报告说能提取什么、能不能写回；只认出引擎，没读到字，就先停。
+2. 点「① 提取文本(自翻)」，留好 `ferry_tl.json`。打开旁边的 `ferry_tl.tsv`，在 `dst` 列把那一行填成「新游戏」。占位符和控制码别顺手翻了，它们不是台词。
+3. 点「导入外部译文…」，选刚改的 TSV，确认重打包。按报告找到产物，开游戏回到标题画面：按钮能点、中文不缺字、没挤出框，再去翻那几万句告白。**这三步不用翻译接口。**
 
-先扫描实例。默认情况下，只要模组已有可识别的人工中文，摆渡就会跳过整个模组，即使它只翻了一半。没有人工翻译的模组可以生成独立资源包；汉化组后来补上时，再扫描会撤回摆渡生成的对应条目。**这套自动让位规则属于 MC 资源包**，不代表通用游戏会自动替换已有补丁。
+吉里吉里、Ren’Py、RPG Maker、Godot、Unity 都有对应的适配器；PC-98 磁盘、PSP 镜像、塞班和黑莓游戏包也有各自的读写条件。这说的是**电脑上的工作台能处理哪些文件**，不是我把这玩意儿移植去黑莓了。[按引擎查能做什么 → 通用游戏手册](docs/GAME-LOCALIZATION.md#哪些格式值得先试)
 
-资源包能处理语言文件，不能改变所有屏幕文字。Forge 1.20.1 的物品提示可走桥接；聊天栏仍待实机验证。FTB 任务书、只补缺词和桥接安装分别见 [Minecraft 手册](docs/MINECRAFT.md)。
+### 手里是 MC 整合包，回老家了
 
-## 动手之前
+选「模组汉化」，指到含 `mods` 的实例目录，扫描，挑一个确实缺中文的模组试翻。进游戏启用摆渡生成的资源包，先找一件认识的物品看看。原模组 JAR 不动。
 
-- **先留原档。** 不同格式会生成副本、补丁或原地写回；保留干净游戏、存档和双语表。撤销记录不能代替备份。
-- **把机器翻译当初稿。** 检测、提取和手工回录不消耗翻译额度。选择在线引擎时，待翻文本会发给所选服务；私有或未公开的剧本可手译，或配置本地模型。不要在 Issue 里贴密钥或上传整部游戏。
-- **报告比扩展名重要。** 图片里的字、运行时才拼出来的句子和缺少中文字形的字体，都不是翻完语言表就能解决的。反馈时附上工具版本、游戏格式、脱敏后的检测报告，以及一条能复现问题的文本。
+默认只要认出一个模组已经有人工中文，哪怕只翻了一半，摆渡也先跳过；要它补剩下的词，得你自己开选项。后来汉化组补上了，再扫一次，摆渡撤掉**自己写的**对应条目。自我削除谢谢喵。这个承诺只管 MC 资源包，不是说通用游戏的第三方补丁也会自己长腿跑路。
 
-两条路线共用「翻译引擎」设置：可以选择 MyMemory、DeepL、自定义兼容接口或本地模型。先用几句对白检查术语和格式，再决定是否增加并发或启用模型池。请勿分享自己的 `ferry_config.json`；仓库里提供的是不含个人密钥的示例。
+资源包启用了，物品悬浮说明还是英文？那句可能写死在代码里。自研桥的 **Forge 1.20.1 物品提示**已实机验证，聊天栏这条还没验。别为了翻个物品名先给整合包做开颅手术。[资源包、桥接和 FTB 任务书 → Minecraft 手册](docs/MINECRAFT.md)
 
-## 从源码运行
+## 几句真别跳过的
 
-安装带 Tk 的 Python 3.11 或更高版本，在仓库根目录运行 `py -3 ProjectFerry.pyw`。查看 [工作台截图](site/public/workbench.png)、[翻译引擎配置示例](ferry_config.example.json)、[代码结构](docs/ARCHITECTURE.md) 或 [持续集成的测试清单](.github/workflows/tests.yml)。
+- **选版本。** [v2.0.0-alpha.5](https://github.com/RedRea1ity/ProjectFerry/releases/tag/v2.0.0-alpha.5) 是早期实验版，稳定性低于 alpha.4，新增的塞班、黑莓写回还缺实机验证。能打出个包，和那台老机器肯开机认它，是两件事。只做 MC 资源包也可以选较早的正式版。
+- **留原档。** 有的格式出补丁，有的出副本，有的原地写回。干净的游戏、存档、译文表各留一份。「撤销汉化」不能替你把没备份的青春读档。
+- **谁会看到剧本？** 手翻不用交给在线服务；选在线引擎，待翻文本就会发给你选的那家。未公开的剧本可以手翻或用本地模型。别把密钥、`ferry_config.json` 或整部游戏扔进公开 Issue。
+- **怎么报错？** 告诉我工具版本、游戏名或引擎、你按了哪个按钮，以及一条本来该长什么样、实际又长什么样的文本。有脱敏的检测报告更好。图片上画的字、运行时现拼的句子、字库里压根没有的汉字，处理办法都不一样。
+
+## 想拆开看的人走这边
+
+源码运行需要带 Tk 的 Python 3.11 或更高版本。在仓库根目录执行 `py -3 ProjectFerry.pyw`。两条线的「翻译引擎」设置共用，可选 MyMemory、DeepL、自定义兼容接口或本地模型；先试几句，再决定要不要开并发。
+
+[工作台截图](site/public/workbench.png) · [引擎配置示例](ferry_config.example.json) · [代码结构](docs/ARCHITECTURE.md) · [测试清单](.github/workflows/tests.yml)
 
 ## 更新日志
 
@@ -160,6 +166,10 @@
 
 ## 作者与许可
 
-**红现实**，项目发起与维护。项目使用 [MIT 许可证](LICENSE)。感谢提供语言资源与工具的 Mojang、PandaDevOfficial / Minecraft-All-Lang、CFPA 社区及 [LiteralBridge](https://github.com/Losketch/LiteralBridge)，也感谢愿意把一句生硬的机翻改对的人。社区汉化保留各自的许可和署名。
+我是**红现实**。这玩意儿是我一个不懂编程的人逼着 AI 一砖一瓦垒出来的，所以你看到它长得磕碜，那不是风格，那就是本来面目。
 
-[到揭示板留言](https://redrea1ity.github.io/ProjectFerry/#forum) · [GitHub Issues](https://github.com/RedRea1ity/ProjectFerry/issues) · [邮件联系红现实](mailto:zetadarkdragon@gmail.com)
+代码按 [MIT 许可证](LICENSE) 开放。感谢 Mojang、PandaDevOfficial / Minecraft-All-Lang、CFPA 社区和 [LiteralBridge](https://github.com/Losketch/LiteralBridge)。社区译文的署名和许可归各自作者；也谢谢愿意进游戏对着一行字改三遍的人。
+
+说句实在的：这工具最好的结局，是被你删掉。等官方汉化补上、等汉化组把坑填了，它就没人理了，那说明它赢了。一个永远被需要的临时替补，才叫失败。
+
+[到渡口揭示板找我](https://redrea1ity.github.io/ProjectFerry/#forum) · [GitHub Issues](https://github.com/RedRea1ity/ProjectFerry/issues) · [给红现实发邮件](mailto:zetadarkdragon@gmail.com)
