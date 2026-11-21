@@ -48,6 +48,7 @@ from .godot import GodotAdapter
 from .hints import scan_hints
 from .hsp import HspAdapter
 from .i18n_table import I18nTableAdapter
+from .j2me import J2meAdapter, extract_class_utf8_strings, rebuild_class_utf8_strings
 from .kirikiri import KirikiriAdapter
 from .love2d import Love2dAdapter
 from .mobile import (
@@ -60,9 +61,11 @@ from .mobile import (
 )
 from .narrative import NarrativeAdapter
 from .renpy import RenpyAdapter
+from .retro_win import RetroWinAdapter, is_alicesoft_ald, is_director_container, is_win16_ne_executable
 from .rpgmaker import RpgMakerAdapter
 from .rpgmaker_2k import RpgMaker2kAdapter
 from .rpgmaker_ace import RpgMakerAceAdapter
+from .symbian import SymbianAdapter, is_symbian_e32image, is_symbian_sis
 from .tyrano import TyranoAdapter
 from .undo import UNDO_NAME, RevertReport, UndoLog
 from .undo import revert as revert_game
@@ -73,6 +76,7 @@ from .unity import (
 )
 from .unreal import UnrealAdapter, parse_locres, rebuild_locres
 from .vn_engines import ArtemisAdapter, OnscripterAdapter, WolfRpgAdapter
+from .flash import FlashAdapter, extract_swf_strings, rebuild_swf_strings
 from ferrygame.pc98 import PC98Adapter
 from ferrygame.rawbin import RawBinaryAdapter
 
@@ -80,10 +84,14 @@ from ferrygame.rawbin import RawBinaryAdapter
 REGISTRY: list[type[Adapter]] = [
     ApkAdapter,
     IpaAdapter,
+    J2meAdapter,
+    SymbianAdapter,
     PsvAdapter,
     PspAdapter,
     NdsAdapter,
     PC98Adapter,
+    FlashAdapter,
+    RetroWinAdapter,
     OnscripterAdapter,
     KirikiriAdapter,
     WolfRpgAdapter,
@@ -145,12 +153,14 @@ __all__ = [
     "AsarContainer",
     "Container",
     "Document",
+    "FlashAdapter",
     "FolderGame",
     "GameMakerAdapter",
     "GodotAdapter",
     "HspAdapter",
     "I18nTableAdapter",
     "IpaAdapter",
+    "J2meAdapter",
     "KirikiriAdapter",
     "Love2dAdapter",
     "NarrativeAdapter",
@@ -162,10 +172,12 @@ __all__ = [
     "PsvAdapter",
     "RawBinaryAdapter",
     "RenpyAdapter",
+    "RetroWinAdapter",
     "RevertReport",
     "RpgMaker2kAdapter",
     "RpgMakerAceAdapter",
     "RpgMakerAdapter",
+    "SymbianAdapter",
     "TyranoAdapter",
     "UNDO_NAME",
     "UndoLog",

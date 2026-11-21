@@ -21,7 +21,15 @@ from .pipeline import (
     scan_game,
     translate_project,
 )
-from .project import TL_NAME, Project, load, merge
+from .project import (
+    TL_NAME,
+    TSV_NAME,
+    Project,
+    export_tsv,
+    import_external_translations,
+    load,
+    merge,
+)
 from .rawbin import (
     RawBinaryAdapter,
     encode_padded,
@@ -43,6 +51,7 @@ __all__ = [
     "RawBinaryAdapter",
     "ReconReport",
     "TL_NAME",
+    "TSV_NAME",
     "TranslateReport",
     "Unit",
     "apply_project",
@@ -51,7 +60,9 @@ __all__ = [
     "detect_adapter",
     "detect_source_lang",
     "encode_padded",
+    "export_tsv",
     "get_adapter",
+    "import_external_translations",
     "inspect_game",
     "load",
     "merge",

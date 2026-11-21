@@ -24,7 +24,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "2.0.0-alpha.3"
+APP_VERSION = "2.0.0-alpha.4"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -1468,15 +1468,17 @@ class FerryApp(tk.Tk):
         foot = ttk.Frame(parent)
         foot.pack(side="bottom", fill="x", pady=(6, 0))
         report_card.pack(fill="both", expand=True)
-        self._loc_edit_tl_button = ttk.Button(foot, text="编辑译文表", command=self._loc_open_tl_file)
+        self._loc_edit_tl_button = ttk.Button(foot, text="① 提取文本(自翻)", command=self._loc_open_tl_file)
         self._loc_edit_tl_button.pack(side="left")
-        self._loc_apply_button = ttk.Button(foot, text="写回译文表", command=self._loc_apply_only)
-        self._loc_apply_button.pack(side="left", padx=(6, 12))
+        self._loc_apply_button = ttk.Button(foot, text="② 自翻回录重打包", command=self._loc_apply_only)
+        self._loc_apply_button.pack(side="left", padx=(6, 6))
+        self._loc_import_tl_button = ttk.Button(foot, text="导入外部译文…", command=self._loc_import_external_tl)
+        self._loc_import_tl_button.pack(side="left", padx=(0, 10))
         self._loc_open_button = ttk.Button(foot, text="打开游戏目录", command=self._loc_open_output, state="disabled")
         self._loc_open_button.pack(side="left")
         self._loc_revert_button = ttk.Button(foot, text="撤销汉化", command=self._loc_revert_game)
         self._loc_revert_button.pack(side="left", padx=(8, 0))
-        self._loc_history_button = ttk.Button(foot, text="最近汉化记录", command=self._loc_show_history)
+        self._loc_history_button = ttk.Button(foot, text="最近记录", command=self._loc_show_history)
         self._loc_history_button.pack(side="left", padx=(8, 0))
 
         self._loc_play_path: Path | None = None
@@ -1498,11 +1500,11 @@ class FerryApp(tk.Tk):
 
     def _loc_choose_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="选择游戏镜像 / 安装包（.apk/.ipa/.vpk/.iso/.cso/.nds/.hdi/.love）或单 EXE 游戏",
+            title="选择游戏镜像 / 安装包（.apk/.ipa/.vpk/.iso/.cso/.nds/.jar/.sis/.swf/.hdi/.dir）或单 EXE 游戏",
             filetypes=[
-                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.hdi *.fdi *.nhd *.love *.xp3 *.pck *.pfs *.locres *.exe *.com *.dat"),
-                ("移动端与掌机包 (.apk / .ipa / .vpk / .iso / .cso / .nds)", "*.apk *.ipa *.vpk *.iso *.cso *.nds"),
-                ("PC-98 磁盘镜像 (.hdi / .fdi / .nhd)", "*.hdi *.fdi *.nhd"),
+                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx *.swf *.hdi *.fdi *.nhd *.dir *.dxr *.cst *.ald *.love *.xp3 *.pck *.pfs *.locres *.exe *.com *.dat"),
+                ("移动端与掌机包 (.apk / .ipa / .vpk / .iso / .cso / .nds / .jar / .sis)", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx"),
+                ("Flash / 复古 Win3.1 / PC-98 (.swf / .dir / .dxr / .ald / .hdi / .fdi / .nhd)", "*.swf *.dir *.dxr *.cst *.ald *.hdi *.fdi *.nhd"),
                 ("所有文件", "*.*"),
             ],
             parent=self,
@@ -1531,24 +1533,58 @@ class FerryApp(tk.Tk):
     def _loc_open_tl_file(self) -> None:
         raw = self._loc_path_var.get().strip().strip('"')
         if not raw or not Path(raw).exists():
-            messagebox.showinfo("打开译文表", "请先选择一个游戏目录。", parent=self)
+            messagebox.showinfo("提取文本（自翻导出）", "请先选择一个游戏目录或文件。", parent=self)
             return
         from ferrygame.pipeline import scan_game
-        from ferrygame.project import find as find_tl
+        from ferrygame.project import TSV_NAME, export_tsv, load as load_tl
 
         root = Path(raw)
-        tl_path = find_tl(root)
-        if tl_path is None:
+        proj = load_tl(root)
+        if proj is None or not proj.units:
             proj, probe = scan_game(root, save=True)
-            tl_path = proj.path
-            if tl_path is None or not proj.units:
-                messagebox.showinfo("打开译文表", f"尚未提取出可翻译条目：\n{probe.summary()}", parent=self)
+            if proj.path is None or not proj.units:
+                messagebox.showinfo("提取文本（自翻导出）", f"尚未提取出可翻译条目：\n{probe.summary()}", parent=self)
                 return
+        tsv_path = export_tsv(proj)
+        lines: list[tuple[str, str]] = [
+            ("head", f"文本提取完成（0 Token）：{proj.summary()}"),
+            ("ok", f"· Excel/记事本自翻表格（改 dst 列即可）：{tsv_path}"),
+            ("ok", f"· JSON 完整双语工程表（改 \"dst\" 字段即可）：{proj.path}"),
+            ("dim", "提示：编辑保存上述任一文件后，直接点击下方「② 自翻回录重打包」即可写回游戏并重打包！"),
+        ]
+        self._loc_write(lines)
         try:
-            os.startfile(str(tl_path))
-            self._loc_status_var.set(f"已打开 {tl_path.name}")
+            os.startfile(str(tsv_path if tsv_path.is_file() else proj.path))
+            self._loc_status_var.set(f"已提取并打开自翻表 {tsv_path.name}")
         except OSError as exc:
-            messagebox.showerror("打开译文表", str(exc), parent=self)
+            messagebox.showerror("提取文本", str(exc), parent=self)
+
+    def _loc_import_external_tl(self) -> None:
+        raw = self._loc_path_var.get().strip().strip('"')
+        if not raw or not Path(raw).exists():
+            messagebox.showinfo("导入外部译文", "请先选择游戏目录。", parent=self)
+            return
+        ext_file = filedialog.askopenfilename(
+            title="选择自翻译完成的词表文件（.tsv / .csv / .json / ParaTranz）",
+            filetypes=[
+                ("自翻译双语词表 (.tsv / .csv / .json)", "*.tsv *.csv *.json"),
+                ("所有文件", "*.*"),
+            ],
+            parent=self,
+        )
+        if not ext_file:
+            return
+        from ferrygame.pipeline import scan_game
+        from ferrygame.project import import_external_translations, load as load_tl
+
+        root = Path(raw)
+        proj = load_tl(root)
+        if proj is None:
+            proj, _ = scan_game(root, save=True)
+        count = import_external_translations(proj, Path(ext_file), save=True)
+        self._loc_status_var.set(f"已从 {Path(ext_file).name} 回录 {count} 条译文")
+        if messagebox.askyesno("回录完成", f"已成功从 {Path(ext_file).name} 回录 {count} 条译文。\n是否立即执行重打包写回游戏？", parent=self):
+            self._loc_apply_only()
 
     def _loc_apply_only(self) -> None:
         raw = self._loc_path_var.get().strip().strip('"')

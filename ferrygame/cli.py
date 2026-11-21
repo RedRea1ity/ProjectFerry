@@ -28,6 +28,7 @@ from .pipeline import (
     scan_game,
     translate_project,
 )
+from .project import TSV_NAME, export_tsv, import_external_translations
 from .project import load as load_project
 from .recon import inspect_game
 
@@ -89,8 +90,59 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if project.units:
         print(f"译文表：{project.summary()}")
         print(f"已写入：{project.path}")
+        if project.path:
+            tsv_path = project.path.with_name(TSV_NAME)
+            if tsv_path.is_file():
+                print(f"自翻表格（Excel/记事本直改）：{tsv_path}")
         return 0
     return 1
+
+
+def cmd_extract(args: argparse.Namespace) -> int:
+    """提取文本并导出自翻译双语表（ferry_tl.json + ferry_tl.tsv）。"""
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+    adapter = get_adapter(args.adapter) if getattr(args, "adapter", None) else None
+    project, probe = scan_game(root, adapter=adapter, save=True)
+    print(probe.summary())
+    if not project.units:
+        return 1
+    out_tsv = Path(args.tsv) if getattr(args, "tsv", None) else None
+    tsv_path = export_tsv(project, out_tsv)
+    print(f"已提取 {len(project.units)} 条文本（0 Token）：")
+    print(f"  · JSON 工程表：{project.path}")
+    print(f"  · TSV 自翻表（可用 Excel / 记事本 / ParaTranz 编辑）：{tsv_path}")
+    return 0
+
+
+def cmd_repack(args: argparse.Namespace) -> int:
+    """从自翻译文件（.tsv / .csv / .json）回录译文并重打包写回游戏。"""
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+    project = load_project(root)
+    if project is None:
+        project, probe = scan_game(root, save=True)
+        if not probe.readable or not project.units:
+            print(probe.summary(), file=sys.stderr)
+            return 1
+    from_path = Path(args.from_file) if getattr(args, "from_file", None) else None
+    imported = import_external_translations(project, from_path, save=True)
+    if imported:
+        print(f"已从自翻译表回录 {imported} 条新增/修改译文。")
+    out = Path(args.out) if getattr(args, "out", None) else None
+    report = apply_project(project, out=out)
+    if report.applied:
+        mode = "原地写回" if report.in_place else "重打包产出副本"
+        print(f"{mode}：{report.applied} 条 → {report.out_path}")
+    for note in report.notes:
+        print(note)
+    for conflict in report.conflicts[:20]:
+        print(f"  冲突：{conflict}", file=sys.stderr)
+    return 0 if report.ok else 1
 
 
 def cmd_translate(args: argparse.Namespace) -> int:
@@ -195,10 +247,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_recon.add_argument("game", nargs="?", default=".")
     p_recon.set_defaults(func=cmd_recon)
 
-    p_scan = sub.add_parser("scan", help="抽取剧情与操作菜单，生成/更新明文 ferry_tl.json（不花 token）")
+    p_scan = sub.add_parser("scan", help="抽取剧情与操作菜单，生成/更新明文 ferry_tl.json 与 ferry_tl.tsv（不花 token）")
     p_scan.add_argument("game", nargs="?", default=".")
     p_scan.add_argument("--adapter", default=None)
     p_scan.set_defaults(func=cmd_scan)
+
+    p_ext = sub.add_parser("extract", help="【测试版功能】仅提取文本并导出自翻双语表（ferry_tl.json + Excel 友好的 ferry_tl.tsv）")
+    p_ext.add_argument("game", nargs="?", default=".")
+    p_ext.add_argument("--adapter", default=None)
+    p_ext.add_argument("--tsv", default=None, help="自定义导出 .tsv 路径")
+    p_ext.set_defaults(func=cmd_extract)
+
+    p_rep = sub.add_parser("repack", help="【测试版功能】回录自翻译文件（.tsv/.csv/.json）并重打包写回游戏（零 token）")
+    p_rep.add_argument("game", nargs="?", default=".")
+    p_rep.add_argument("--from", dest="from_file", default=None, help="外部自翻译文件路径（默认读取游戏目录下的 ferry_tl.tsv / ferry_tl.json）")
+    p_rep.add_argument("--out", default=None)
+    p_rep.set_defaults(func=cmd_repack)
 
     p_tr = sub.add_parser("translate", help="翻译 ferry_tl.json 中的待翻条目（带上下文滑窗与字节预算约束）")
     p_tr.add_argument("game", nargs="?", default=".")

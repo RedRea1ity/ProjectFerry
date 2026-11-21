@@ -3,15 +3,16 @@
 > 人无语言则茫然无依，故为摆渡。
 > Where words fail, we ferry.
 
-**开发中 · v2.0.0-alpha.3（早期测试版）**
+**开发中 · v2.0.0-alpha.4（早期测试版）**
 
 摆渡计划已经从最初单纯的「Minecraft 模组临时汉化器」，正式演进为**双轨制跨平台全语种游戏本地化工作台**（`ferrycore` 模组主线 + `ferrygame` 通用游戏线）。首次打开时从左侧导航栏或「项目工作台」选择要处理的轨道；两条线共用底层 AI 翻译引擎与密钥配置，但探测、提示词、写回与无损还原各自独立、互不污染：
 
-- **通用游戏汉化（24 类全球主流 / 独立 / 复古 / 移动 / 掌机引擎适配）**：
-  - **欧美与全球主流/独立引擎**：**Unreal Engine 4/5 (`.locres` v0~v3)**、**Unity (`StreamingAssets` + Mono `#US` + IL2CPP `global-metadata.dat` → XUnity)**、**Godot 3/4 (`.pck` + `.tscn`)**、**GameMaker (`data.win` IFF `STRG`)**、**LÖVE / Love2D (`.love` / 融合 EXE / `.lua`)**、**全球叙事引擎集群（Inkle's Ink `.ink.json`、Yarn Spinner `.yarn`、Twine `.html`、Godot Dialogic `.dtl`、Adventure Game Studio `.trs`）**、**通用 Gettext `.po / .json / .csv`**；
+- **通用游戏汉化（28 类全球主流 / 独立 / 复古 / 移动 / 掌机 / 功能机 / Flash 引擎适配）**：
+  - **欧美与全球主流/独立引擎**：**Unreal Engine 4/5 (`.locres` v0~v3)**、**Unity (`StreamingAssets` + Mono `#US` + IL2CPP `global-metadata.dat` → XUnity)**、**Godot 3/4 (`.pck` + `.tscn`)**、**GameMaker (`data.win` IFF `STRG`)**、**LÖVE / Love2D (`.love` / 融合 EXE / `.lua`)**、**全球叙事引擎集群（Inkle's Ink `.ink.json`、Yarn Spinner `.yarn`、Twine `.html`、Godot Dialogic `.dtl`、Adventure Game Studio `.trs`）**、**Adobe / Macromedia Flash (`.swf` `FWS`/`CWS` + Projector `.exe` AS2/AS3 常量池变长重建)**、**通用 Gettext `.po / .json / .csv`**；
   - **日系同人与视觉小说引擎**：**Kirikiri 2/Z 吉里吉里 (`.xp3` + UTF-16LE `patch.xp3`)**、**Ren'Py (`.rpa / .rpy`)**、**RPG Maker 全家桶（2000/2003 `.ldb/.lmu`、XP/VX/Ace `.rgss3a/.rvdata2`、MV/MZ `.json`）**、**TyranoScript / Electron `app.asar`**、**ONScripter (`nscript.dat` `0x84` XOR / `0.txt`)**、**WOLF RPG Editor (`Data/*.dat/.mps`)**、**Artemis Engine (`.pfs` + `.ast`)**、**HSP (`DPMX` + 替身 DLL)**；
-  - **复古、移动端与掌机平台**：**NEC PC-98 (`.hdi/.fdi/.nhd` FAT12/16 + 内置 `anex86.bmp` 字库底板)**、**Android `.apk`（含 `strings.xml`、`resources.arsc` 二进制字符串池、`classes.dex` 重算校验与内嵌 `global-metadata.dat`）**、**iOS `.ipa`（含明文与 `bplist00` 二进制 `.strings` 及 `0755` 权限保持）**、**PS Vita (`.vpk` + `rePatch/<TITLE_ID>/`)**、**PSP (`.iso` & `.cso` CISO 压缩镜像 LBA 扇区写回)**、**Nintendo DS (`.nds` NitroROM FNT/FAT 写回)**；
-  - **全球多编码裸二进制兜底 (`rawbin` + `recon`)**：同时支持 **Shift-JIS → GBK**、**欧美 UTF-8/ASCII → UTF-8**、**Windows 宽字符 UTF-16LE → UTF-16LE** 的定长原位覆写。
+  - **复古电脑（PC-98 / Win3.1 / Win95 / Win98）**：**NEC PC-98 (`.hdi/.fdi/.nhd` FAT12/16 + 内置 `anex86.bmp` 字库底板)**、**Macromedia Director（`RIFX`/`XFIR` `.dir/.dxr/.cst` 及 Projector EXE —— 覆盖 Win3.1《东脑》《中天》等同代多媒体邪典）**、**Windows 3.1 16 位 `NE` 程序**、**Win95/98 AliceSoft System 1/2/3/3.5 (`*.ald` 扇区归档)**；
+  - **移动端、掌机与功能机老古董**：**Java ME / J2ME ("jvav" `.jar` `.class` `0xCAFEBABE` 常量池变长重建 + `.jad` 字节大小自动同步)**、**塞班 Symbian OS（S60 / N-Gage / UIQ `.sis / .sisx / .rsc / .r01 / E32Image .app`）**、**Android `.apk`（`strings.xml` + `resources.arsc` + `classes.dex` 重算校验 + `global-metadata.dat`）**、**iOS `.ipa`（明文与 `bplist00` 二进制 `.strings` + `0755` 权限保持）**、**PS Vita (`.vpk` + `rePatch/<TITLE_ID>/`)**、**PSP (`.iso` & `.cso` CISO 压缩镜像 LBA 扇区写回)**、**Nintendo DS (`.nds` NitroROM FNT/FAT 写回)**；
+  - **测试版专属功能 —— 0 Token「文本提取 → 自翻译 → 回录重打包」**：一键将任意受支持游戏/镜像的文本提取为 Excel 直读的 UTF-8-BOM **`ferry_tl.tsv`** 与 **`ferry_tl.json`**，在 Excel / 记事本 / ParaTranz / 网页大模型自翻后，一键回录并自动重打包回原格式镜像或安装包！
 - **Minecraft 模组汉化**：选择 Minecraft 实例，扫描整合包的中文缺口。默认避让人工译文；社区汉化、质量检查、术语表和桥接工具在「资源与桥接」。
 - **翻译引擎**：管理接口、密钥和预设，测试连接，配置并发与模型池。
 
@@ -277,16 +278,20 @@ py mc_ai_translator.py translate --instance "..." --only-modid tacz,jei
 4. **手工精修 `ferry_tl.json` → 0 Token 重刷**：翻译完成后，可随时点击「编辑译文表」修改 `ferry_tl.json` 中的 `dst`，再点「写回译文表」瞬间重刷进游戏，不花一分钱 Token。
 5. **一键无损撤销（`.ferry-undo.json`）**：所有原地修改（先备份 MD5 再落盘）和副本生成都记录在 `.ferry-undo.json`，随时点「撤销还原」100% 恢复原状。
 
-### 已支持的 24 类全球引擎与平台适配器总表
+### 已支持的 28 类全球引擎与平台适配器总表
 
 | 优先级 | 适配器标识 | 覆盖平台 / 引擎 / 容器 | 核心机制与回写策略 |
 | :---: | :--- | :--- | :--- |
 | `11` | `apk` | **Android `.apk`** / 解包目录 | 抽取 `res/values*/strings.xml`、**`resources.arsc` (`ResStringPool` `0x0001`)**、`assets/` 内嵌游戏剧本、**`classes.dex` 字符串池**及 Unity IL2CPP `global-metadata.dat`；写回 `.cn.apk` 时自动重算 DEX SHA-1 与 Adler32、保持 `resources.arsc` 为 `ZIP_STORED` 无压缩并剥除旧 `META-INF` 签名块 |
 | `12` | `ipa` | **iOS `.ipa`** / `Payload/*.app` | 原生支持 Apple `*.lproj/*.strings`（**明文 UTF-8/UTF-16 与编译后 `bplist00` 二进制格式**）及包内游戏剧本与 `global-metadata.dat`；重建 `.cn.ipa` 严格保留 Mach-O `0755` 可执行权限位 |
+| `13` | `j2me` | **Java ME / J2ME ("jvav" `.jar / .jad`)** | 识别 `META-INF/MANIFEST.MF` 的 `MIDlet-` 清单，纯标准库解析并**任意长度重建 `.class` (`0xCAFEBABE`) 的 `CONSTANT_Utf8` 常量池**（不破坏字节码下标），产出 `.cn.jar` 并自动同步修正 `.cn.jad` 的 `MIDlet-Jar-Size` |
+| `13` | `symbian` | **塞班 Symbian OS (`.sis / .sisx / .rsc / .r01 / .app`)** | 覆盖 S60v1/v2 (`0x10000419`)、S60v3/v5 (`0x10201A7A`)、UIQ 与 N-Gage，支持 `.rsc / .r01..r99` 资源表与 EPOC `E32Image` (`.app`) `_LIT16 / _LIT8` 台词抽取与定长回写 |
 | `13` | `psv` | **PS Vita `.vpk`** / 解包目录 | 解析 `sce_sys/param.sfo`（`\x00PSF` 标题与 `TITLE_ID`），鉴别 `SCE\x00` 加密与明文 ELF，抽取明文词表与多编码二进制剧本；输出 `.cn.vpk` 或实机/Vita3K 标准 **`rePatch/<TITLE_ID>/`** 补丁目录 |
 | `14` | `psp` | **PSP `.iso` & `.cso`** / `PSP_GAME` | 纯标准库解析 **ISO-9660 光盘文件系统**与 **`CISO` (`.cso`) 分扇区 deflate 压缩流**，读取 `/PSP_GAME/PARAM.SFO` 与 `USRDIR` 脚本，在 `.cn.iso / .cn.cso` 对应 LBA 扇区区间内原位写回，PPSSPP 与实机直读 |
 | `14` | `nds` | **Nintendo DS `.nds`** (NitroROM) | 纯标准库解析 NDS 卡带头部的 **FNT（文件名表 `0x40`）与 FAT（文件分配表 `0x48`）**，抽取内部脚本并在 FAT 区间原位定长覆写产出 `.cn.nds` |
 | `15` | `pc98` | **NEC PC-98** (`.hdi/.fdi/.nhd`) | 纯标准库解析 FAT12 / FAT16 磁盘镜像，内置 524KB **`anex86.bmp` 汉化字库底板**，把 CP932 缺字动态映射至 JIS 第二水准冷僻汉字格并自动修正 16 位汇编 `LODSW` 双字节偶对齐，输出镜像副本 + 定制 `anex86.bmp` |
+| `16` | `flash` | **Adobe / Macromedia Flash (`.swf` & Projector `.exe`)** | 支持 `FWS`、`CWS` (zlib) 与尾部带 `0xFA123456` 封尾的独立 Flash Projector `.exe`；纯标准库重建 **AS1/AS2 `ActionConstantPool` (`0x88`)** 与 **AS3 AVM2 `DoABC` `string_info` 常量池**，支持任意长度 UTF-8 中文 |
+| `16` | `retro_win` | **Win3.1 / 95 / 98 早期多媒体与老 AVG** | 覆盖 **Macromedia Director (`RIFX`/`XFIR` `.dir/.dxr/.cst` `STXT` 演员文本块 —— Win3.1《东脑》《中天》同款引擎)**、**Windows 3.1 16 位 `NE` 程序**、以及 **AliceSoft System 1/2/3/3.5 (`*.ald` 扇区归档)** |
 | `17` | `onscripter` | **ONScripter / NScripter** | 支持 **`nscript.dat`（单字节 `0x84` XOR 自动加解密）** 与 `0.txt / 00.txt`，抽取 `caption`、`select/csel` 选项与正文台词 |
 | `18` | `kirikiri` | **Kirikiri 2 / Z（吉里吉里）** | 纯标准库解包与打包 `.xp3` 归档（支持 zlib 压缩索引与加密滤镜鉴别），回写 `.ks` 统一采用 **UTF-16LE with BOM (`0xFF 0xFE`)** 生成 `patch.xp3`，无需转区或注入 DLL 直接原生渲染简体中文 |
 | `19` | `wolfrpg` | **WOLF RPG Editor** | 自动鉴别 `.wolf` (DXArchive) 与解包 `Data/BasicData/*.dat`、`Data/MapData/*.mps`，抽取并定长写回数据库与事件台词 |
@@ -310,11 +315,13 @@ py mc_ai_translator.py translate --instance "..." --only-modid tacz,jei
 
 ```powershell
 # 1. 独立通用游戏线 CLI（推荐）
-py -3 -m ferrygame probe "D:\Games\某游戏或镜像.iso"     # 0 Token 体检 + 导出 ferry_tl.json
+py -3 -m ferrygame extract "D:\Games\某游戏或镜像.jar"   # 【自翻第一步】0 Token 提取文本，导出 ferry_tl.tsv (Excel 直开) + ferry_tl.json
+py -3 -m ferrygame repack "D:\Games\某游戏或镜像.jar"    # 【自翻第二步】0 Token 回录改好的 ferry_tl.tsv / .csv / .json 并重打包游戏
 py -3 -m ferrygame recon "D:\Games\未知猎奇游戏"         # 字节侦查（香农熵 / PE 导入表 / 台词密度）
-py -3 -m ferrygame translate "D:\Games\某游戏"           # AI 翻译（更新 ferry_tl.json）
-py -3 -m ferrygame apply "D:\Games\某游戏"               # 0 Token 把 ferry_tl.json 写回游戏
-py -3 -m ferrygame run "D:\Games\某游戏"                 # 扫描 → 翻译 → 写回一条龙
+py -3 -m ferrygame scan "D:\Games\某游戏"                # 0 Token 体检 + 生成译文表
+py -3 -m ferrygame translate "D:\Games\某游戏"           # AI 翻译（更新 ferry_tl.json 与 ferry_tl.tsv）
+py -3 -m ferrygame apply "D:\Games\某游戏"               # 0 Token 把译文表写回游戏
+py -3 -m ferrygame run "D:\Games\某游戏"                 # 扫描 → AI 翻译 → 写回一条龙
 py -3 -m ferrygame revert "D:\Games\某游戏"              # 按 .ferry-undo.json 一键无损还原
 
 # 2. 原 CLI 入口同样支持
@@ -356,6 +363,18 @@ py mc_ai_translator.py config --init   # 生成默认配置
 - 列宽可拖，排序不重置宽度，窗口大小位置会记住。
 
 ## 更新日志
+
+**v2.0.0-alpha.4（早期测试版）**
+
+- **古董功能机、塞班、Flash 与 Win3.1/95 邪典引擎全接入（冲至 28 类适配器）**：
+  - **Java ME / J2ME ("jvav" `.jar / .jad`)**：自动识别 `MIDlet-` 清单，纯标准库解析并**任意长度重建 `.class` (`0xCAFEBABE`) 的 `CONSTANT_Utf8` 常量池**，产出 `.cn.jar` 并自动同步修正 `.cn.jad` 的 `MIDlet-Jar-Size`。
+  - **塞班 Symbian OS (`symbian`)**：支持 S60v1/v2/v3/v5 / UIQ / N-Gage 的 `.sis / .sisx`、`.rsc / .r01..r99` 编译资源文件以及 EPOC `E32Image` (`.app`) 可执行程序。
+  - **Adobe / Macromedia Flash (`flash`)**：支持 `FWS`、`CWS` (zlib) `.swf` 以及尾部带 `0xFA123456` 封尾的 Flash Projector `.exe`，直接重建 AS1/AS2 `ActionConstantPool` (`0x88`) 与 AS3 AVM2 `DoABC` 字符串常量池，支持任意长度 UTF-8 中文。
+  - **Win3.1 / Win95 / Win98 早期多媒体与老 AVG (`retro_win`)**：原生支持 **Macromedia Director (`RIFX`/`XFIR` `.dir/.dxr/.cst` `STXT` 演员文本块 —— Win3.1《东脑》《中天》同款引擎)**、**Windows 3.1 16 位 `NE` 程序**与 **AliceSoft System 1/2/3/3.5 (`*.ald` 扇区归档)**。
+- **新增「① 提取文本（自翻导出）→ ② 自翻回录重打包」闭环（0 Token）**：
+  - 界面与 CLI (`ferrygame extract` / `ferrygame repack`) 新增一键导出带 UTF-8 BOM 的 **`ferry_tl.tsv`**（Windows Excel 双击不乱码）与 **`ferry_tl.json`**；
+  - 支持在 Excel / 记事本 / ParaTranz / 网页大模型自翻后，一键从 `.tsv / .csv / .json` 回录译文并自动重打包回 `.cn.jar / .cn.apk / .cn.ipa / .cn.iso / .cn.cso / .cn.nds / .cn.swf / .cn.hdi / .dir` 等原格式！
+- 全仓自动化回归测试扩充至 **305 项全绿**。
 
 **v2.0.0-alpha.3（早期测试版）**
 
@@ -445,7 +464,7 @@ py mc_ai_translator.py config --init   # 生成默认配置
 ## 开发 / 测试
 
 - Python 3.11+，只用标准库（`tomllib`、`plistlib`、`zlib`、`struct`、tkinter 等），**无第三方依赖**。
-- 跑全量测试（当前 **300 项全绿**）：
+- 跑全量测试（当前 **305 项全绿**）：
 
 ```powershell
 py -3 -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize test_fontcheck test_deps test_gamemaker test_hsp test_rpa_renpy test_rpgmaker_ace test_localized_resume test_ferrygame

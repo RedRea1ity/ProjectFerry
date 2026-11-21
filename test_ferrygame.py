@@ -1495,5 +1495,277 @@ class GlobalAndExtendedEngineTests(unittest.TestCase):
             self.assertFalse(ap_nds.out_path.exists())
 
 
+def _build_minimal_java_class(strings: list[str]) -> bytes:
+    """构造一个含 CONSTANT_Utf8 (Tag 1) 与 CONSTANT_String (Tag 8) 的最小合法 Java .class (0xCAFEBABE)。"""
+    # 每个字符串占 2 个槽位：#i = CONSTANT_Utf8, #(i+1) = CONSTANT_String(#i)
+    cp_count = 1 + len(strings) * 2
+    cp = bytearray()
+    cur_idx = 1
+    for s in strings:
+        raw = s.encode("utf-8")
+        cp.append(1)  # CONSTANT_Utf8
+        cp.extend(struct.pack(">H", len(raw)))
+        cp.extend(raw)
+        cp.append(8)  # CONSTANT_String -> points to cur_idx
+        cp.extend(struct.pack(">H", cur_idx))
+        cur_idx += 2
+    # 末尾附上 16 字节伪 access_flags / this_class / super_class / counts 尾部字节码
+    tail = b"\x00\x21\x00\x01\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"
+    return struct.pack(">IHH", 0xCAFEBABE, 0, 46) + struct.pack(">H", cp_count) + bytes(cp) + tail
+
+
+def _build_minimal_cws_swf_as2(strings: list[str]) -> bytes:
+    """构造一个带 AS2 DoAction (Tag 12) + ActionConstantPool (0x88) 的 CWS (zlib) Flash .swf。"""
+    import zlib
+    from ferrycore.adapters.flash import _encode_swf_tag
+
+    pool_body = bytearray(struct.pack("<H", len(strings)))
+    for s in strings:
+        pool_body.extend(s.encode("utf-8") + b"\x00")
+    action_record = b"\x88" + struct.pack("<H", len(pool_body)) + bytes(pool_body) + b"\x00"
+    do_action_tag = _encode_swf_tag(12, action_record)
+    end_tag = struct.pack("<H", 0)
+    # 最小 RECT (nbits=0 -> 1 byte 0x00) + frame_rate(2B) + frame_count(2B)
+    body = b"\x00" + struct.pack("<HH", 24 << 8, 1) + do_action_tag + end_tag
+    total_len = 8 + len(body)
+    return b"CWS\x08" + struct.pack("<I", total_len) + zlib.compress(body)
+
+
+def _build_minimal_director_dir(stxt_text: str) -> bytes:
+    """构造一个模拟 Win3.1《东脑》《中天》Macromedia Director 4 的 RIFX/MV93 .dir 容器（含 STXT 演员文本块）。"""
+    raw_str = stxt_text.encode("cp932")
+    stxt_body = struct.pack(">III", 12, len(raw_str), 0) + raw_str
+    stxt_chunk = b"STXT" + struct.pack(">I", len(stxt_body)) + stxt_body
+    rifx_body = b"MV93" + stxt_chunk
+    return b"RIFX" + struct.pack(">I", len(rifx_body)) + rifx_body
+
+
+class RetroMobileFlashAndSelfTranslateTests(unittest.TestCase):
+    def test_j2me_jar_class_constant_pool_rebuild_and_jad_size_sync(self):
+        import zipfile
+        from ferrycore.adapters import detect
+        from ferrycore.adapters.j2me import extract_class_utf8_strings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jar_path = root / "BounceTales.jar"
+            jad_path = root / "BounceTales.jad"
+            cls_blob = _build_minimal_java_class([
+                "(Ljavax/microedition/lcdui/Graphics;)V",
+                "Welcome to the Ancient Temple!",
+                "New Game",
+            ])
+            with zipfile.ZipFile(jar_path, "w") as zf:
+                zf.writestr(
+                    "META-INF/MANIFEST.MF",
+                    "Manifest-Version: 1.0\nMIDlet-Name: AncientTemple\nMIDlet-1: Temple,/icon.png,GameMIDlet\nMicroEdition-Profile: MIDP-2.0\n",
+                )
+                zf.writestr("GameMIDlet.class", cls_blob)
+            jad_path.write_text(
+                f"MIDlet-Name: AncientTemple\nMIDlet-Jar-URL: BounceTales.jar\nMIDlet-Jar-Size: {jar_path.stat().st_size}\n",
+                encoding="utf-8",
+            )
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "j2me")
+            entries = adapter.collect(root)
+            texts = [e.english for e in entries]
+            self.assertIn("Welcome to the Ancient Temple!", texts)
+            self.assertIn("New Game", texts)
+            self.assertNotIn("(Ljavax/microedition/lcdui/Graphics;)V", texts)
+
+            # 测试任意长度的 UTF-8 中文译文重建 .class 常量池
+            long_zh = "欢迎来到远古神庙！这是一段比原英文长很多的中文测试，验证常量池无损变长重建。"
+            ap = adapter.apply(
+                root,
+                {
+                    "Welcome to the Ancient Temple!": long_zh,
+                    "New Game": "开始新游戏",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            self.assertTrue(ap.out_path.name.endswith(".cn.jar"))
+
+            with zipfile.ZipFile(ap.out_path, "r") as zout:
+                patched_cls = zout.read("GameMIDlet.class")
+                extracted_after = dict(extract_class_utf8_strings(patched_cls))
+                self.assertIn(long_zh, extracted_after.values())
+                self.assertIn("开始新游戏", extracted_after.values())
+
+            # .cn.jad 必须同步生成且 MIDlet-Jar-Size 与新 .cn.jar 完全一致
+            out_jad = ap.out_path.with_suffix(".jad")
+            self.assertTrue(out_jad.is_file())
+            self.assertIn(f"MIDlet-Jar-Size: {ap.out_path.stat().st_size}", out_jad.read_text(encoding="utf-8"))
+
+            self.assertTrue(revert_game(root).ok)
+            self.assertFalse(ap.out_path.exists())
+            self.assertFalse(out_jad.exists())
+
+    def test_symbian_s60_unpacked_rsc_and_e32image_app(self):
+        from ferrycore.adapters import detect
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_dir = root / "system" / "apps" / "SkyForce"
+            app_dir.mkdir(parents=True)
+            # 模拟塞班 E32Image .app（偏移 16 处带 EPOC 签名 + UTF-16LE _LIT16 台词）与 .r01 资源
+            e32_blob = (
+                b"\x00" * 16
+                + b"EPOC"
+                + b"\x00" * 12
+                + "Destroy all enemy radar stations before dawn!".encode("utf-16-le")
+                + b"\x00\x00TAIL"
+            )
+            rsc_blob = (
+                b"RSC_HDR\x00"
+                + b"New Game\x00"
+                + b"Exit Game\x00"
+            )
+            (app_dir / "SkyForce.app").write_bytes(e32_blob)
+            (app_dir / "SkyForce.r01").write_bytes(rsc_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "symbian")
+            texts = [e.english for e in adapter.collect(root)]
+            self.assertIn("Destroy all enemy radar stations before dawn!", texts)
+            self.assertIn("New Game", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "Destroy all enemy radar stations before dawn!": "在黎明前摧毁所有敌方雷达站！",
+                    "New Game": "开始",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            self.assertIn(
+                "在黎明前摧毁所有敌方雷达站！".encode("utf-16-le"),
+                (app_dir / "SkyForce.app").read_bytes(),
+            )
+            self.assertTrue(revert_game(root).ok)
+            self.assertEqual((app_dir / "SkyForce.app").read_bytes(), e32_blob)
+
+    def test_flash_cws_swf_and_projector_exe_roundtrip(self):
+        from ferrycore.adapters import detect
+        from ferrycore.adapters.flash import FLASH_PROJECTOR_FOOTER_MAGIC, extract_swf_strings
+
+        swf_blob = _build_minimal_cws_swf_as2([
+            "_root",
+            "「剣を抜け、最後の戦いが始まる！」",
+            "Start Game",
+        ])
+        projector_exe = (
+            b"MZ" + (b"\x00" * 126) + swf_blob + struct.pack("<II", FLASH_PROJECTOR_FOOTER_MAGIC, len(swf_blob))
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe_path = root / "flash_rpg.exe"
+            exe_path.write_bytes(projector_exe)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "flash")
+            texts = [e.english for e in adapter.collect(root)]
+            self.assertIn("「剣を抜け、最後の戦いが始まる！」", texts)
+            self.assertIn("Start Game", texts)
+            self.assertNotIn("_root", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "「剣を抜け、最後の戦いが始まる！」": "「拔剑吧，最后的决战已经打响了！（支持任意长度 UTF-8 扩展）」",
+                    "Start Game": "开始游戏",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            self.assertTrue(ap.out_path.name.endswith(".cn.exe"))
+
+            out_bytes = ap.out_path.read_bytes()
+            magic, new_swf_size = struct.unpack_from("<II", out_bytes, len(out_bytes) - 8)
+            self.assertEqual(magic, FLASH_PROJECTOR_FOOTER_MAGIC)
+            embedded_swf = out_bytes[len(out_bytes) - 8 - new_swf_size : len(out_bytes) - 8]
+            after_strs = [t for _, t in extract_swf_strings(embedded_swf)]
+            self.assertIn("「拔剑吧，最后的决战已经打响了！（支持任意长度 UTF-8 扩展）」", after_strs)
+            self.assertIn("开始游戏", after_strs)
+
+            self.assertTrue(revert_game(root).ok)
+            self.assertFalse(ap.out_path.exists())
+
+    def test_retro_win31_director_tongnou_and_win16_ne(self):
+        from ferrycore.adapters import detect
+
+        # 模拟 Win3.1《东脑》《中天》的 Macromedia Director RIFX/MV93 .dir 文件
+        dir_blob = _build_minimal_director_dir("「東脳の迷宮へようこそ。あなたの魂を探しなさい。」")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dir_path = root / "TONGNOU.DIR"
+            dir_path.write_bytes(dir_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "retro_win")
+            probe = adapter.probe(root)
+            self.assertTrue(probe.readable)
+            self.assertIn("Macromedia Director", probe.engine)
+
+            entries = adapter.collect(root)
+            self.assertEqual([e.english for e in entries], ["「東脳の迷宮へようこそ。あなたの魂を探しなさい。」"])
+
+            ap = adapter.apply(
+                root,
+                {"「東脳の迷宮へようこそ。あなたの魂を探しなさい。」": "「欢迎来到东脑的迷宫。去寻找你失落的灵魂吧。」"},
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 1)
+            self.assertEqual(len(dir_path.read_bytes()), len(dir_blob))
+            self.assertIn("「欢迎来到东脑的迷宫。去寻找你失落的灵魂吧。」".encode("gbk"), dir_path.read_bytes())
+
+            self.assertTrue(revert_game(root).ok)
+            self.assertEqual(dir_path.read_bytes(), dir_blob)
+
+    def test_self_translation_tsv_extract_and_repack_workflow(self):
+        from ferrygame.cli import main as cli_main
+        from ferrygame.project import TSV_NAME
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dir_path = root / "CHUTENG.DIR"
+            orig_blob = _build_minimal_director_dir("「中天の星々があなたを呼んでいる……」")
+            dir_path.write_bytes(orig_blob)
+
+            # 第一步：运行 `ferrygame extract` 导出自翻译表（0 Token）
+            rc1 = cli_main(["extract", str(root)])
+            self.assertEqual(rc1, 0)
+            tsv_path = root / TSV_NAME
+            self.assertTrue(tsv_path.is_file())
+            # 确认带 UTF-8 BOM 供 Excel 直接打开
+            self.assertTrue(tsv_path.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+            # 第二步：玩家在 Excel / 记事本中编辑 ferry_tl.tsv 的 dst 列
+            lines = tsv_path.read_text(encoding="utf-8-sig").splitlines()
+            self.assertEqual(len(lines), 2)
+            cols = lines[1].split("\t")
+            cols[4] = "「中天的群星正在呼唤着你……」"
+            lines[1] = "\t".join(cols)
+            tsv_path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
+
+            # 第三步：运行 `ferrygame repack` 自动回录自翻译表并重打包写回游戏（0 Token）
+            rc2 = cli_main(["repack", str(root)])
+            self.assertEqual(rc2, 0)
+            self.assertIn("「中天的群星正在呼唤着你……」".encode("gbk"), dir_path.read_bytes())
+
+            # 第四步：一键撤销
+            rc3 = cli_main(["revert", str(root)])
+            self.assertEqual(rc3, 0)
+            self.assertEqual(dir_path.read_bytes(), orig_blob)
+
+
 if __name__ == "__main__":
     unittest.main()

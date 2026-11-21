@@ -427,32 +427,42 @@ def scan_utf16le_strings(blob: bytes, rel_path: str = "") -> list[Unit]:
         end = i
         if end + 1 < len(blob) and blob[end] == 0 and blob[end + 1] == 0 and 3 <= chars <= 1024:
             raw = blob[start:end]
+            # 若整段字节全是可打印 8-bit ASCII（如 "MV93STXT"），拼成 16-bit 会误落入 CJK 码区，绝不能当 UTF-16LE
+            if all(0x20 <= b <= 0x7E for b in raw):
+                i = max(start + 2, end + 2)
+                continue
             try:
                 text = raw.decode("utf-16-le")
             except UnicodeDecodeError:
                 text = ""
-            if text and (_is_valid_sjis_text(text) or _is_valid_en_or_global_text(text)):
-                order += 1
-                kind = "menu" if text.strip() in (EN_MENU_TERMS | JP_MENU_TERMS) else classify(text)
-                key = f"{rel_path}@0x{start:x}" if rel_path else f"0x{start:x}"
-                units.append(
-                    Unit(
-                        key=key,
-                        src=text,
-                        kind=kind,
-                        file=rel_path,
-                        order=order,
-                        max_bytes=len(raw),
-                        encoding="utf-16-le",
-                        meta={
-                            "offset": start,
-                            "length": len(raw),
-                            "src_encoding": "utf-16-le",
-                            "raw_hex": raw.hex(),
-                            "pad": "nul",
-                        },
+            if text:
+                zero_hi = sum(1 for k in range(1, len(raw), 2) if raw[k] == 0)
+                if zero_hi / max(1, chars) >= 0.85:
+                    is_valid = _is_valid_en_or_global_text(text)
+                else:
+                    is_valid = _is_valid_sjis_text(text)
+                if is_valid:
+                    order += 1
+                    kind = "menu" if text.strip() in (EN_MENU_TERMS | JP_MENU_TERMS) else classify(text)
+                    key = f"{rel_path}@0x{start:x}" if rel_path else f"0x{start:x}"
+                    units.append(
+                        Unit(
+                            key=key,
+                            src=text,
+                            kind=kind,
+                            file=rel_path,
+                            order=order,
+                            max_bytes=len(raw),
+                            encoding="utf-16-le",
+                            meta={
+                                "offset": start,
+                                "length": len(raw),
+                                "src_encoding": "utf-16-le",
+                                "raw_hex": raw.hex(),
+                                "pad": "nul",
+                            },
+                        )
                     )
-                )
         i = max(start + 2, end + 2)
     return units
 

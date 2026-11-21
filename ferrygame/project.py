@@ -19,7 +19,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +32,7 @@ from ferrycore.base import app_dir, atomic_write_text
 from .units import Unit
 
 TL_NAME = "ferry_tl.json"
+TSV_NAME = "ferry_tl.tsv"
 FORMAT = "ferry-game-tl"
 VERSION = 1
 
@@ -98,6 +101,10 @@ class Project:
             target = fallback_path(self.root)
             atomic_write_text(target, text)
         self.path = target
+        try:
+            export_tsv(self, target.with_name(TSV_NAME))
+        except OSError:
+            pass
         return target
 
 
@@ -141,7 +148,168 @@ def load(root: Path) -> Project | None:
         notes=[str(n) for n in data.get("notes") or []],
         path=path,
     )
+    tsv_sibling = path.with_name(TSV_NAME)
+    if tsv_sibling.is_file():
+        try:
+            import_external_translations(project, tsv_sibling, save=False)
+        except Exception:
+            pass
     return project
+
+
+def _esc_cell(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n").replace("\t", "\\t")
+
+
+def _unesc_cell(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "\\" and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if nxt == "t":
+                out.append("\t")
+                i += 2
+                continue
+            if nxt == "\\":
+                out.append("\\")
+                i += 2
+                continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def export_tsv(project: Project, path: Path | None = None) -> Path:
+    """将项目的待翻/已翻条目导出为 Excel / 记事本 / ParaTranz 友好的 UTF-8-BOM `.tsv` 双语表。"""
+    base_json = project.path or default_path(project.root)
+    target = Path(path) if path is not None else base_json.with_name(TSV_NAME)
+    lines = ["key\tkind\tmax_bytes\tsrc\tdst\tnote"]
+    for u in project.units:
+        if not u.translatable:
+            continue
+        mb = str(u.max_bytes) if u.max_bytes else ""
+        lines.append(
+            f"{_esc_cell(u.key)}\t{u.kind}\t{mb}\t{_esc_cell(u.src)}\t{_esc_cell(u.dst)}\t{_esc_cell(u.note)}"
+        )
+    content = "\n".join(lines) + "\n"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 带 UTF-8 BOM (\xef\xbb\xbf)，Windows 下双击用 Excel 打开不会乱码
+    target.write_bytes(content.encode("utf-8-sig"))
+    return target
+
+
+def import_external_translations(
+    project: Project,
+    path: Path | None = None,
+    save: bool = True,
+) -> int:
+    """从外部自翻译文件（`.tsv` / `.csv` / `.json` / ParaTranz 词表）回录译文到 `Project`。
+
+    返回成功更新/回录的条数。
+    """
+    base_json = project.path or default_path(project.root)
+    src_file = Path(path) if path is not None else base_json.with_name(TSV_NAME)
+    if not src_file.is_file():
+        return 0
+
+    raw_text = src_file.read_text(encoding="utf-8-sig", errors="replace")
+    by_key: dict[str, str] = {}
+    by_src: dict[str, str] = {}
+
+    suf = src_file.suffix.lower()
+    if suf == ".json":
+        payload = json.loads(raw_text)
+        if isinstance(payload, dict):
+            if isinstance(payload.get("units"), list):
+                for item in payload["units"]:
+                    if isinstance(item, dict) and item.get("dst"):
+                        k = str(item.get("key") or "")
+                        s = str(item.get("src") or "")
+                        d = str(item.get("dst") or "")
+                        if k:
+                            by_key[k] = d
+                        if s:
+                            by_src[s] = d
+            else:
+                for k, v in payload.items():
+                    if isinstance(v, str) and v.strip():
+                        by_key[str(k)] = v
+                        by_src[str(k)] = v
+        elif isinstance(payload, list):
+            # 兼容 ParaTranz JSON: [{"key": "...", "original": "...", "translation": "..."}]
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                d = str(item.get("translation") or item.get("dst") or "").strip()
+                if not d:
+                    continue
+                k = str(item.get("key") or "")
+                s = str(item.get("original") or item.get("src") or "")
+                if k:
+                    by_key[k] = d
+                if s:
+                    by_src[s] = d
+    elif suf == ".csv":
+        rows = list(csv.reader(io.StringIO(raw_text)))
+        for idx, row in enumerate(rows):
+            if idx == 0 and row and row[0].strip().lower() in ("key", "id", "src", "original"):
+                continue
+            if len(row) >= 5:
+                k, s, d = row[0].strip(), row[3], row[4]
+                if d.strip():
+                    by_key[k] = d
+                    by_src[s] = d
+            elif len(row) >= 2:
+                s, d = row[0], row[1]
+                if d.strip():
+                    by_key[s] = d
+                    by_src[s] = d
+    else:
+        # 默认按 .tsv 解析
+        for idx, line in enumerate(raw_text.splitlines()):
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if idx == 0 and parts[0].strip().lower() in ("key", "id", "src"):
+                continue
+            if len(parts) >= 5:
+                k = _unesc_cell(parts[0])
+                s = _unesc_cell(parts[3])
+                d = _unesc_cell(parts[4])
+                if d.strip():
+                    by_key[k] = d
+                    by_src[s] = d
+            elif len(parts) >= 2:
+                s = _unesc_cell(parts[0])
+                d = _unesc_cell(parts[1])
+                if d.strip():
+                    by_key[s] = d
+                    by_src[s] = d
+
+    updated = 0
+    for unit in project.units:
+        if not unit.translatable:
+            continue
+        new_dst = by_key.get(unit.key)
+        if new_dst is None:
+            new_dst = by_src.get(unit.src)
+        if new_dst is not None and new_dst.strip():
+            if unit.dst != new_dst:
+                unit.dst = new_dst
+                unit.origin = "manual"
+                updated += 1
+            elif not unit.origin:
+                unit.origin = "manual"
+
+    if updated > 0 and save:
+        project.save()
+    return updated
 
 
 def merge(old: Project | None, fresh: Project) -> Project:
