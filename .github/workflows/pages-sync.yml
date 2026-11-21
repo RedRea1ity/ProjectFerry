@@ -39,12 +39,12 @@ jobs:
         run: |
           node snapshot.mjs
           node pack-y2k.mjs
-      - name: Publish only index.html and request the Pages build
+      - name: Publish the page and soundtrack and request the Pages build
         working-directory: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git add -- index.html
+          git add -- index.html media/weather-night.mp3 media/bonus-jiese.mp3
           if ! git diff --cached --quiet; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

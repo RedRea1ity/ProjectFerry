@@ -24,17 +24,18 @@
     if (dialog.open) return;
     lastTap = null;
     dialog.showModal();
+    dialog.dispatchEvent(new Event('bonusplay'));
     show(0);
   }
-  trigger.hidden = false;
-  trigger.addEventListener('dblclick', playBonus);
-  trigger.addEventListener('click', event => { if (event.detail === 0) playBonus(); });
-  trigger.addEventListener('pointerup', event => {
-    if (event.pointerType !== 'touch' || !event.isPrimary) return;
-    const {timeStamp: t, clientX: x, clientY: y} = event;
-    if (lastTap && t - lastTap.t < 450 && Math.hypot(x - lastTap.x, y - lastTap.y) < 28) playBonus();
-    else lastTap = {t, x, y};
+  trigger.disabled = false;
+  trigger.addEventListener('click', event => {
+    const tap = {time:event.timeStamp, x:event.clientX, y:event.clientY};
+    const nearby = lastTap && tap.time - lastTap.time <= 750 &&
+      Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) <= 32;
+    if (event.detail === 0 || event.detail === 2 || nearby) playBonus();
+    else lastTap = tap;
   });
+  trigger.addEventListener('dblclick', playBonus);
   trigger.addEventListener('pointercancel', () => { lastTap = null; });
   next.addEventListener('click', () => show((track + 1) % 3));
   dialog.addEventListener('close', () => { clearTimeout(timer); if (!dialog.open) trigger.focus({preventScroll:true}); });
