@@ -27,6 +27,17 @@ class GuiP0Tests(unittest.TestCase):
         except ImportError as exc:  # 没有 tkinter 是环境问题，跳过合理
             raise unittest.SkipTest(f"没有 tkinter：{exc}") from exc
         try:
+            tmp = tempfile.TemporaryDirectory()
+            cls.addClassCleanup(tmp.cleanup)
+            for target, attr, value in (
+                (cls.gui, "UI_STATE_FILE", Path(tmp.name) / "ui.json"),
+                (core, "load_config", lambda: dict(core.DEFAULT_CONFIG)),
+                (core, "load_localize_history", lambda: []),
+                (cls.gui.FerryApp, "refresh_instances", lambda self: None),
+                (cls.gui.FerryApp, "_security_check", lambda self: None),
+                (cls.gui.FerryApp, "_maybe_auto_update_check", lambda self: None),
+            ):
+                cls.enterClassContext(patch.object(target, attr, value))
             cls.window = cls.gui.FerryApp()
             cls.window.update_idletasks()
         except Exception as exc:
@@ -131,6 +142,79 @@ class GuiP0Tests(unittest.TestCase):
             self.assertEqual(calls, ["pack", "progress"])
             kinds = [item[0] for item in list(self.window.result_queue.queue)]
             self.assertIn("translated", kinds)
+
+    def test_dual_mode_workbench_switches_between_mc_and_game(self):
+        self.window._switch_mode("game", persist=False)
+        self.window.update_idletasks()
+        self.assertEqual(self.window._active_mode, "game")
+        self.assertIn("pc98", self.window._mode_hint_var.get())
+        self.assertIn("rawbin", self.window._mode_hint_var.get())
+        self.window._switch_mode("mc", persist=False)
+        self.window.update_idletasks()
+        self.assertEqual(self.window._active_mode, "mc")
+
+    def test_about_reflows_without_clipping_text(self):
+        self.window._show_about()
+        dialog = next(w for w in self.window.winfo_children()
+                      if isinstance(w, self.gui.tk.Toplevel) and w.title() == f"关于 {self.gui.APP_NAME}")
+        self.addCleanup(dialog.destroy)
+
+        def descendants(parent):
+            for child in parent.winfo_children():
+                yield child
+                yield from descendants(child)
+
+        labels = [w for w in descendants(dialog) if isinstance(w, self.gui.ttk.Label)]
+        sections = [w.master for w in labels if w.cget("text") in ("游戏汉化", "Minecraft 模组")]
+        self.assertEqual(len(sections), 2)
+        controls = [w for w in descendants(dialog) if isinstance(w, (self.gui.ttk.Button, self.gui.ttk.Scrollbar))]
+        for size, columns in (("820x620", [0, 1]), ("460x420", [0, 0]), ("360x300", [0, 0]),
+                              ("740x420", [0, 1]), ("820x620", [0, 1])):
+            with self.subTest(size=size):
+                dialog.geometry(size)
+                dialog.update()
+                self.assertEqual([int(s.grid_info()["column"]) for s in sections], columns)
+                for label in labels:
+                    self.assertGreaterEqual(label.winfo_width(), label.winfo_reqwidth(), label.cget("text"))
+                for control in controls:
+                    self.assertTrue(control.winfo_ismapped(), control)
+                    self.assertGreaterEqual(control.winfo_width(), control.winfo_reqwidth(), control)
+
+    def test_workbench_navigation_preserves_state_and_scopes_shortcuts(self):
+        app = self.window
+        app._mc_started = False
+        with patch.object(app, "refresh_instances") as discover, patch.object(app, "start_scan") as scan:
+            for key in ("home", "engine", "game", "home"):
+                app._switch_mode(key, persist=False)
+                app.update_idletasks()
+                self.assertEqual([k for k, page in app._pages.items() if page.winfo_ismapped()], [key])
+            app._on_rescan_key()
+            discover.assert_not_called()
+            scan.assert_not_called()
+            app._switch_mode("mc", persist=False)
+            app._switch_mode("game", persist=False)
+            with patch.object(app, "_loc_start_probe") as probe:
+                app._on_rescan_key()
+                probe.assert_called_once()
+            app._switch_mode("mc", persist=False)
+            discover.assert_called_once()
+            app._on_rescan_key()
+            scan.assert_called_once()
+        app._switch_mode("engine")
+        self.assertEqual(app._load_ui_state()["workbench_page"], "engine")
+        self.assertEqual(app.api_key_entry.cget("show"), "•")
+
+    def test_home_opens_selected_record_not_first_record(self):
+        from ferrycore.localized import LocalizedRecord
+        app = self.window
+        records = [LocalizedRecord("a", "a.cn", "copy"), LocalizedRecord("b", "b.cn", "copy")]
+        with patch.object(core, "load_localize_history", return_value=records):
+            app._switch_mode("home", persist=False)
+        index = app._home_page
+        index.table.selection_set(index.table.get_children()[1])
+        with patch.object(index, "open_output") as opened:
+            index._open()
+            opened.assert_called_once_with(Path("b.cn"))
 
 
 if __name__ == "__main__":

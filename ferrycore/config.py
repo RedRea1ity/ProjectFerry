@@ -80,6 +80,8 @@ DEFAULT_CONFIG = {
     # 导出桥映射时顺带检查 LiteralBridge 有没有新版，有就下下来替换旧版。
     # 只影响「已经装了 LiteralBridge」的实例（没装的走首次安装那条线）。
     "auto_update_literalbridge": True,
+    # 非 MC「汉化其他游戏」副本输出目录。空 = 游戏旁边生成 <游戏名>.cn
+    "localize_output_dir": "",
 }
 
 

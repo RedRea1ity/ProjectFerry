@@ -11,6 +11,9 @@ ferry_progress.json
 ferry_locks.json
 ferry_ui.json
 ferry_whitelist.json
+ferry_localize_history.json
+localize_jobs/
+game_projects/
 user_glossary.json
 *.pre-lang-backup
 *.uninstalled.json
@@ -91,6 +94,13 @@ PROMPT_*.md
 .acl-recovery/
 .dsh-meow/
 .obsidian-mem
+.planning/
+artifacts/
+_probe_*/
+tools/_probe_*.py
+tools/delphi_dfm.py
+tools/extract_delphi_rcdata.ps1
+tools/patch_delphi_text.ps1
 
 # HSP 代理 DLL：由 docs/research/hsp/build.sh 从同名 .c 编译出来的产物，不入库。
 # 理由同 ProjectFerry.exe —— 二进制进仓库既无意义又会跟源码不同步。

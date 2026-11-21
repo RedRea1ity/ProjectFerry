@@ -57,6 +57,9 @@ class ProbeReport:
     # 适配器自己最清楚要什么：HSP 要编译器编 DLL 代理，别的引擎可能什么都不需要。
     # 声明在这里而不是全局扫，是为了「只在真需要时打扰用户」。
     needs: list[str] = field(default_factory=list)
+    # True = 回写改原目录（Ren'Py / HSP 等）；False = 产出旁路副本。
+    # GUI 用它决定文案：「打开游戏目录」还是「打开产出文件夹」。
+    in_place: bool = False
     notes: list[str] = field(default_factory=list)
 
     @property

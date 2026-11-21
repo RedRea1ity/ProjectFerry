@@ -26,17 +26,23 @@ from .hints import scan_hints
 from .hsp import HspAdapter
 from .renpy import RenpyAdapter
 from .rpgmaker import RpgMakerAdapter
+from .rpgmaker_ace import RpgMakerAceAdapter
 from .tyrano import TyranoAdapter
 from .undo import UNDO_NAME, RevertReport, UndoLog
 from .undo import revert as revert_game
+from ferrygame.pc98 import PC98Adapter
+from ferrygame.rawbin import RawBinaryAdapter
 
 # 数字小的先探测。认领越具体的排越前，通用兜底排最后。
 REGISTRY: list[type[Adapter]] = [
+    PC98Adapter,
     TyranoAdapter,
     RenpyAdapter,
+    RpgMakerAceAdapter,  # rgss3a / rvdata2，必须在 MV/MZ 明文适配器之前
     RpgMakerAdapter,
     GameMakerAdapter,
     HspAdapter,
+    RawBinaryAdapter,
 ]
 
 
@@ -80,9 +86,12 @@ __all__ = [
     "FolderGame",
     "GameMakerAdapter",
     "HspAdapter",
+    "PC98Adapter",
     "ProbeReport",
+    "RawBinaryAdapter",
     "RenpyAdapter",
     "RevertReport",
+    "RpgMakerAceAdapter",
     "RpgMakerAdapter",
     "TyranoAdapter",
     "UNDO_NAME",

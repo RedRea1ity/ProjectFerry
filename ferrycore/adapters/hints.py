@@ -37,6 +37,7 @@ _MARKERS: list[tuple[str, tuple[str, ...]]] = [
     ("HSP（Hot Soup Processor）", ("hsp3imp.dll", "hsp3.exe", "*.ax", "*.dpm")),
     ("Flash / AIR", ("*.swf", "adobe air", "*.swc")),
     ("Galgame 老引擎（SystemNNN / CatSystem）", ("*.pac", "cs2.exe", "system40.exe")),
+    ("PC-98 磁盘镜像", ("*.hdi", "*.fdi", "*.nhd")),
 ]
 
 # 这些目录名下面通常住着剧本或文本表。

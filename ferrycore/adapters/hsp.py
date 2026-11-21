@@ -136,6 +136,7 @@ class HspAdapter(Adapter):
             text_format=".csv",
             # HSP 的显示层要放 DLL，但 DLL 是内嵌的，不需要用户装任何东西
             needs=[],
+            in_place=True,
         )
 
         # 代理能不能挂上，是「写不写回」的前提 —— 挂不上就等于中文一定乱码

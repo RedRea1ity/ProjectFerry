@@ -107,6 +107,7 @@ class RpgMakerAdapter(Adapter):
             container="folder",
             text_format=".json",
             unicode_engine=True,
+            in_place=True,
         )
         files = self._files(root)
         maps = sum(1 for p in files if _MAP_FILE.match(p.name))

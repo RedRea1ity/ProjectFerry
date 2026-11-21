@@ -535,7 +535,9 @@ define e = Character("Eileen")
 label start:
     scene bg room
     play music "piano.ogg"
+    $ player_name = renpy.input("What is your name?", length=12)
     "雨が降っている。"
+    "\\[ A long thought about rain. \\]"
     e "こんにちは、[player_name]さん。"
     e happy "今日はいい天気だね。{b}本当に{/b}"
     $ gold = 100
@@ -574,7 +576,7 @@ label chapter2:
             report = adapters.RenpyAdapter().probe(root)
             self.assertTrue(report.readable)
             self.assertTrue(report.writable)
-            self.assertEqual(report.unit_count, 6)
+            self.assertEqual(report.unit_count, 8)
             self.assertEqual(report.container, "folder")
 
     def test_collect_skips_code_and_resource_names(self):
@@ -584,11 +586,13 @@ label chapter2:
             texts = [e.english for e in entries]
             self.assertIn("雨が降っている。", texts)
             self.assertIn("はい", texts)
+            self.assertIn("What is your name?", texts)
+            self.assertIn(r"\[ A long thought about rain. \]", texts)
             # 这些是文件名/变量/注释，翻了就崩
             for banned in ("piano.ogg", "voice/001.ogg", "chapter2", "Eileen", "gold"):
                 self.assertNotIn(banned, texts)
             kinds = {e.kind for e in entries}
-            self.assertEqual(kinds, {"say", "menu"})
+            self.assertEqual(kinds, {"say", "menu", "input"})
 
     def test_apply_keeps_indent_and_speaker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -596,16 +600,20 @@ label chapter2:
             adapter = adapters.RenpyAdapter()
             entries = adapter.collect(root)
             translations = self.translations(entries, {
+                "What is your name?": "你叫什么名字？",
                 "雨が降っている。": "下着雨。",
+                r"\[ A long thought about rain. \]": r"\[ 关于雨的长段旁白。 \]",
                 "こんにちは、[player_name]さん。": "你好，[player_name]。",
                 "はい": "是",
             })
             applied = adapter.apply(root, translations)
-            self.assertEqual(applied.applied, 6)
+            self.assertEqual(applied.applied, 8)
             self.assertTrue(applied.in_place)
 
             text = (root / "game" / "script.rpy").read_text(encoding="utf-8")
+            self.assertIn('renpy.input("你叫什么名字？"', text)
             self.assertIn('    "下着雨。"', text)
+            self.assertIn(r'"\[ 关于雨的长段旁白。 \]"', text)
             self.assertIn('    e "你好，[player_name]。"', text)
             self.assertIn('        "是":', text)
             # 代码行原样不动
@@ -613,6 +621,27 @@ label chapter2:
             self.assertIn("$ gold = 100", text)
             # 缓存必须删，否则 Ren'Py 继续用旧文本且不报错
             self.assertFalse((root / "game" / "script.rpyc").exists())
+
+    def test_thought_brackets_are_not_false_variable_tags(self):
+        from ferrycore.adapters.renpy import check_tags
+
+        source = r"\[ It’s finally going to happen. \]"
+        good = r"\[ 终于要发生了。 \]"
+        self.assertEqual(check_tags(source, good), "")
+        # 真变量仍要保留
+        self.assertIn("格式标签", check_tags("Hi [player_name]!", "你好！"))
+
+    def test_skips_already_chinese_on_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make(Path(tmp))
+            script = root / "game" / "script.rpy"
+            script.write_text(
+                'label start:\n    "你好，世界。"\n    "Still English left here."\n',
+                encoding="utf-8",
+            )
+            texts = [e.english for e in adapters.RenpyAdapter().collect(root)]
+            self.assertNotIn("你好，世界。", texts)
+            self.assertIn("Still English left here.", texts)
 
     def test_revert_restores_original_script(self):
         with tempfile.TemporaryDirectory() as tmp:

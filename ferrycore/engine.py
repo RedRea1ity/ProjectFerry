@@ -113,7 +113,8 @@ def _translate_mymemory(masked: dict[str, str], settings: dict[str, Any], cancel
         if len(text) > 450:
             print(f"  [跳过] MyMemory 文本超长: {key} ({len(text)} 字符)", file=sys.stderr)
             continue
-        params = urllib.parse.urlencode({"q": text, "langpair": "en|zh-CN"})
+        source = str(settings.get("source_lang") or "en").lower()
+        params = urllib.parse.urlencode({"q": text, "langpair": f"{source}|zh-CN"})
         if email:
             params += "&" + urllib.parse.urlencode({"de": email})
         url = f"https://api.mymemory.translated.net/get?{params}"
@@ -138,7 +139,7 @@ def _translate_deepl(masked: dict[str, str], settings: dict[str, Any]) -> dict[s
     keys = list(masked.keys())
     texts = list(masked.values())
     form = urllib.parse.urlencode(
-        [("text", t) for t in texts] + [("source_lang", "EN"), ("target_lang", "ZH")]
+        [("text", t) for t in texts] + [("source_lang", str(settings.get("source_lang") or "en").upper()), ("target_lang", "ZH")]
     ).encode("utf-8")
     url = settings["base_url"].rstrip("/") + "/translate"
     request = urllib.request.Request(url, data=form, headers={"Authorization": f"DeepL-Auth-Key {settings['api_key']}"}, method="POST")

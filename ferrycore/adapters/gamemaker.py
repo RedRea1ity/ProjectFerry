@@ -482,6 +482,7 @@ class GameMakerAdapter(Adapter):
                 container="CSV 语言表",
                 text_format=".csv",
                 unicode_engine=True,
+                in_place=True,
                 notes=notes,
             )
 
@@ -521,6 +522,7 @@ class GameMakerAdapter(Adapter):
                 container="data.win",
                 text_format="STRG",
                 unicode_engine=True,  # GM 内部是 UTF-8，不存在字库编码问题
+                in_place=True,
                 notes=notes,
             )
 

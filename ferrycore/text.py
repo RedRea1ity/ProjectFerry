@@ -247,12 +247,20 @@ def cache_key(entries: list[Entry], engine: str, model: str, glossary: dict[str,
 
 
 def _model_input(masked: dict[str, str], settings: dict[str, Any]) -> str:
+    # 通用游戏线（ferrygame）自带输入格式（上下文、字节预算），由它自己拼。
+    builder = settings.get("model_input_builder")
+    if callable(builder):
+        return builder(masked, settings)
     if settings.get("refine_community"):
         return json.dumps({"strings": masked, "references": settings.get("reference_examples", [])}, ensure_ascii=False)
     return json.dumps(masked, ensure_ascii=False)
 
 
 def _system_prompt(settings: dict[str, Any]) -> str:
+    # 通用游戏线不要 MC 的提示词；给了覆盖就整段替换。
+    override = settings.get("system_prompt_override")
+    if override:
+        return str(override)
     prompt = SYSTEM_PROMPT + ("\n" + REFINE_PROMPT if settings.get("refine_community") else "")
     hints = settings.get("term_hints") or {}
     if hints:

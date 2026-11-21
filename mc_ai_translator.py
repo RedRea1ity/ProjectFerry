@@ -44,7 +44,9 @@ from ferrycore.glossary import BUILTIN_GLOSSARY, BUILTIN_KEEP, DEFAULT_GLOSSARY_
 from ferrycore.hardcoded import _COMMAND_VERB_RE, _HARDCODED_CMD_KEYWORDS, _HARDCODED_KEYWORD_MAX_LEN, _HARDCODED_LOG_KEYWORDS, _HARDCODED_TECH_ANY, _HARDCODED_TECH_START, _SELECTOR_RE, _class_utf8_constants, _looks_like_command, _looks_like_ui_text, detect_hardcoded_mods, detect_hardcoded_texts, extract_class_strings, hardcoded_modids, hardcoded_pairs_from_entries, hardcoded_strings_by_modid, hardcoded_translations_path, has_pending_hardcoded, load_hardcoded_translations, looks_like_hardcoded_text, missing_hardcoded_entries, pending_hardcoded_modids, save_hardcoded_translations
 from ferrycore.json_components import apply_text_nodes, component_entries, extract_text_nodes, translated_components
 from ferrycore.literalbridge import LITERALBRIDGE_RELEASES_API, LITERALBRIDGE_REPO, _LB_RELEASE_CACHE, _LB_RELEASE_TTL, _jar_loaders, _literalbridge_jar_matches, _mc_version_triple, _retire_old_literalbridge, detect_mod_loader, download_literalbridge, installed_literalbridge, literalbridge_releases, mc_range_allows, pick_literalbridge_asset, read_mod_jar_info
-from ferrycore.localize import LocalizeResult, localize_game, localize_settings
+from ferrycore.localize import LocalizeResult, existing_localize_lines, localize_game, localize_settings
+from ferrycore.localize_job import LocalizeJob, load_job as load_localize_job
+from ferrycore.localized import LocalizedRecord, describe as describe_localized, find_localized, load_history as load_localize_history
 from ferrycore.models import Entry, LangFile, ModTranslationStatus, PatchouliFile, ScanResult, mod_status_label, translation_coverage_label
 from ferrycore.net import _fetch_json, _http_error_detail, _http_get_json, _http_post_json
 from ferrycore.online import check_online_translation, query_online_translations
