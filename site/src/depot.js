@@ -1,4 +1,13 @@
 // The cover is an enhancement: reading and downloading never wait for motion.
+(() => {
+  const dialog=document.querySelector('#art-view');if(!dialog||!dialog.showModal)return;
+  const enlarged=dialog.querySelector('img');let opener;
+  for(const button of document.querySelectorAll('[data-zoom]')){button.hidden=false;button.addEventListener('click',()=>{
+    const figure=button.closest('figure'),img=figure.querySelector('img');opener=button;
+    document.querySelector('#art-caption').textContent=figure.querySelector('figcaption span').textContent;
+    enlarged.src=img.currentSrc||img.src;enlarged.alt=img.alt;dialog.showModal();
+  })}dialog.addEventListener('close',()=>{enlarged.removeAttribute('src');opener?.focus()});
+})();
 const cover=document.querySelector('.cover'), replay=document.querySelector('#replay');
 const motion=matchMedia('(prefers-reduced-motion: reduce)');
 const trades=[['.issue','校对','#8f3760'],['.latin','排字','#126475'],['.motto','入库','#655183']];
