@@ -352,5 +352,770 @@ class PC98AdapterTests(unittest.TestCase):
         self.assertEqual(align_pc98_words("Q热"), "Ｑ热")
 
 
+def _build_minimal_asar(files: dict[str, bytes]) -> bytes:
+    """构造一个符合 Chromium Pickle 规范的最小 Electron .asar 归档。"""
+    tree: dict = {"files": {}}
+    data_chunks: list[bytes] = []
+    offset = 0
+    for rel_path, raw in files.items():
+        parts = [p for p in rel_path.split("/") if p]
+        node = tree
+        for d in parts[:-1]:
+            node = node["files"].setdefault(d, {"files": {}})
+        node["files"][parts[-1]] = {"offset": str(offset), "size": len(raw)}
+        data_chunks.append(raw)
+        offset += len(raw)
+
+    json_bytes = json.dumps(tree, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    str_len = len(json_bytes)
+    padded_str = json_bytes + (b"\x00" * ((4 - (str_len % 4)) % 4))
+    inner_payload_size = 4 + len(padded_str)
+    header_total_size = 8 + len(padded_str)
+    header = struct.pack("<IIII", 4, header_total_size, inner_payload_size, str_len) + padded_str
+    return header + b"".join(data_chunks)
+
+
+def _encode_ber(value: int) -> bytes:
+    if value == 0:
+        return b"\x00"
+    out = bytearray()
+    out.append(value & 0x7F)
+    value >>= 7
+    while value > 0:
+        out.append((value & 0x7F) | 0x80)
+        value >>= 7
+    out.reverse()
+    return bytes(out)
+
+
+def _build_minimal_gdpc_v2(files: dict[str, bytes]) -> bytes:
+    """构造一个最小 Godot 4.x GDPC v2 .pck 归档。"""
+    import hashlib
+
+    header_pad = b"\x00" * (16 * 4)
+    entries_meta: list[tuple[bytes, int, int, bytes]] = []
+    data_blobs: list[bytes] = []
+    cur_rel_off = 0
+    for path_str, raw in files.items():
+        p_bytes = path_str.encode("utf-8")
+        pad = (4 - (len(p_bytes) % 4)) % 4
+        p_bytes += b"\x00" * pad
+        md5 = hashlib.md5(raw).digest()
+        entries_meta.append((p_bytes, cur_rel_off, len(raw), md5))
+        data_blobs.append(raw)
+        cur_rel_off += len(raw)
+
+    index_buf = bytearray()
+    index_buf.extend(struct.pack("<I", len(entries_meta)))
+    for p_bytes, rel_off, size, md5 in entries_meta:
+        index_buf.extend(struct.pack("<I", len(p_bytes)))
+        index_buf.extend(p_bytes)
+        index_buf.extend(struct.pack("<QQ", rel_off, size))
+        index_buf.extend(md5)
+        index_buf.extend(struct.pack("<I", 0))
+
+    header_len = 4 + 4 + 12 + 4 + 8 + 64
+    file_base = (header_len + len(index_buf) + 7) & ~7
+    pad_before_data = file_base - (header_len + len(index_buf))
+    # pack_flags = 2 (PACK_REL_FILEBASE)
+    head = (
+        b"GDPC"
+        + struct.pack("<IIIIIQ", 2, 4, 2, 0, 2, file_base)
+        + header_pad
+    )
+    return head + bytes(index_buf) + (b"\x00" * pad_before_data) + b"".join(data_blobs)
+
+
+def _build_minimal_dotnet_dll(user_strings: list[str]) -> bytes:
+    """构造一个含 ECMA-335 BSJB 元数据头与 #US UTF-16LE 字符串流的最小伪 DLL。"""
+    us_stream = bytearray(b"\x00")
+    for s in user_strings:
+        raw = s.encode("utf-16le") + b"\x01"
+        length = len(raw)
+        if length < 0x80:
+            us_stream.append(length)
+        else:
+            us_stream.extend([0x80 | (length >> 8), length & 0xFF])
+        us_stream.extend(raw)
+    while len(us_stream) % 4 != 0:
+        us_stream.append(0)
+
+    version = b"v4.0.30319\x00\x00"  # 12 bytes (4B aligned)
+    stream_name = b"#US\x00"  # 4 bytes
+    header_size = 16 + len(version) + 4 + (8 + len(stream_name))
+    bsjb = (
+        b"BSJB"
+        + struct.pack("<HHII", 1, 1, 0, len(version))
+        + version
+        + struct.pack("<HH", 0, 1)
+        + struct.pack("<II", header_size, len(us_stream))
+        + stream_name
+        + bytes(us_stream)
+    )
+    return b"MZ" + (b"\x00" * 126) + bsjb
+
+
+class MainstreamEngineAdapterTests(unittest.TestCase):
+    def test_asar_container_roundtrip_with_tyrano(self):
+        from ferrycore.adapters import detect, parse_asar, rebuild_asar
+
+        ks_content = "[tb_start_text]\n「先輩、今日も一緒に帰りましょう！」[p]\n[_tb_end_text]\n".encode("utf-8")
+        asar_blob = _build_minimal_asar({"data/scenario/first.ks": ks_content})
+        _tree, _base, entries = parse_asar(asar_blob)
+        self.assertIn("data/scenario/first.ks", entries)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            res_dir = root / "resources"
+            res_dir.mkdir()
+            asar_path = res_dir / "app.asar"
+            asar_path.write_bytes(asar_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "tyrano")
+            collected = adapter.collect(root)
+            self.assertEqual(len(collected), 1)
+            self.assertIn("先輩、今日も一緒に帰りましょう！", collected[0].english)
+
+            ap = adapter.apply(root, {collected[0].key: "「前辈，今天也一起回家吧！」[p]"})
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 1)
+            self.assertIsNotNone(ap.out_path)
+
+            out_asar = ap.out_path / "resources" / "app.asar"
+            _tree2, _base2, entries_after = parse_asar(out_asar.read_bytes())
+            off, sz = entries_after["data/scenario/first.ks"]
+            new_ks = out_asar.read_bytes()[off : off + sz].decode("utf-8")
+            self.assertIn("「前辈，今天也一起回家吧！」[p]", new_ks)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertFalse(ap.out_path.exists())
+
+    def test_kirikiri_xp3_extract_and_patch_xp3_writeback(self):
+        from ferrycore.adapters import detect
+        from ferrycore.adapters.kirikiri import build_xp3, parse_xp3, read_xp3_file
+
+        ks_raw = (
+            "*start|スタート画面\n"
+            "[cm]\n"
+            "「おはようございます、マスター！」[p]\n"
+            '@link target="*next" text="次へ進む"\n'
+        ).encode("cp932")
+        xp3_blob = build_xp3({"scenario/first.ks": ks_raw})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data.xp3").write_bytes(xp3_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "kirikiri")
+            units = adapter.collect(root)
+            texts = [u.english for u in units]
+            self.assertIn("スタート画面", texts)
+            self.assertIn("「おはようございます、マスター！」[p]", texts)
+            self.assertIn("次へ進む", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "スタート画面": "开始画面",
+                    "「おはようございます、マスター！」[p]": "「早上好，御主！」[p]",
+                    "次へ進む": "继续前进",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 3)
+            patch_xp3 = root / "patch.xp3"
+            self.assertTrue(patch_xp3.is_file())
+
+            # 验证 patch.xp3 内写入了 UTF-16LE 带 BOM 的 .ks 剧本
+            p_blob = patch_xp3.read_bytes()
+            p_entries = {e.name: e for e in parse_xp3(p_blob)}
+            self.assertIn("scenario/first.ks", p_entries)
+            patched_ks = read_xp3_file(p_blob, p_entries["scenario/first.ks"])
+            self.assertTrue(patched_ks.startswith(b"\xff\xfe"))
+            decoded_ks = patched_ks.decode("utf-16")
+            self.assertIn("*start|开始画面", decoded_ks)
+            self.assertIn("「早上好，御主！」[p]", decoded_ks)
+            self.assertIn('text="继续前进"', decoded_ks)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertFalse(patch_xp3.exists())
+
+    def test_rpgmaker_2k_lcf_chunk_isolation_and_patch(self):
+        from ferrycore.adapters import detect
+
+        # 构造 RPG_RT.ldb：Chunk 11 (Actors, 白名单内) + Chunk 19 (Chipsets, 必须跳过不翻!)
+        actor_str = "アレックス".encode("cp932")
+        c11_body = b"\x01\x01\x01" + bytes([len(actor_str)]) + actor_str + b"\x00"
+        chipset_str = "基本チップセット".encode("cp932")
+        c19_body = b"\x01\x01\x01" + bytes([len(chipset_str)]) + chipset_str + b"\x00"
+        ldb_blob = (
+            b"\x0bLcfDataBase"
+            + _encode_ber(11) + _encode_ber(len(c11_body)) + c11_body
+            + _encode_ber(19) + _encode_ber(len(c19_body)) + c19_body
+            + b"\x00"
+        )
+
+        # 构造 Map0001.lmu：Chunk 71 (底层图块数据) + Chunk 81 (地图事件台词)
+        c71_body = b"\x00\x01\x02\x03\x04\x05\x06\x07"
+        ev_str = "「ようこそ、辺境の村へ！」".encode("cp932")
+        c81_body = b"\x01\x05" + bytes([len(ev_str)]) + ev_str + b"\x00"
+        lmu_blob = (
+            b"\x0aLcfMapUnit"
+            + _encode_ber(71) + _encode_ber(len(c71_body)) + c71_body
+            + _encode_ber(81) + _encode_ber(len(c81_body)) + c81_body
+            + b"\x00"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "RPG_RT.ldb").write_bytes(ldb_blob)
+            (root / "Map0001.lmu").write_bytes(lmu_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "rpgmaker_2k")
+            units = adapter.collect(root)
+            texts = [u.english for u in units]
+            self.assertIn("アレックス", texts)
+            self.assertIn("「ようこそ、辺境の村へ！」", texts)
+            # Chunk 19 (Chipsets) 绝不能混入翻译列表
+            self.assertNotIn("基本チップセット", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "アレックス": "亚历克斯",
+                    "「ようこそ、辺境の村へ！」": "「欢迎来到边境之村！」",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            # 字节总长与 BER 块结构保持 100% 不变
+            self.assertEqual(len((root / "RPG_RT.ldb").read_bytes()), len(ldb_blob))
+            self.assertEqual(len((root / "Map0001.lmu").read_bytes()), len(lmu_blob))
+            self.assertIn("亚历克斯".encode("gbk"), (root / "RPG_RT.ldb").read_bytes())
+            self.assertIn("「欢迎来到边境之村！」".encode("gbk"), (root / "Map0001.lmu").read_bytes())
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertEqual((root / "RPG_RT.ldb").read_bytes(), ldb_blob)
+            self.assertEqual((root / "Map0001.lmu").read_bytes(), lmu_blob)
+
+    def test_godot_pck_and_tscn_roundtrip(self):
+        from ferrycore.adapters import detect
+        from ferrycore.adapters.godot import parse_pck
+
+        tscn_raw = (
+            '[gd_scene format=3]\n'
+            '[node name="Title" type="Label"]\n'
+            'text = "魔王城への道"\n'
+            'placeholder_text = "名前を入力してください"\n'
+            'texture_path = "res://assets/title.png"\n'
+        ).encode("utf-8")
+        pck_blob = _build_minimal_gdpc_v2({"res://scenes/main.tscn": tscn_raw})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pck_path = root / "game.pck"
+            pck_path.write_bytes(pck_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "godot")
+            units = adapter.collect(root)
+            texts = [u.english for u in units]
+            self.assertEqual(texts, ["魔王城への道", "名前を入力してください"])
+
+            ap = adapter.apply(
+                root,
+                {
+                    "魔王城への道": "通往魔王城之路",
+                    "名前を入力してください": "请输入名字",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+
+            arc = parse_pck(pck_path.read_bytes())
+            self.assertEqual(arc.version, 2)
+            ent = {e.path: e for e in arc.entries}["res://scenes/main.tscn"]
+            patched_tscn = pck_path.read_bytes()[ent.offset : ent.offset + ent.size].decode("utf-8")
+            self.assertIn('text = "通往魔王城之路"', patched_tscn)
+            self.assertIn('placeholder_text = "请输入名字"', patched_tscn)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertEqual(pck_path.read_bytes(), pck_blob)
+
+    def test_unity_streaming_assets_and_dotnet_us_to_xunity(self):
+        from ferrycore.adapters import detect
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "SampleGame_Data"
+            sa_dir = data_dir / "StreamingAssets"
+            managed_dir = data_dir / "Managed"
+            sa_dir.mkdir(parents=True)
+            managed_dir.mkdir(parents=True)
+
+            lang_json = sa_dir / "ui.json"
+            lang_json.write_text(
+                json.dumps(
+                    {
+                        "title": "星屑のクロニクル",
+                        "sprite": "Assets/Sprites/logo.png",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            dll_path = managed_dir / "Assembly-CSharp.dll"
+            dll_path.write_bytes(
+                _build_minimal_dotnet_dll(
+                    [
+                        "PlayerController",
+                        "Assets/Prefabs/Hero.prefab",
+                        "「本当にこの扉を開けますか？」",
+                    ]
+                )
+            )
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "unity")
+            units = adapter.collect(root)
+            texts = [u.english for u in units]
+            self.assertIn("星屑のクロニクル", texts)
+            self.assertIn("「本当にこの扉を開けますか？」", texts)
+            self.assertNotIn("PlayerController", texts)
+            self.assertNotIn("Assets/Sprites/logo.png", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "星屑のクロニクル": "星尘编年史",
+                    "「本当にこの扉を開けますか？」": "「真的要打开这扇门吗？」",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+
+            # StreamingAssets JSON 已原地更新
+            self.assertEqual(json.loads(lang_json.read_text(encoding="utf-8"))["title"], "星尘编年史")
+            # XUnity 预翻译表与配置已生成
+            pre_txt = root / "BepInEx" / "Translation" / "zh" / "Text" / "_PreTranslated.txt"
+            self.assertTrue(pre_txt.is_file())
+            pre_content = pre_txt.read_text(encoding="utf-8")
+            self.assertIn("「本当にこの扉を開けますか？」=「真的要打开这扇门吗？」", pre_content)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertEqual(json.loads(lang_json.read_text(encoding="utf-8"))["title"], "星屑のクロニクル")
+            self.assertFalse(pre_txt.exists())
+
+    def test_i18n_table_po_extract_and_apply(self):
+        from ferrycore.adapters import detect
+
+        po_content = (
+            'msgid ""\n'
+            'msgstr ""\n'
+            '"Content-Type: text/plain; charset=UTF-8\\n"\n\n'
+            '#: src/ui.cpp:12\n'
+            'msgid "Start New Game"\n'
+            'msgstr ""\n\n'
+            '#: src/story.cpp:44\n'
+            'msgid "Welcome to the Underground Labyrinth!"\n'
+            'msgstr ""\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loc_dir = root / "locales"
+            loc_dir.mkdir()
+            po_path = loc_dir / "messages.po"
+            po_path.write_text(po_content, encoding="utf-8")
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "i18n_table")
+            units = adapter.collect(root)
+            self.assertEqual([u.english for u in units], ["Start New Game", "Welcome to the Underground Labyrinth!"])
+
+            ap = adapter.apply(
+                root,
+                {
+                    "Start New Game": "开始新游戏",
+                    "Welcome to the Underground Labyrinth!": "欢迎来到地下迷宫！",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            updated = po_path.read_text(encoding="utf-8")
+            self.assertIn('msgstr "开始新游戏"', updated)
+            self.assertIn('msgstr "欢迎来到地下迷宫！"', updated)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertEqual(po_path.read_text(encoding="utf-8"), po_content)
+
+
+def _build_minimal_dex(strings: list[str]) -> bytes:
+    """构造一个含 string_ids 与 string_data_item 的最小合法 Android classes.dex。"""
+    import hashlib
+    import zlib
+
+    # Header 0x70 bytes, string_ids at 0x70, string_data after string_ids
+    n = len(strings)
+    string_ids_off = 0x70
+    data_start = string_ids_off + n * 4
+    string_ids = bytearray()
+    data_buf = bytearray()
+    for s in strings:
+        cur_off = data_start + len(data_buf)
+        string_ids.extend(struct.pack("<I", cur_off))
+        raw = s.encode("utf-8")
+        # 1-byte ULEB128 utf16 length (for strings < 128 chars) + raw + NUL
+        data_buf.append(len(s))
+        data_buf.extend(raw)
+        data_buf.append(0)
+
+    total_size = data_start + len(data_buf)
+    header = bytearray(0x70)
+    header[0:8] = b"dex\n035\x00"
+    struct.pack_into("<I", header, 0x20, total_size)
+    struct.pack_into("<I", header, 0x24, 0x70)
+    struct.pack_into("<I", header, 0x28, 0x12345678)
+    struct.pack_into("<II", header, 0x38, n, string_ids_off)
+
+    dex = header + string_ids + data_buf
+    dex[12:32] = hashlib.sha1(dex[32:]).digest()
+    struct.pack_into("<I", dex, 8, zlib.adler32(dex[12:]) & 0xFFFFFFFF)
+    return bytes(dex)
+
+
+def _build_param_sfo(fields: dict[str, str]) -> bytes:
+    """构造一个符合 Sony \x00PSF 规范的 PARAM.SFO 二进制块。"""
+    keys_buf = bytearray()
+    data_buf = bytearray()
+    index_buf = bytearray()
+    for k, v in fields.items():
+        k_off = len(keys_buf)
+        keys_buf.extend(k.encode("utf-8") + b"\x00")
+        raw_v = v.encode("utf-8") + b"\x00"
+        max_len = (len(raw_v) + 3) & ~3
+        padded_v = raw_v.ljust(max_len, b"\x00")
+        d_off = len(data_buf)
+        data_buf.extend(padded_v)
+        # fmt = 0x0204 (UTF-8 C-string)
+        index_buf.extend(struct.pack("<HHIII", k_off, 0x0204, len(raw_v), max_len, d_off))
+
+    while len(keys_buf) % 4 != 0:
+        keys_buf.append(0)
+    key_start = 20 + len(index_buf)
+    data_start = key_start + len(keys_buf)
+    head = b"\x00PSF" + struct.pack("<IIII", 0x0101, key_start, data_start, len(fields))
+    return head + bytes(index_buf) + bytes(keys_buf) + bytes(data_buf)
+
+
+def _iso_dir_record(name: bytes, lba: int, size: int, is_dir: bool) -> bytes:
+    rec_len = 33 + len(name)
+    if rec_len % 2 == 1:
+        rec_len += 1
+    buf = bytearray(rec_len)
+    buf[0] = rec_len
+    struct.pack_into("<I", buf, 2, lba)
+    struct.pack_into(">I", buf, 6, lba)
+    struct.pack_into("<I", buf, 10, size)
+    struct.pack_into(">I", buf, 14, size)
+    buf[25] = 0x02 if is_dir else 0x00
+    struct.pack_into("<H", buf, 28, 1)
+    struct.pack_into(">H", buf, 30, 1)
+    buf[32] = len(name)
+    buf[33 : 33 + len(name)] = name
+    return bytes(buf)
+
+
+def _build_minimal_psp_iso(param_sfo: bytes, script_bin: bytes) -> bytes:
+    """构造一个含 /PSP_GAME/PARAM.SFO 与 /PSP_GAME/USRDIR/SCRIPT.BIN 的最小 ISO-9660 光盘镜像。"""
+    sector = 2048
+    img = bytearray(24 * sector)
+
+    # Sector 16: Primary Volume Descriptor
+    pvd = 16 * sector
+    img[pvd : pvd + 7] = b"\x01CD001\x01"
+    root_rec = _iso_dir_record(b"\x00", lba=17, size=sector, is_dir=True)
+    img[pvd + 156 : pvd + 156 + len(root_rec)] = root_rec
+
+    # Sector 17: Root Directory -> PSP_GAME (LBA 18)
+    s17 = 17 * sector
+    r_dot = _iso_dir_record(b"\x00", 17, sector, True)
+    r_dotdot = _iso_dir_record(b"\x01", 17, sector, True)
+    r_pspgame = _iso_dir_record(b"PSP_GAME", 18, sector, True)
+    cur = s17
+    for rec in (r_dot, r_dotdot, r_pspgame):
+        img[cur : cur + len(rec)] = rec
+        cur += len(rec)
+
+    # Sector 18: PSP_GAME Directory -> PARAM.SFO (LBA 20), USRDIR (LBA 19)
+    s18 = 18 * sector
+    r_sfo = _iso_dir_record(b"PARAM.SFO;1", 20, len(param_sfo), False)
+    r_usrdir = _iso_dir_record(b"USRDIR", 19, sector, True)
+    cur = s18
+    for rec in (
+        _iso_dir_record(b"\x00", 18, sector, True),
+        _iso_dir_record(b"\x01", 17, sector, True),
+        r_sfo,
+        r_usrdir,
+    ):
+        img[cur : cur + len(rec)] = rec
+        cur += len(rec)
+
+    # Sector 19: USRDIR -> SCRIPT.BIN (LBA 21)
+    s19 = 19 * sector
+    r_script = _iso_dir_record(b"SCRIPT.BIN;1", 21, len(script_bin), False)
+    cur = s19
+    for rec in (
+        _iso_dir_record(b"\x00", 19, sector, True),
+        _iso_dir_record(b"\x01", 18, sector, True),
+        r_script,
+    ):
+        img[cur : cur + len(rec)] = rec
+        cur += len(rec)
+
+    # Sector 20: PARAM.SFO data
+    img[20 * sector : 20 * sector + len(param_sfo)] = param_sfo
+    # Sector 21: SCRIPT.BIN data
+    img[21 * sector : 21 * sector + len(script_bin)] = script_bin
+    return bytes(img)
+
+
+class MobileAndConsoleAdapterTests(unittest.TestCase):
+    def test_android_apk_strings_xml_assets_and_dex_roundtrip(self):
+        import hashlib
+        import zipfile
+        import zlib
+        from ferrycore.adapters import detect
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            apk_path = root / "sample.apk"
+            dex_blob = _build_minimal_dex(["Ljava/lang/String;", "「勇者よ、立ち上がれ！」"])
+            with zipfile.ZipFile(apk_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("AndroidManifest.xml", "<manifest/>")
+                zf.writestr("resources.arsc", b"ARSC_DUMMY_TABLE")
+                zf.writestr("META-INF/CERT.SF", "Signature-Version: 1.0\n")
+                zf.writestr(
+                    "res/values/strings.xml",
+                    '<resources><string name="app_name">幻想の迷宮</string></resources>',
+                )
+                zf.writestr(
+                    "assets/www/data/System.json",
+                    json.dumps({"gameTitle": "魔王討伐記"}, ensure_ascii=False),
+                )
+                zf.writestr("classes.dex", dex_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "apk")
+            entries = adapter.collect(root)
+            texts = [e.english for e in entries]
+            self.assertIn("幻想の迷宮", texts)
+            self.assertIn("魔王討伐記", texts)
+            self.assertIn("「勇者よ、立ち上がれ！」", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "幻想の迷宮": "幻想迷宫",
+                    "魔王討伐記": "魔王讨伐记",
+                    "「勇者よ、立ち上がれ！」": "「勇士啊，快站起来！」",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 3)
+            self.assertIsNotNone(ap.out_path)
+            self.assertTrue(ap.out_path.name.endswith(".cn.apk"))
+
+            with zipfile.ZipFile(ap.out_path, "r") as zout:
+                # 1. 旧 META-INF/*.SF 签名块必须已被剥除
+                self.assertNotIn("META-INF/CERT.SF", zout.namelist())
+                # 2. resources.arsc 必须保持 ZIP_STORED 无压缩
+                self.assertEqual(zout.getinfo("resources.arsc").compress_type, zipfile.ZIP_STORED)
+                # 3. strings.xml 与 assets/www/data/System.json 已更新
+                self.assertIn("幻想迷宫", zout.read("res/values/strings.xml").decode("utf-8"))
+                self.assertIn("魔王讨伐记", zout.read("assets/www/data/System.json").decode("utf-8"))
+                # 4. classes.dex 译文已原位写入且 SHA-1 与 Adler32 校验头合法
+                patched_dex = zout.read("classes.dex")
+                self.assertIn("「勇士啊，快站起来！」".encode("utf-8"), patched_dex)
+                self.assertEqual(patched_dex[12:32], hashlib.sha1(patched_dex[32:]).digest())
+                self.assertEqual(
+                    struct.unpack_from("<I", patched_dex, 8)[0],
+                    zlib.adler32(patched_dex[12:]) & 0xFFFFFFFF,
+                )
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertFalse(ap.out_path.exists())
+
+    def test_ios_ipa_bplist_and_text_strings_preserve_exec_permissions(self):
+        import plistlib
+        import zipfile
+        from ferrycore.adapters import detect
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ipa_path = root / "game.ipa"
+            bplist_strings = plistlib.dumps(
+                {"START_BTN": "ゲームを始める", "INTERNAL_ID": "btn_01"},
+                fmt=plistlib.FMT_BINARY,
+            )
+            text_strings = '"GREETING" = "「ようこそ、星見の塔へ！」";\n'.encode("utf-16")
+
+            with zipfile.ZipFile(ipa_path, "w") as zf:
+                exec_info = zipfile.ZipInfo("Payload/StarTower.app/StarTower")
+                exec_info.external_attr = (0o100755 & 0xFFFF) << 16
+                zf.writestr(exec_info, b"\xcf\xfa\xed\xfeMACH_O_BIN")
+                zf.writestr("Payload/StarTower.app/ja.lproj/Localizable.strings", bplist_strings)
+                zf.writestr("Payload/StarTower.app/ja.lproj/Story.strings", text_strings)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "ipa")
+            entries = adapter.collect(root)
+            texts = [e.english for e in entries]
+            self.assertIn("ゲームを始める", texts)
+            self.assertIn("「ようこそ、星見の塔へ！」", texts)
+            self.assertNotIn("btn_01", texts)
+
+            ap = adapter.apply(
+                root,
+                {
+                    "ゲームを始める": "开始游戏",
+                    "「ようこそ、星見の塔へ！」": "「欢迎来到观星之塔！」",
+                },
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 2)
+            self.assertTrue(ap.out_path.name.endswith(".cn.ipa"))
+
+            with zipfile.ZipFile(ap.out_path, "r") as zout:
+                # UNIX 0755 可执行权限位必须一字不差保留
+                self.assertEqual(
+                    zout.getinfo("Payload/StarTower.app/StarTower").external_attr,
+                    (0o100755 & 0xFFFF) << 16,
+                )
+                patched_bplist = plistlib.loads(
+                    zout.read("Payload/StarTower.app/ja.lproj/Localizable.strings")
+                )
+                self.assertEqual(patched_bplist["START_BTN"], "开始游戏")
+                patched_u16 = zout.read("Payload/StarTower.app/ja.lproj/Story.strings").decode("utf-16")
+                self.assertIn('"GREETING" = "「欢迎来到观星之塔！」";', patched_u16)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertFalse(ap.out_path.exists())
+
+    def test_psv_unpacked_and_repatch_generation(self):
+        from ferrycore.adapters import detect
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sce_sys = root / "sce_sys"
+            data_dir = root / "data"
+            sce_sys.mkdir()
+            data_dir.mkdir()
+
+            (sce_sys / "param.sfo").write_bytes(
+                _build_param_sfo({"TITLE": "セルセタの樹海", "TITLE_ID": "PCSG00123"})
+            )
+            script_blob = (
+                b"PSV_SCR\x00"
+                + "「アドル、気をつけろ！魔物の気配がするぞ。」".encode("cp932")
+                + b"\x00TAIL\x00"
+            )
+            (data_dir / "scene01.bin").write_bytes(script_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "psv")
+            probe = adapter.probe(root)
+            self.assertTrue(probe.readable)
+            self.assertIn("PCSG00123", probe.engine)
+
+            entries = adapter.collect(root)
+            self.assertEqual([e.english for e in entries], ["「アドル、気をつけろ！魔物の気配がするぞ。」"])
+
+            ap = adapter.apply(
+                root,
+                {"「アドル、気をつけろ！魔物の気配がするぞ。」": "「亚特鲁，小心！前面有魔物的气息。」"},
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 1)
+            repatch_file = root / "rePatch" / "PCSG00123" / "data" / "scene01.bin"
+            self.assertTrue(repatch_file.is_file())
+            self.assertEqual(len(repatch_file.read_bytes()), len(script_blob))
+            self.assertIn("「亚特鲁，小心！前面有魔物的气息。」".encode("gbk"), repatch_file.read_bytes())
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertEqual((data_dir / "scene01.bin").read_bytes(), script_blob)
+            self.assertFalse(repatch_file.exists())
+
+    def test_psp_iso9660_parse_and_lba_extent_patch(self):
+        from ferrycore.adapters import detect, parse_iso9660
+
+        sfo = _build_param_sfo({"TITLE": "英雄伝説 空の軌跡", "DISC_ID": "ULJM05170"})
+        script = (
+            b"PSP_MES\x00"
+            + "「ヨシュア、準備はいい？そろそろ出発するわよ！」".encode("cp932")
+            + b"\x00END\x00"
+        )
+        iso_blob = _build_minimal_psp_iso(sfo, script)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            iso_path = root / "sora.iso"
+            iso_path.write_bytes(iso_blob)
+
+            adapter = detect(root)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "psp")
+            probe = adapter.probe(root)
+            self.assertTrue(probe.readable)
+            self.assertIn("ULJM05170", probe.engine)
+
+            entries = adapter.collect(root)
+            self.assertEqual(
+                [e.english for e in entries],
+                ["「ヨシュア、準備はいい？そろそろ出発するわよ！」"],
+            )
+
+            ap = adapter.apply(
+                root,
+                {"「ヨシュア、準備はいい？そろそろ出発するわよ！」": "「约修亚，准备好了吗？我们差不多该出发啦！」"},
+            )
+            self.assertTrue(ap.ok)
+            self.assertEqual(ap.applied, 1)
+            self.assertIsNotNone(ap.out_path)
+            self.assertTrue(ap.out_path.name.endswith(".cn.iso"))
+
+            # 重新按 ISO-9660 解析产出的 .cn.iso，确认扇区结构与译文完全正确
+            patched_iso = ap.out_path.read_bytes()
+            self.assertEqual(len(patched_iso), len(iso_blob))
+            iso_entries = parse_iso9660(patched_iso)
+            scr_ent = iso_entries["PSP_GAME/USRDIR/SCRIPT.BIN"]
+            scr_data = patched_iso[scr_ent.offset : scr_ent.offset + scr_ent.size]
+            self.assertIn("「约修亚，准备好了吗？我们差不多该出发啦！」".encode("gbk"), scr_data)
+
+            rev = revert_game(root)
+            self.assertTrue(rev.ok)
+            self.assertFalse(ap.out_path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

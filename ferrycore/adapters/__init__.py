@@ -20,27 +20,55 @@ from __future__ import annotations
 from pathlib import Path
 
 from .base import Adapter, ApplyReport, ProbeReport, VerifyReport
-from .container import Container, Document, FolderGame, ZipInExe, locate_appended_zip, open_container, unique_output
+from .console import PspAdapter, PsvAdapter, parse_iso9660, parse_param_sfo
+from .container import (
+    AsarContainer,
+    Container,
+    Document,
+    FolderGame,
+    ZipInExe,
+    find_asar,
+    locate_appended_zip,
+    open_container,
+    parse_asar,
+    rebuild_asar,
+    unique_output,
+)
 from .gamemaker import GameMakerAdapter
+from .godot import GodotAdapter
 from .hints import scan_hints
 from .hsp import HspAdapter
+from .i18n_table import I18nTableAdapter
+from .kirikiri import KirikiriAdapter
+from .mobile import ApkAdapter, IpaAdapter, extract_dex_strings, patch_dex_strings
 from .renpy import RenpyAdapter
 from .rpgmaker import RpgMakerAdapter
+from .rpgmaker_2k import RpgMaker2kAdapter
 from .rpgmaker_ace import RpgMakerAceAdapter
 from .tyrano import TyranoAdapter
 from .undo import UNDO_NAME, RevertReport, UndoLog
 from .undo import revert as revert_game
+from .unity import UnityAdapter
 from ferrygame.pc98 import PC98Adapter
 from ferrygame.rawbin import RawBinaryAdapter
 
 # 数字小的先探测。认领越具体的排越前，通用兜底排最后。
 REGISTRY: list[type[Adapter]] = [
+    ApkAdapter,
+    IpaAdapter,
+    PsvAdapter,
+    PspAdapter,
     PC98Adapter,
     TyranoAdapter,
+    KirikiriAdapter,
     RenpyAdapter,
+    RpgMaker2kAdapter,
     RpgMakerAceAdapter,  # rgss3a / rvdata2，必须在 MV/MZ 明文适配器之前
     RpgMakerAdapter,
+    GodotAdapter,
+    UnityAdapter,
     GameMakerAdapter,
+    I18nTableAdapter,
     HspAdapter,
     RawBinaryAdapter,
 ]
@@ -80,28 +108,45 @@ def detect(root: Path, **options) -> Adapter | None:
 
 __all__ = [
     "Adapter",
+    "ApkAdapter",
     "ApplyReport",
+    "AsarContainer",
     "Container",
     "Document",
     "FolderGame",
     "GameMakerAdapter",
+    "GodotAdapter",
     "HspAdapter",
+    "I18nTableAdapter",
+    "IpaAdapter",
+    "KirikiriAdapter",
     "PC98Adapter",
     "ProbeReport",
+    "PspAdapter",
+    "PsvAdapter",
     "RawBinaryAdapter",
     "RenpyAdapter",
     "RevertReport",
+    "RpgMaker2kAdapter",
     "RpgMakerAceAdapter",
     "RpgMakerAdapter",
     "TyranoAdapter",
     "UNDO_NAME",
     "UndoLog",
+    "UnityAdapter",
     "VerifyReport",
     "ZipInExe",
     "detect",
+    "extract_dex_strings",
+    "find_asar",
     "get",
     "locate_appended_zip",
     "open_container",
+    "parse_asar",
+    "parse_iso9660",
+    "parse_param_sfo",
+    "patch_dex_strings",
+    "rebuild_asar",
     "registered",
     "revert_game",
     "scan_hints",

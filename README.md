@@ -3,12 +3,12 @@
 > 人无语言则茫然无依，故为摆渡。
 > Where words fail, we ferry.
 
-**开发中 · v2.0.0-alpha.1（早期测试版）**
+**开发中 · v2.0.0-alpha.2（早期测试版）**
 
-摆渡计划是一套**游戏本地化工作台**。首次打开时从「项目工作台」选择要处理的项目；两类项目共用翻译引擎，但检测、写回和还原的方式不同。
+摆渡计划已经从最初单纯的「Minecraft 模组临时汉化器」，正式演进为**双轨制跨平台游戏本地化工作台**（`ferrycore` 模组主线 + `ferrygame` 通用游戏线）。首次打开时从左侧导航栏或「项目工作台」选择要处理的轨道；两条线共用底层 AI 翻译引擎与密钥配置，但探测、提示词、写回与无损还原各自独立、互不污染：
 
-- **游戏汉化**：打开游戏目录、镜像或程序，先检测格式和写回条件。检测通过后可以翻译，也可以校对已有双语译文表并单独写回。项目工作台列出最近登记的游戏产物，并区分原地写入与汉化副本。
-- **模组汉化**：选择 Minecraft 实例，扫描整合包的中文缺口。默认避让人工译文；社区汉化、质量检查、术语表和桥接工具在「资源与桥接」。
+- **通用游戏汉化（17 类引擎与平台适配）**：支持从主流引擎（**吉里吉里 `.xp3`、Ren'Py `.rpa/.rpy`、RPG Maker 2000/2003/XP/VX/Ace/MV/MZ、TyranoScript / Electron `app.asar`、Godot 3/4 `.pck`、Unity `StreamingAssets + #US → XUnity`、GameMaker `data.win`、HSP、通用 `.po/.json/.csv`**）到复古猎奇平台（**NEC PC-98 `.hdi/.fdi/.nhd` 磁盘镜像 + 内置 `anex86.bmp` 字库底板**），再到移动端与掌机（**Android `.apk` + `classes.dex`、iOS `.ipa` + `bplist00`、PS Vita `.vpk / rePatch`、PSP `.iso` ISO-9660 光盘镜像**）。体检在花第一个 Token 之前先答清「能不能读、能不能写回」，支持导出 `ferry_tl.json` 手工改完 **0 Token 重刷进游戏**，所有改动均写入 `.ferry-undo.json` 支持**一键无损撤销**。
+- **Minecraft 模组汉化**：选择 Minecraft 实例，扫描整合包的中文缺口。默认避让人工译文；社区汉化、质量检查、术语表和桥接工具在「资源与桥接」。
 - **翻译引擎**：管理接口、密钥和预设，测试连接，配置并发与模型池。
 
 说白了就是：别人熬夜翻的字，我一个都不敢碰；没人翻的那部分，我拿 AI 顶两天班，等正主回来了我自己滚。这玩意儿是我一个不懂编程的人逼着 AI 一砖一瓦垒出来的，所以你看到它长得磕碜——那不是风格，那就是本来面目。
@@ -34,6 +34,7 @@
 - （对不起并未做到一统三界，目前可以通过LiteralBridge来达成forge1.20.1的硬编码汉化。但依旧无法完整汉化ftb任务书，但目前技术路线是内置桥模组生成模板，只需要在用户电脑上生成对应加载器的桥接模组，理论上也算个一统三界（但我不是秦始皇，我真没打算统一加载器），这样就不用我过多维护（我要上学。并且整个项目只有我和我的大模型编码agent清蒸大闸蟹干饭臭肥鱼这样那样的维护。）也不用让我死的这么早，我还没活够。所以，迟早会更新的。相信红现实喵，相信哈基红谢谢喵。）
  - 2026.10.12：已通过LiteralBridge达成forge1.20.1的硬编码汉化喵，下一步就是全线替代LiteralBridge改用摆渡桥。不过下次更新不知道多久喵。
  - 2026.10.20：FTB 任务书现在有正经主路了——装 **FTB Quest Localizer**，进游戏跑 `/ftblang export`，摆渡只读它导出的 `kubejs/assets/ftbquestlocalizer/lang/en_us.json`，把带颜色/悬停的富文本数组也翻掉，`zh_cn.json` 只写进摆渡自己的资源包。**摆渡不解析、不写回任何 SNBT**，`config/ftbquests/**` 和 `kubejs/` 里的原文件一律不动。没装 Localizer 时摆渡只提示，不代装。
+ - 2026.11.21（v2.0.0-alpha）：被拷打之后终于不再只是 MC 模组汉化器了（悲）。独立拆出了 `ferrygame/` 通用游戏线（彻底隔离 MC 的苦力怕提示词），一口气塞进了 **17 个引擎与平台适配器**——小到上古 **PC-98 软盘/硬盘镜像（`.hdi/.fdi/.nhd`）+ 内置 `anex86.bmp` 汉化字库底板**、无引擎裸二进制（`.exe/.dat/.mes` 定长原位覆写），主流到 **吉里吉里 `.xp3`、Ren'Py、RPG Maker 全家桶（2000/2003/XP/VX/Ace/MV/MZ）、Tyrano / Electron `app.asar`、Godot `.pck`、Unity、GameMaker、HSP**，甚至极端到 **Android `.apk`（含 `classes.dex` 重算校验）、iOS `.ipa`（含二进制 `bplist00`）、PS Vita（`.vpk` + `rePatch` 补丁层）、PSP（`.iso` 光盘 LBA 扇区原位写回）**，全程依然是 **Python 标准库零第三方依赖**。
 
 ## 它能做什么
 
@@ -257,69 +258,59 @@ py mc_ai_translator.py translate --instance "..." --only-modid tacz,jei
 
 默认读 `<实例目录>\mods` 与 `<实例目录>\resourcepacks`，也可用 `--mods`、`--resourcepacks` 单独指定。
 
-## 汉化别的游戏（实验性）
+## 通用游戏汉化（PC 主流引擎 / 复古 PC-98 / 移动端 APK & IPA / 掌机 PSV & PSP）
 
-摆渡的主线是 Minecraft。这是另一个入口，**跟 MC 那套不共用目录、不共用配置**，
-唯一共用的是翻译核心（引擎、术语表、缓存、断点续传）。
+从 `v2.0.0-alpha` 起，通用游戏汉化拥有独立包 `ferrygame/` 与工作台专属页面，**跟 MC 那套不共用目录、不混用提示词**（不再出现把日系 AVG 或 RPG 台词翻出「苦力怕 / 红石」的串味惨案），唯一共用的是底层翻译接口、密钥加密与并发池。
 
-界面上在底部点 **「汉化其他游戏…」**：选目录 → 体检 → 开始。体检不发请求、不写字节，
-先把「能不能写回去」答掉；翻完把副本路径告诉你，并给一个「打开产出文件夹」。
+### 核心工作流
 
-命令行等价：
+1. **先体检 / 字节侦查（0 Token）**：选择游戏目录或镜像文件（`.apk / .ipa / .vpk / .iso / .hdi / .xp3 / .pck / .exe`），先看认不认得引擎、能不能取到文本、**能不能写回去**，并自动在目录下生成双语对照表 `ferry_tl.json`。
+2. **未知引擎字节侦查台（`recon`）**：遇到从未见过的猎奇单 EXE 或怪后缀数据包，点「字节侦查」直接计算各文件香农熵（0~8.0 判断明文 / 编译二进制 / 强加密）、PE 32/64 位架构、导入的 GDI 画字与菜单 API（`TextOutA` / `GetGlyphOutlineA` / `ModifyMenuA`）以及可用的替身 DLL（`version.dll` / `msimg32.dll`）。
+3. **带滚动上下文与字节预算的 AI 翻译**：
+   - 自动将控制符（`\C[2]`、`[r]`、`{w=0.5}`、`%1$s`、`^m`、`$c1` 等）掩码为 `__T0__` 铁律占位符，漏码整句拒绝；
+   - 自动按剧本顺序注入前文滚动上下文，保证长对话人称与语气连贯；
+   - 对有严格字节上限的定长二进制（如裸 EXE、`RPG_RT.ldb`、PC-98、PSP/PSV 脚本、`classes.dex`），超出 `max_bytes` 时自动追加「缩字重试」指令，绝不写爆指针偏移。
+4. **手工精修 `ferry_tl.json` → 0 Token 重刷**：翻译完成后，可随时点击「编辑译文表」修改 `ferry_tl.json` 中的 `dst`，再点「写回译文表」瞬间重刷进游戏，不花一分钱 Token。
+5. **一键无损撤销（`.ferry-undo.json`）**：所有原地修改（先备份 MD5 再落盘）和副本生成都记录在 `.ferry-undo.json`，随时点「撤销还原」100% 恢复原状。
 
-```powershell
-py mc_ai_translator.py localize "D:\游戏目录" --dry-run    # 只体检，不花 token
-py mc_ai_translator.py localize "D:\游戏目录"              # 翻译并产出副本
-py mc_ai_translator.py localize --list-adapters            # 看当前支持哪些引擎
-py mc_ai_translator.py fontcheck "D:\游戏目录"             # 只查字库：中文能不能显示
-```
+### 已支持的 17 类引擎与平台适配器总表
 
-`--dry-run` 会回答四件事：认不认得这个引擎、能不能取到文本、**能不能写回去**、有多少条。
-第三项是重点 —— 取到文本却放不回去，翻了也白翻，所以摆渡在翻一个字之前就把它答掉；
-答不出来就不开工。
+| 优先级 | 适配器标识 | 覆盖平台 / 引擎 / 容器 | 核心机制与回写策略 |
+| :---: | :--- | :--- | :--- |
+| `11` | `apk` | **Android `.apk`** / 解包目录 | 抽取 `res/values*/strings.xml`、`assets/` 内嵌游戏剧本（RM/Tyrano/Godot/JSON/CSV）及 **`classes.dex` 字符串池**；写回 `.cn.apk` 时自动重算 DEX SHA-1 与 Adler32、保持 `resources.arsc` 为 `ZIP_STORED` 无压缩并剥除旧 `META-INF` 签名块 |
+| `12` | `ipa` | **iOS `.ipa`** / `Payload/*.app` | 原生支持 Apple `*.lproj/*.strings`（**明文 UTF-8/UTF-16 与编译后 `bplist00` 二进制格式**）及包内游戏剧本；重建 `.cn.ipa` 严格保留 Mach-O `0755` 可执行权限位 |
+| `13` | `psv` | **PS Vita `.vpk`** / 解包目录 | 解析 `sce_sys/param.sfo`（`\x00PSF` 标题与 `TITLE_ID`），鉴别 `SCE\x00` 加密与明文 ELF，抽取明文词表与裸二进制剧本；输出 `.cn.vpk` 或实机/Vita3K 标准 **`rePatch/<TITLE_ID>/`** 补丁目录 |
+| `14` | `psp` | **PSP `.iso`** / `PSP_GAME` | 纯标准库解析 **ISO-9660 光盘文件系统**（扇区 16 `CD001` 主卷描述符与目录树），解析 `/PSP_GAME/PARAM.SFO` 与 `USRDIR` 脚本，在 `.cn.iso` 对应 LBA 扇区区间内原位定长写回，PPSSPP 与实机直读 |
+| `15` | `pc98` | **NEC PC-98** (`.hdi/.fdi/.nhd`) | 纯标准库解析 FAT12 / FAT16 磁盘镜像，内置 524KB **`anex86.bmp` 汉化字库底板**，把 CP932 缺字动态映射至 JIS 第二水准冷僻汉字格并自动修正 16 位汇编 `LODSW` 双字节偶对齐，输出镜像副本 + 定制 `anex86.bmp` |
+| `18` | `kirikiri` | **Kirikiri 2 / Z（吉里吉里）** | 纯标准库解包与打包 `.xp3` 归档（支持 zlib 压缩索引与加密滤镜鉴别），回写 `.ks` 统一采用 **UTF-16LE with BOM (`0xFF 0xFE`)** 生成 `patch.xp3`，无需转区或注入 DLL 直接原生渲染简体中文 |
+| `20` | `tyrano` | **TyranoScript / TyranoBuilder** | 覆盖散装目录、`zip-in-exe` 尾部追加包、以及现代 **Electron `resources/app.asar`**（Chromium Pickle 头解析与 SHA-256 完整性重算） |
+| `20` | `renpy` | **Ren'Py** (`.rpy` / `.rpa` v2 & v3) | 解包 `RPA-2.0 / RPA-3.0` 归档，生成非侵入式 `game/tl/chinese/` 官方多语言挂载脚本 |
+| `21` | `rpgmaker_2k` | **RPG Maker 2000 / 2003** | 解析 LCF BER 变长块结构，只抽取 `RPG_RT.ldb` 玩家可见块（`11..15, 17, 18, 21, 25`）与 `Map*.lmu` 事件块（`81`），硬跳过图块矩阵与开关变量名，定长原地写回 |
+| `22` | `rpgmaker_ace` | **RPG Maker XP / VX / VX Ace** | 纯标准库解包 `RGSSADv1 / v3`（`.rgssad / .rgss2a / .rgss3a`），原生反序列化与重打包 Ruby Marshal 4.8（`.rxdata / .rvdata / .rvdata2`） |
+| `25` | `rpgmaker` | **RPG Maker MV / MZ** | 按文件 + JSON Pointer + 事件指令码（`401/405/102/320/324/325`）三重精确定位 `data/*.json` 与 `www/data/*.json`，不碰 `plugins.js` 与代码行 |
+| `27` | `godot` | **Godot Engine 3.x / 4.x** | 纯标准库解析并重建 `GDPC` v1 / v2 `.pck` 资源包（含 Godot 4 相对 `file_base` 与 MD5 重算），抽取并回写 `.tscn` 场景节点文本属性 |
+| `28` | `unity` | **Unity Engine** | 原生解析 `Managed/Assembly-CSharp.dll` 的 ECMA-335 `BSJB` 元数据根与 `#US`（User Strings）UTF-16LE 字符串流及 `StreamingAssets` 词表；原地更新并自动生成 **XUnity.AutoTranslator** 静态预翻译包 `BepInEx/Translation/zh/Text/_PreTranslated.txt` |
+| `30` | `gamemaker` | **GameMaker Studio** | 解析并重建 IFF `FORM` 容器（`data.win / game.unx / game.ios`）的 `STRG` 字符串池与外部 CSV/JSON 词表 |
+| `35` | `i18n_table` | **通用 i18n 词表** | 支持跨引擎标准 GNU Gettext `.po`（含多行拼接）、`locales/*.json`、`i18n/*.csv` 抽取与原地写回 |
+| `40` | `hsp` | **Hot Soup Processor (HSP)** | 解包 `DPMX` / `#HSP3` 字节码字符串池，配合按需编译的 GDI 替身 DLL 在渲染层实时拦截替换 |
+| `90` | `rawbin` | **未知复古 / 同人引擎裸二进制兜底** | 扫描 `.exe / .dat / .bin / .mes / .scn` 中的 Shift-JIS 剧情句与操作菜单，按原字节长度补齐定长覆写，不改任意指针偏移 |
 
-**`fontcheck` 是另一道更早的闸。** 有些游戏文本能改，但它自带的字库根本装不下中文，
-翻完进游戏是满屏方块 —— 这时前面所有步骤都是白干。摆渡会读字体文件的字形表，
-拿 GB2312 一级字（3755 个，覆盖日常文本 99% 以上）算覆盖率：
-
-| 字体 | 覆盖率 | 结论 |
-|---|---|---|
-| 思源黑体 / 微软雅黑 / 黑体 | 3755/3755（100%） | 可以显示中文 |
-| 日文字体（MS Gothic / Meiryo） | 约 71% | 每四个字缺一个，不能用 |
-| 西文字体（Arial / Consolas） | 0% | 完全不能显示 |
-
-日文字体只有 71% 这条最实用：它说明了「用日文汉字凑中文」为什么走不通 ——
-缺的不是生僻字，是「的/是/了」这类**每句都出现**的字。
-找不到独立字体文件时摆渡不会给绿灯：字体可能内嵌在资源包里，静态扫不到，
-这时它会明说「无法判断」，而不是假装通过。
-
-**有些游戏要先装个外部工具才能翻。** 这不是摆渡的依赖，是**那本游戏**的依赖 ——
-比如 HSP 引擎的游戏按 Shift-JIS 解码文本，直接写中文会显示成乱码，要编一个
-DLL 代理改掉它的编码转换，而那需要 C 编译器。摆渡的做法是：
-
-- 只在真需要时提 —— 依赖由适配器声明，不是一开程序就问你装不装编译器
-- 弹窗说清「为什么」和「多大」，**点了「下载」才联网**，绝不静默安装
-- 卸掉只要删目录，不写注册表、不改 PATH
-- 拒装不等于失败：界面会说「缺 X，这本暂时翻不了」，其它游戏完全不受影响
+### 通用游戏线命令行（`ferrygame` & `mc_ai_translator.py`）
 
 ```powershell
-py mc_ai_translator.py deps              # 看有哪些依赖、装了没
-py mc_ai_translator.py deps mingw32      # 只显示会做什么，不下载
-py mc_ai_translator.py deps mingw32 --install --yes   # 真装
+# 1. 独立通用游戏线 CLI（推荐）
+py -3 -m ferrygame probe "D:\Games\某游戏或镜像.iso"     # 0 Token 体检 + 导出 ferry_tl.json
+py -3 -m ferrygame recon "D:\Games\未知猎奇游戏"         # 字节侦查（香农熵 / PE 导入表 / 台词密度）
+py -3 -m ferrygame translate "D:\Games\某游戏"           # AI 翻译（更新 ferry_tl.json）
+py -3 -m ferrygame apply "D:\Games\某游戏"               # 0 Token 把 ferry_tl.json 写回游戏
+py -3 -m ferrygame run "D:\Games\某游戏"                 # 扫描 → 翻译 → 写回一条龙
+py -3 -m ferrygame revert "D:\Games\某游戏"              # 按 .ferry-undo.json 一键无损还原
+
+# 2. 原 CLI 入口同样支持
+py -3 mc_ai_translator.py localize "D:\Games\某游戏" --dry-run
+py -3 mc_ai_translator.py localize --list-adapters
+py -3 mc_ai_translator.py fontcheck "D:\Games\某游戏"
 ```
-
-产出永远是**副本**（`游戏名.cn.exe`），原游戏一个字节不动。同名副本已存在时自动改成
-`游戏名.cn2.exe`，**绝不覆盖** —— 上一份可能是你手工校对过的。
-
-当前只支持 **TyranoScript**（ティラノスクリプト，`.ks` 剧本），
-容器覆盖「zip 追加在 exe 尾部」和「解包目录」两种 —— 这两类占了大半 nw.js / Electron
-打包的日本同人游戏。加新引擎只往 `ferrycore/adapters/` 里加文件，不动主线代码
-（见 `docs/ARCHITECTURE.md` 第六节）。
-
-报告里会明确写出「翻不到的东西」：图片上的按钮文字、引擎自带的示例剧本、
-没有任何跳转能进到的死代码剧本。这些是结构性碰不到的，不是漏翻。
-
-> 实验性功能：命令与输出格式都可能变。主线（MC 汉化）不受它影响。
 
 ## 配置与密钥
 
@@ -354,6 +345,29 @@ py mc_ai_translator.py config --init   # 生成默认配置
 - 列宽可拖，排序不重置宽度，窗口大小位置会记住。
 
 ## 更新日志
+
+**v2.0.0-alpha.2（早期测试版）**
+
+- **主流引擎全面扩编**：
+  - **Kirikiri 2 / Z（吉里吉里）**：纯标准库解析并重建 `.xp3` 归档，剧本统一以 `UTF-16LE with BOM` 写出 `patch.xp3`，免转区、免 DLL 代理直出简体中文。
+  - **Electron `app.asar` 容器**：实现 Chromium Pickle 头解析与 SHA-256 完整性重算，现代打包进 `resources/app.asar` 的 TyranoBuilder 与 Web 独立游戏开箱即用。
+  - **RPG Maker 2000 / 2003**：实现 LCF BER 变长块隔离，只抽 `.ldb` 玩家可见块与 `.lmu` 事件块（81），彻底隔离地图图块矩阵与内部变量名。
+  - **Godot Engine 3.x / 4.x**：实现 `GDPC` v1 / v2 `.pck` 解包与重建（含 MD5 重算与相对 `file_base`），支持 `.tscn` 场景文本属性抽取与回写。
+  - **Unity Engine**：直接解析 `.NET` `Assembly-CSharp.dll` 的 `BSJB` 元数据根与 `#US`（User Strings）UTF-16LE 流及 `StreamingAssets` 词表，原地更新并自动生成 **XUnity.AutoTranslator** `_PreTranslated.txt` 预翻译包。
+  - **通用 i18n 词表**：新增 GNU Gettext `.po`（含多行拼接）、`locales/*.json`、`i18n/*.csv` 通用适配器。
+- **移动端与掌机平台极限适配**：
+  - **Android `.apk`**：支持 `res/values*/strings.xml`、`assets/` 内嵌游戏剧本与 **`classes.dex` 字符串池定长原位覆写**（写回自动重算 DEX 头部 SHA-1 签名与 Adler32 校验和），重打包 `.cn.apk` 自动保持 `resources.arsc` 为 `ZIP_STORED` 并剥除失效旧签名块。
+  - **iOS `.ipa` / `Payload/*.app`**：同时支持明文与 **`bplist00` 二进制 `.strings`** 无损读写，重打包 `.cn.ipa` 严格保留 Mach-O `0755` 可执行权限位。
+  - **PS Vita `.vpk` / `sce_sys`**：解析 Sony `param.sfo`（`\x00PSF`）提取 `TITLE` 与 `TITLE_ID`，支持明文与裸二进制混合抽取，输出 `.cn.vpk` 或实机/Vita3K **`rePatch/<TITLE_ID>/`** 挂载补丁目录。
+  - **PSP `.iso` / `PSP_GAME`**：纯标准库实现 **ISO-9660 光盘文件系统解析**，定位 `/PSP_GAME/PARAM.SFO` 与 `USRDIR` 脚本 LBA 扇区并在 `.cn.iso` 内完成扇区原位覆写。
+- 全仓自动化回归测试从 105 项扩充至 **295 项全绿**。
+
+**v2.0.0-alpha.1（早期测试版）**
+
+- **双轨工作台重构**：正式拆分 `ferrycore/`（MC 模组线）与 `ferrygame/`（通用游戏线），重构 `ProjectFerry.pyw` 界面为双轨工作台。
+- **NEC PC-98 磁盘镜像（`.hdi / .fdi / .nhd`）全自动汉化闭环**：纯标准库解析 FAT12/16 镜像，内置 524,350 字节 `anex86.bmp` 字库底板，实现 JIS 第二水准字模欺骗与 16 位汇编 `LODSW` 双字节偶对齐，并在实机模拟器跑通《上九一色村物语》。
+- **未知引擎裸二进制适配器（`rawbin`）与字节侦查台（`recon`）**：支持 Shift-JIS 长度前缀感知扫描、定长补齐原位覆写、香农熵分析与 PE 导入表替身 DLL 侦查。
+- **双语对照工程表 `ferry_tl.json`**：支持控制符铁律掩码、剧本滚动上下文、字节预算超长自动重试、以及手工编辑 `ferry_tl.json` 后 **0 Token 重刷写回**。
 
 **v1.9.0-beta（预发布）**
 
@@ -405,14 +419,14 @@ py mc_ai_translator.py config --init   # 生成默认配置
 
 ## 开发 / 测试
 
-- Python 3.11+，只用标准库（`tomllib`、tkinter 等），**无第三方依赖**。
-- 跑测试：
+- Python 3.11+，只用标准库（`tomllib`、`plistlib`、`zlib`、`struct`、tkinter 等），**无第三方依赖**。
+- 跑全量测试（当前 **295 项全绿**）：
 
 ```powershell
-python -m unittest -v test_spec_p0 test_refine
+py -3 -m unittest test_refine test_spec_p0 test_gui_p0 test_ftb_localizer test_localize test_fontcheck test_deps test_gamemaker test_hsp test_rpa_renpy test_rpgmaker_ace test_localized_resume test_ferrygame
 ```
 
-- CI 在 `.github/workflows/tests.yml`，push / PR 时于 Python 3.11、3.12 上跑上述测试（当前 105 项全绿）。
+- CI 在 `.github/workflows/tests.yml`，push / PR 时于 Python 3.11、3.12 上跑上述测试。
 - 桥接模组在 `bridge/`，1.20.1 Forge，`.github/workflows/bridge.yml` 构建它。
 - 本地构建桥：`cd bridge && ./build.sh`（离线优先，缓存缺件会自动联网补一次；新机器先跑 `bash tools/prefetch-forge-deps.sh` 生成 `.forge-prefetch/m2`）。产物在 `bridge/build/libs/ferrybridge-1.0.0.jar`。
 - **代码结构**见 `docs/ARCHITECTURE.md`：`mc_ai_translator.py` 是 58 行薄壳，实现在 `ferrycore/` 的 19 个模块，依赖单向分层。动代码前先读该文档，尤其「`mock.patch.object(core, "X")` 跨模块会静默失效」一节。

@@ -190,8 +190,9 @@ class UndoLog:
         temp.replace(path)  # 原子替换，避免写一半留下坏 JSON
         self._saved = True
 
-    def finish(self) -> None:
+    def finish(self) -> Path:
         self.save()
+        return self.root / UNDO_NAME
 
     def _append(self, action: Action) -> None:
         self.actions.append(action)

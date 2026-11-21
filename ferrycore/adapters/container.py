@@ -17,7 +17,9 @@ Tyrano 今天用的是「zip-in-exe」，以后 Ren'Py 用「散装 + .rpy」，
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import struct
 import zipfile
 from dataclasses import dataclass, field
@@ -244,7 +246,139 @@ class ZipInExe(Container):
         return out
 
 
+def parse_asar(blob: bytes) -> tuple[dict, int, dict[str, tuple[int, int]]]:
+    """解析 Electron `app.asar`（Chromium Pickle 头 + JSON 目录树）。
+
+    返回 (header_dict, data_base_offset, {相对路径: (绝对字节偏移, 字节长度)})。
+    """
+    if len(blob) < 16:
+        raise ValueError("asar 文件过短")
+    pickle_hdr, header_size, _, json_len = struct.unpack_from("<IIII", blob, 0)
+    if pickle_hdr != 4 or 16 + json_len > len(blob):
+        raise ValueError("不是合法的 Electron asar 归档")
+    data_base = 8 + header_size
+    tree = json.loads(blob[16 : 16 + json_len].decode("utf-8"))
+    index: dict[str, tuple[int, int]] = {}
+
+    def walk(node: dict, prefix: str = "") -> None:
+        files = node.get("files")
+        if not isinstance(files, dict):
+            return
+        for name, child in files.items():
+            if not isinstance(child, dict):
+                continue
+            rel = f"{prefix}/{name}" if prefix else name
+            if "files" in child:
+                walk(child, rel)
+            elif "offset" in child and "size" in child and not child.get("unpacked"):
+                off = data_base + int(child["offset"])
+                sz = int(child["size"])
+                if 0 <= off and off + sz <= len(blob):
+                    index[rel] = (off, sz)
+
+    walk(tree)
+    return tree, data_base, index
+
+
+def rebuild_asar(blob: bytes, replacements: dict[str, bytes]) -> bytes:
+    """按原结构重建 `app.asar`，只替换 `replacements` 里的文件并重算偏移与完整性哈希。"""
+    tree, _base, index = parse_asar(blob)
+    payload_chunks: list[bytes] = []
+    cursor = 0
+
+    def rewrite(node: dict, prefix: str = "") -> None:
+        nonlocal cursor
+        files = node.get("files")
+        if not isinstance(files, dict):
+            return
+        for name, child in files.items():
+            if not isinstance(child, dict):
+                continue
+            rel = f"{prefix}/{name}" if prefix else name
+            if "files" in child:
+                rewrite(child, rel)
+            elif "offset" in child and "size" in child and not child.get("unpacked"):
+                if rel in replacements:
+                    data = replacements[rel]
+                else:
+                    off, sz = index[rel]
+                    data = blob[off : off + sz]
+                child["offset"] = str(cursor)
+                child["size"] = len(data)
+                if "integrity" in child and isinstance(child["integrity"], dict):
+                    block_size = int(child["integrity"].get("blockSize") or (4 * 1024 * 1024))
+                    child["integrity"]["hash"] = hashlib.sha256(data).hexdigest()
+                    child["integrity"]["blocks"] = [
+                        hashlib.sha256(data[i : i + block_size]).hexdigest()
+                        for i in range(0, max(1, len(data)), block_size)
+                    ]
+                payload_chunks.append(data)
+                cursor += len(data)
+
+    rewrite(tree)
+    raw_json = json.dumps(tree, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    json_len = len(raw_json)
+    aligned_json_len = (json_len + 3) & ~3
+    padding = b"\x00" * (aligned_json_len - json_len)
+    header_size = aligned_json_len + 8
+    header = struct.pack("<IIII", 4, header_size, aligned_json_len + 4, json_len) + raw_json + padding
+    return header + b"".join(payload_chunks)
+
+
+def find_asar(root: Path) -> Path | None:
+    root = Path(root)
+    if root.is_file() and root.suffix.lower() == ".asar":
+        return root
+    if not root.is_dir():
+        return None
+    for rel in ("resources/app.asar", "app.asar", "www/app.asar"):
+        c = root / rel
+        if c.is_file() and not c.name.lower().endswith(".cn.asar"):
+            return c
+    return None
+
+
+class AsarContainer(Container):
+    """Electron `app.asar` 容器：大量现代 TyranoBuilder v5/v6、RPG Maker MZ、Web 独立游戏用它打包。"""
+
+    kind = "asar"
+
+    def __init__(self, root: Path, source: Path) -> None:
+        super().__init__(root, source)
+        self._blob = source.read_bytes()
+        _, _, self._index = parse_asar(self._blob)
+
+    def list_files(self, suffixes: tuple[str, ...]) -> list[str]:
+        lows = tuple(s.lower() for s in suffixes)
+        return sorted(name for name in self._index if name.lower().endswith(lows))
+
+    def read_bytes(self, name: str) -> bytes:
+        if name in self._pending:
+            return self._pending[name]
+        off, sz = self._index[name]
+        return self._blob[off : off + sz]
+
+    def commit(self, out: Path) -> Path:
+        import shutil
+
+        rebuilt = rebuild_asar(self._blob, self._pending)
+        if out.suffix.lower() == ".asar":
+            out.write_bytes(rebuilt)
+            return out
+        if out.exists():
+            raise FileExistsError(f"副本目录已存在：{out}")
+        shutil.copytree(self.root, out)
+        rel = self.source.relative_to(self.root)
+        (out / rel).write_bytes(rebuilt)
+        return out
+
+
 def _decode(raw: bytes) -> str:
+    if raw.startswith(b"\xff\xfe"):
+        try:
+            return raw.decode("utf-16")
+        except UnicodeDecodeError:
+            pass
     for encoding in ("utf-8-sig", "utf-8", "cp932"):
         try:
             return raw.decode(encoding)
@@ -256,7 +390,7 @@ def _decode(raw: bytes) -> str:
 def open_container(root: Path) -> Container | None:
     """自动判断这个游戏的数据装在哪儿。
 
-    **exe 优先于目录**，这条是有实测依据的：nw.js/Chromium 41 的游戏旁边就算
+    **exe / asar 优先于散装目录**，这条是有实测依据的：nw.js/Chromium 41 的游戏旁边就算
     躺着一份解包好的 `package.nw/`，引擎照样读内嵌 zip。反过来若先认目录，
     会改一份游戏根本不读的文件，然后报告「已汉化」——玩家打开还是日文。
     这种「改了但没生效」比报错难查得多。
@@ -272,6 +406,14 @@ def open_container(root: Path) -> Container | None:
         container = ZipInExe(root, candidate, span)
         if container.list_files((".ks",)):
             return container
+    asar_path = find_asar(root)
+    if asar_path is not None:
+        try:
+            container = AsarContainer(root, asar_path)
+            if container.list_files((".ks",)):
+                return container
+        except Exception:
+            pass
     if any(root.rglob("*.ks")):
         return FolderGame(root, root)
     return None
