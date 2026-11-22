@@ -799,7 +799,39 @@ footer {
 }
 
 .status-brand {
-  flex: 1 1 260px;
+  flex: 1 1 240px;
+}
+
+.status-counter {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hit-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #000;
+  white-space: nowrap;
+}
+
+.hit-sep {
+  color: var(--shadow);
+}
+
+.hit-lcd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: #001408;
+  color: #52ff78;
+  border: 2px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px 0 var(--dark);
+  font: 700 13px/1.15 Consolas, "Courier New", monospace;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 3px rgba(82, 255, 120, 0.45);
 }
 
 footer p {
@@ -2613,6 +2645,11 @@ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH RE
         <div class="banner88" aria-hidden="true"><span>✧</span><b>摆渡计划<small>FERRY POST</small></b></div>
         <p>渡口通信 · 汉化工具收藏室<br><small>Where words fail, we ferry.</small></p>
       </div>
+      <div class="status-cell status-counter" id="visit-counter" aria-live="polite" title="本站访客人数与总访问量统计">
+        <span class="hit-item">访客 <b id="visit-uv" class="hit-lcd">------</b> 人</span>
+        <span class="hit-sep" aria-hidden="true">|</span>
+        <span class="hit-item">访问 <b id="visit-pv" class="hit-lcd">------</b> 次</span>
+      </div>
       <div class="status-cell footlinks">
         <button id="fx-switch" type="button" hidden>特效</button>
         <a class="win-btn win-btn-sm" href="#top">返回页首 ↑</a>
@@ -3670,6 +3707,77 @@ if (typeof module !== 'undefined' && module.exports) module.exports = FerryCatal
     const statusEl = $('#catalog-status');
     if (statusEl) statusEl.textContent = '暂未完成同步，显示随盘存档';
   });
+
+  // --- Retro Win9x Visitor Counter (Vercount JSON API, zero third-party script) ---
+  async function loadVisitCounter() {
+    const uvEl = $('#visit-uv');
+    const pvEl = $('#visit-pv');
+    const box = $('#visit-counter');
+    if (!uvEl || !pvEl) return;
+
+    const CACHE_KEY = 'ferry-visit-cache-v1';
+    const SEEN_KEY = 'ferry-uv-seen-v1';
+    const fmt = n => String(Math.max(0, Math.floor(Number(n) || 0))).padStart(6, '0');
+    const render = (uv, pv) => {
+      uvEl.textContent = fmt(uv);
+      pvEl.textContent = fmt(pv);
+      if (box) box.title = `累计访客 ${Math.floor(uv).toLocaleString()} 人 · 总访问 ${Math.floor(pv).toLocaleString()} 次`;
+    };
+
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      if (cached && Number.isFinite(cached.uv) && Number.isFinite(cached.pv)) {
+        render(cached.uv, cached.pv);
+      }
+    } catch {}
+
+    if (/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname)) return;
+
+    let isNewUv = true;
+    try { isNewUv = !localStorage.getItem(SEEN_KEY); } catch {}
+
+    const payload = JSON.stringify({
+      url: `${location.origin}${location.pathname}`,
+      isNewUv
+    });
+    const endpoints = [
+      'https://cn.vercount.one/api/v2/log',
+      'https://events.vercount.one/api/v2/log'
+    ];
+
+    for (const ep of endpoints) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const res = await fetch(ep, {
+          method: 'POST',
+          credentials: 'omit',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: payload
+        });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const data = json?.data || json;
+        const uv = Number(data?.site_uv);
+        const pv = Number(data?.site_pv);
+        if (Number.isFinite(uv) && Number.isFinite(pv)) {
+          const safeUv = Math.max(uv, pv > 0 ? 1 : 0);
+          render(safeUv, pv);
+          try {
+            localStorage.setItem(SEEN_KEY, '1');
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ uv: safeUv, pv }));
+          } catch {}
+          return;
+        }
+      } catch {
+        // try next endpoint
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+  loadVisitCounter();
 
   if ('IntersectionObserver' in window) {
     const seen = new IntersectionObserver(entries => {
