@@ -1,44 +1,344 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#233e53"><meta name="description" content="红现实的摆渡计划发布所。下载游戏汉化工作台，翻阅历代版本，到渡口揭示板留言。"><title>摆渡计划｜渡口通信 · 汉化工具发布所</title><link rel="icon" href="./ferry-icon.png"><link rel="stylesheet" href="./src/depot.css"></head>
-<body id="top"><a class="skip" href="#downloads">跳至下载</a><div class="wrap">
-<header><a href="#top" class="wordmark"><span class="sail" aria-hidden="true">◈</span> 渡口通信 <small>FERRY POST</small></a><nav aria-label="站内目录"><a href="#downloads">下载</a><a href="#archive">版本链</a><a href="#forum">揭示板</a><a href="https://github.com/RedRea1ity/ProjectFerry">仓库 ↗</a></nav></header>
-<main><section class="cover" aria-labelledby="title"><img class="cover-art" src="./ferry-last-boat-l10n.webp" alt="暮色中的渡口，身穿水色大外套的校对员递出译稿"><span class="cover-scanlines" aria-hidden="true"></span><button class="disc-trigger" type="button" disabled aria-label="播放光盘隐藏音轨" aria-haspopup="dialog" aria-controls="bonus-track" title="双击光盘 · 播放隐藏音轨"><img draggable="false" class="cover-disc" src="./ferry-chibi-disc.webp" width="512" height="512" alt="收藏 CD 盘面：戴 L10N 方形发卡、穿水色宽袖外套的 Q 版校对员"></button><div class="cover-type"><span class="issue"><i></i> 汉化工具收藏盘 <b>/</b> 双轨特刊</span><p class="kana" lang="ja">渡し場だより</p><h1 id="title">摆渡计划</h1><div class="latin">Project Ferry<span>✧</span></div><p class="motto">人无语言则茫然无依，故为摆渡。</p></div><a class="cover-caption" href="#art">画集 02 / 末班渡船</a></section>
-<div class="strip"><span><i aria-hidden="true"></i> 站务广播</span><p>人工汉化优先。没有人翻的地方，摆渡先顶一班。</p></div>
-<section class="disc-deck" aria-labelledby="deck-title" id="player">
-  <div class="deck-library"><h2 id="deck-title"><small aria-hidden="true">FERRY / CD-01</small>渡口随身听</h2><label for="deck-list">曲目</label>
-    <select id="deck-list"><option value="./media/weather-night.mp3">The Greatest Bits — Wii Weather Forecast Channel (Night) (Instrumental)</option></select>
-    <button id="deck-add" type="button" hidden>＋ 添加本地音乐</button><input id="deck-files" type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.aac,.opus" multiple hidden>
-  </div>
-  <audio id="deck-audio" aria-label="随身听播放控制" controls preload="none" src="./media/weather-night.mp3"></audio>
-  <small id="deck-message" role="status"></small>
-</section>
-<!-- Transport icons adapted from Lucide 0.468.0, ISC License.
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#008080">
+  <meta name="description" content="红现实的摆渡计划发布所。下载游戏汉化工作台，翻阅历代版本，到渡口揭示板留言。">
+  <title>摆渡计划｜渡口通信 · 汉化工具发布所</title>
+  <link rel="icon" href="./ferry-icon.png">
+  <link rel="stylesheet" href="./src/depot.css">
+</head>
+<body id="top">
+  <a class="skip" href="#downloads">跳至下载</a>
+  <div class="wrap">
+    <div class="titlebar">
+      <div class="titlebar-left">
+        <span class="title-icon" aria-hidden="true"></span>
+        <span class="title-text">渡口通信 - 摆渡计划发布所 [FERRY POST]</span>
+      </div>
+      <div class="win-btns" aria-hidden="true">
+        <span class="win-cap">_</span>
+        <span class="win-cap">□</span>
+        <span class="win-cap">×</span>
+      </div>
+    </div>
+
+    <header>
+      <a href="#top" class="wordmark">
+        <span class="sail" aria-hidden="true">◈</span> 渡口通信 <small>FERRY POST</small>
+      </a>
+      <nav aria-label="站内目录">
+        <a href="#player">随身听(<u>M</u>)</a>
+        <a href="#downloads">下载(<u>D</u>)</a>
+        <a href="#archive">版本链(<u>V</u>)</a>
+        <a href="#forum">揭示板(<u>B</u>)</a>
+        <a href="https://github.com/RedRea1ity/ProjectFerry">仓库(<u>G</u>) ↗</a>
+      </nav>
+    </header>
+
+    <main>
+      <div class="cover-frame">
+        <section class="cover" aria-labelledby="title">
+          <img class="cover-art" src="./ferry-last-boat-l10n.webp" alt="暮色中的渡口，身穿水色大外套的校对员递出译稿">
+          <span class="cover-scanlines" aria-hidden="true"></span>
+          <button class="disc-trigger" type="button" disabled aria-label="播放光盘隐藏音轨" aria-haspopup="dialog" aria-controls="bonus-track" title="双击光盘 · 播放隐藏音轨">
+            <img draggable="false" class="cover-disc" src="./ferry-chibi-disc.webp" width="512" height="512" alt="收藏 CD 盘面：戴 L10N 方形发卡、穿水色宽袖外套的 Q 版校对员">
+          </button>
+          <div class="cover-type">
+            <span class="issue"><i></i> 汉化工具收藏盘 <b>/</b> 双轨特刊</span>
+            <p class="kana" lang="ja">渡し場だより</p>
+            <h1 id="title">摆渡计划</h1>
+            <div class="latin">Project Ferry<span>✧</span></div>
+            <p class="motto">人无语言则茫然无依，故为摆渡。</p>
+          </div>
+        </section>
+      </div>
+
+      <div class="strip">
+        <span class="strip-label"><i aria-hidden="true"></i> 站务广播</span>
+        <div class="ticker" role="region" aria-label="真实版本更新滚动广播">
+          <div id="broadcast-track" class="ticker-track"><!-- broadcast-items --></div>
+        </div>
+      </div>
+
+      <section class="disc-deck" aria-labelledby="deck-title" id="player">
+        <div class="deck-library">
+          <h2 id="deck-title"><small aria-hidden="true">FERRY / CD-01</small>渡口随身听</h2>
+          <label for="deck-list">曲目</label>
+          <select id="deck-list">
+            <option value="./media/weather-night.mp3">The Greatest Bits — Wii Weather Forecast Channel (Night) (Instrumental)</option>
+          </select>
+          <button id="deck-add" type="button" hidden>＋ 添加本地音乐</button>
+          <input id="deck-files" type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.aac,.opus" multiple hidden>
+        </div>
+        <audio id="deck-audio" aria-label="随身听播放控制" controls preload="none" src="./media/weather-night.mp3"></audio>
+        <small id="deck-message" role="status"></small>
+      </section>
+
+      <!-- Transport icons adapted from Lucide 0.468.0, ISC License.
 Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
 Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. -->
-<template id="transport-template">
-  <div class="transport" role="group">
-    <button class="transport-key play-key" type="button" aria-label="播放" title="播放"><svg aria-hidden="true" viewBox="0 0 24 24"><polygon class="start-icon" points="6 3 20 12 6 21 6 3"/><g class="pause-icon"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></g></svg></button>
-    <span class="deck-lcd" aria-hidden="true">00:00</span>
-    <input class="deck-range seek" type="range" min="0" max="0" step="1" value="0" aria-label="播放进度" title="播放进度" disabled>
-    <button class="transport-key mute-key" type="button" aria-label="静音" title="静音" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path fill="currentColor" d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path class="waves" d="M16 9a5 5 0 0 1 0 6 M19.364 18.364a9 9 0 0 0 0-12.728"/><path class="cross" d="M22 9l-6 6m0-6 6 6"/></svg></button>
-    <input class="deck-range volume" type="range" min="0" max="100" value="55" aria-label="音量" title="音量">
+      <template id="transport-template">
+        <div class="transport" role="group">
+          <button class="transport-key play-key" type="button" aria-label="播放" title="播放">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <polygon class="start-icon" points="6 3 20 12 6 21 6 3"/>
+              <g class="pause-icon"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></g>
+            </svg>
+          </button>
+          <span class="deck-lcd" aria-hidden="true">00:00</span>
+          <input class="deck-range seek" type="range" min="0" max="0" step="1" value="0" aria-label="播放进度" title="播放进度" disabled>
+          <button class="transport-key mute-key" type="button" aria-label="静音" title="静音" aria-pressed="false">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path fill="currentColor" d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/>
+              <path class="waves" d="M16 9a5 5 0 0 1 0 6 M19.364 18.364a9 9 0 0 0 0-12.728"/>
+              <path class="cross" d="M22 9l-6 6m0-6 6 6"/>
+            </svg>
+          </button>
+          <input class="deck-range volume" type="range" min="0" max="100" value="55" aria-label="音量" title="音量">
+        </div>
+      </template>
+
+      <section class="band download" id="downloads" aria-labelledby="dl-title">
+        <div class="section-name">
+          <span class="chapter">A 面 <i>/</i> 01</span>
+          <h2 id="dl-title">资源下载</h2>
+          <div class="dashes"></div>
+        </div>
+        <div class="download-grid" id="release-head"><!-- release-head --></div>
+      </section>
+
+      <div class="notes">
+        <section class="band" aria-labelledby="readme">
+          <div class="section-name">
+            <span class="chapter">A 面 <i>/</i> 02</span>
+            <h2 id="readme">开盘须知</h2>
+          </div>
+          <ol class="tracks">
+            <li>
+              <b>01</b>
+              <div>
+                <strong>通用游戏汉化</strong>
+                <p>选游戏目录或镜像，先看能不能读、能不能写回。支持的格式可导出双语表，人工校对后重刷，不再消耗翻译额度。</p>
+              </div>
+            </li>
+            <li>
+              <b>02</b>
+              <div>
+                <strong>Minecraft 模组汉化</strong>
+                <p>扫描整合包的中文缺口，译文单独写进资源包。已有人工汉化优先，桥接模组另行下载。</p>
+              </div>
+            </li>
+            <li>
+              <b>03</b>
+              <div>
+                <strong>动手之前先留原档</strong>
+                <p>早期测试版的适配程度因游戏而异。先在副本上体检和试写，尤其是老游戏、掌机与移动端镜像。</p>
+              </div>
+            </li>
+          </ol>
+        </section>
+
+        <section class="band notebook" id="notebook" aria-labelledby="dev-title">
+          <div class="section-name">
+            <span class="chapter">盘内 <i>/</i> README</span>
+            <h2 id="dev-title">随盘手记</h2>
+          </div>
+          <h3>从方块世界，到旧游戏。</h3>
+          <p>2.0 把 Minecraft 和通用游戏分成两条工作线。吉里吉里、RPG Maker、Godot，以至 PC-98 磁盘镜像，都有了各自的读写路径。Android 和掌机是可处理的游戏格式，不是本工具的安装平台。</p>
+          <details class="screen">
+            <summary>翻开工作台截图</summary>
+            <div class="screen-well">
+              <img width="920" height="555" loading="lazy" src="./workbench.png" alt="双轨工作台，左侧可选择游戏汉化、模组汉化和翻译引擎">
+            </div>
+          </details>
+          <details class="excerpt">
+            <summary>本版 README 更新摘录</summary>
+            <div id="readme-notes"><!-- readme-notes --></div>
+          </details>
+          <a class="doclink" href="https://github.com/RedRea1ity/ProjectFerry#readme">读完整说明书 ↗</a>
+        </section>
+      </div>
+
+      <section class="band archive" id="archive" aria-labelledby="arc-title">
+        <div class="section-name">
+          <span class="chapter">B 面 <i>/</i> 01</span>
+          <h2 id="arc-title">版本更新链</h2>
+          <div class="dashes"></div>
+        </div>
+        <div class="archive-intro">
+          <p>按入库时间倒序排列，时间为北京时间。</p>
+          <div id="filters" class="filters" hidden role="group" aria-label="筛选版本">
+            <button type="button" data-pick="all" aria-pressed="true">全部</button>
+            <button type="button" data-pick="app" aria-pressed="false">工作台</button>
+            <button type="button" data-pick="bridge" aria-pressed="false">桥接模组</button>
+          </div>
+        </div>
+        <div class="listview-well">
+          <ol id="chain" class="chain"><!-- release-chain --></ol>
+          <p id="archive-empty" hidden>这条线上还没有公开发行。</p>
+        </div>
+        <p class="sync-status">
+          <span id="catalog-status" role="status">随盘目录 · <!-- snapshot-date --></span> ·
+          <a href="https://github.com/RedRea1ity/ProjectFerry/releases">仓库发行总表 ↗</a>
+        </p>
+      </section>
+
+      <section class="band forum" id="forum" aria-labelledby="bbs-title">
+        <div class="section-name">
+          <span class="chapter">B 面 <i>/</i> 02</span>
+          <h2 id="bbs-title">渡口揭示板</h2>
+          <div class="dashes"></div>
+        </div>
+
+        <div class="bbs-shell">
+          <div class="boardbar">
+            <span class="boardbar-title">码头留言 / 渡口 BBS（GitHub Issues 镜像）</span>
+            <div class="boardbar-actions">
+              <button type="button" id="bbs-refresh" class="win-btn win-btn-sm">刷新</button>
+              <button type="button" id="bbs-new-btn" class="win-btn win-btn-sm">＋ 发新帖</button>
+              <a class="win-btn win-btn-sm" href="https://github.com/RedRea1ity/ProjectFerry/issues/new" target="_blank" rel="noopener">GitHub 发帖 ↗</a>
+            </div>
+          </div>
+
+          <div id="bbs-userbar" class="bbs-userbar" aria-live="polite">
+            <div class="bbs-user-card">
+              <span class="avatar-box avatar-guest" aria-hidden="true">?</span>
+              <div class="bbs-user-meta">
+                <strong>游客（未登录 GitHub）</strong>
+                <small>登录 GitHub 进行 Issue 反馈后，讨论串与回帖栏将显示你的 GitHub 头像与用户名。</small>
+              </div>
+            </div>
+            <div class="bbs-user-ops">
+              <button type="button" id="bbs-login-btn" class="win-btn">登录 GitHub…</button>
+            </div>
+          </div>
+
+          <div id="new-topic-box" class="new-topic-box" hidden>
+            <div class="post-row post-compose">
+              <div class="post-author" id="new-topic-author"></div>
+              <form id="new-topic-form" class="post-main">
+                <div class="post-head">
+                  <strong>发表新主题 / Issue 反馈</strong>
+                  <span class="post-floor">NEW</span>
+                </div>
+                <label class="win-field">
+                  <span>标题：</span>
+                  <input type="text" id="new-topic-title" maxlength="140" required placeholder="例如：[v2.0.0-alpha.5] 某游戏打包反馈 / 建议">
+                </label>
+                <label class="win-field">
+                  <span>正文：</span>
+                  <textarea id="new-topic-body" rows="4" required placeholder="请描述版本、游戏引擎或复现步骤…"></textarea>
+                </label>
+                <div class="compose-actions">
+                  <button type="submit" id="new-topic-submit" class="win-btn win-btn-primary">发表主题</button>
+                  <button type="button" id="new-topic-cancel" class="win-btn">取消</button>
+                  <span id="new-topic-status" class="compose-status" role="status"></span>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div id="threads" class="threads-well"></div>
+
+          <div class="boardfoot">
+            <p id="forum-state" role="status">请前往 GitHub Issues 阅读主题或回复。</p>
+            <div class="boardlinks">
+              <a href="https://github.com/RedRea1ity/ProjectFerry/issues?q=is%3Aissue">查看全部帖子 ↗</a>
+              <span>发帖与回复同步至 GitHub Issues</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="status-cell status-brand">
+        <div class="banner88" aria-hidden="true"><span>✧</span><b>摆渡计划<small>FERRY POST</small></b></div>
+        <p>渡口通信 · 汉化工具收藏室<br><small>Where words fail, we ferry.</small></p>
+      </div>
+      <div class="status-cell footlinks">
+        <button id="fx-switch" type="button" hidden>特效</button>
+        <a class="win-btn win-btn-sm" href="#top">返回页首 ↑</a>
+      </div>
+      <div class="status-cell byline">本站及项目作者：<strong>红现实</strong></div>
+    </footer>
+
+    <dialog id="bonus-track" class="win-dialog" aria-labelledby="bonus-title">
+      <header class="bonus-bar titlebar">
+        <div class="titlebar-left">
+          <span class="title-icon" aria-hidden="true"></span>
+          <h2 id="bonus-title" class="title-text">隐藏音轨 - CD BONUS</h2>
+        </div>
+        <form method="dialog"><button type="submit" class="win-cap-btn" aria-label="关闭隐藏音轨" autofocus>×</button></form>
+      </header>
+      <div class="bonus-body">
+        <div class="bonus-screen">
+          <img src="./bonus-point.webp" width="330" height="299" alt="第一张表情包：戴护目镜的角色指向屏幕">
+          <img src="./bonus-phone.webp" width="1080" height="718" alt="第二张表情包：戴贝雷帽的角色坐在水里举起手机，下方配着一行吐槽" hidden>
+        </div>
+        <div class="bonus-strip">
+          <span class="bonus-count" role="status">01 / 03</span>
+          <button type="button" class="bonus-next win-btn win-btn-sm">下一轨 ▸</button>
+        </div>
+        <div class="bonus-audio">
+          <label for="bonus-audio">揽佬 SKAI ISYOURGOD · 戒色</label>
+          <audio id="bonus-audio" aria-label="彩蛋背景音乐" controls loop preload="none" src="./media/bonus-jiese.mp3"></audio>
+          <small id="bonus-audio-status" role="status"></small>
+        </div>
+        <p class="bonus-letter" hidden>红现实的收件箱<br><a href="mailto:zetadarkdragon@gmail.com">zetadarkdragon@gmail.com</a></p>
+      </div>
+    </dialog>
+
+    <dialog id="gh-login-dialog" class="win-dialog" aria-labelledby="gh-dlg-title">
+      <div class="titlebar">
+        <div class="titlebar-left">
+          <span class="title-icon" aria-hidden="true"></span>
+          <span id="gh-dlg-title" class="title-text">登录 GitHub - 渡口揭示板</span>
+        </div>
+        <button type="button" id="gh-dlg-close" class="win-cap-btn" aria-label="关闭">×</button>
+      </div>
+      <div class="win-dialog-body">
+        <p class="dlg-intro">绑定你的 GitHub 账号后，揭示板与讨论串回帖区会像传统论坛一样显示你的 <strong>GitHub 头像与用户名</strong>。</p>
+        <div class="dlg-tabs" role="tablist" aria-label="登录方式">
+          <button type="button" role="tab" id="tab-handle" data-mode="handle" aria-selected="true">快捷绑定（GitHub 用户名）</button>
+          <button type="button" role="tab" id="tab-token" data-mode="token" aria-selected="false">令牌直发（GitHub Token）</button>
+        </div>
+
+        <form id="gh-handle-form" class="dlg-panel" data-panel="handle">
+          <label class="win-field">
+            <span>GitHub 用户名：</span>
+            <input type="text" id="gh-handle-input" autocomplete="username" placeholder="例如 RedRea1ity" required>
+          </label>
+          <p class="dlg-hint">无需密钥。将从 GitHub 公开接口拉取你的真实头像与用户名；发表反馈或回复时会自动填充内容并跳转到 GitHub 完成提交。</p>
+          <div class="dlg-actions">
+            <button type="submit" class="win-btn win-btn-primary">读取头像并登录</button>
+            <a class="win-btn" href="https://github.com/login" target="_blank" rel="noopener">前往 GitHub 登录 ↗</a>
+          </div>
+        </form>
+
+        <form id="gh-token-form" class="dlg-panel" data-panel="token" hidden>
+          <label class="win-field">
+            <span>GitHub Token（PAT）：</span>
+            <input type="password" id="gh-token-input" autocomplete="off" placeholder="ghp_... 或 github_pat_..." required>
+          </label>
+          <label class="dlg-check">
+            <input type="checkbox" id="gh-token-session" checked>
+            <span>仅保存在当前标签页会话（关闭浏览器自动清除，推荐）</span>
+          </label>
+          <p class="dlg-hint">令牌仅在本地浏览器直连 <code>api.github.com</code>，不会发送给任何第三方；支持在本页直接发新 Issue 与楼层回复。需要 <code>public_repo</code> 或 Issues 写权限。</p>
+          <div class="dlg-actions">
+            <button type="submit" class="win-btn win-btn-primary">验证并启用站内直发</button>
+            <a class="win-btn" href="https://github.com/settings/tokens/new?scopes=public_repo&description=ProjectFerry-BBS" target="_blank" rel="noopener">创建 Token ↗</a>
+          </div>
+        </form>
+
+        <p id="gh-dlg-status" class="dlg-status" role="status"></p>
+      </div>
+    </dialog>
   </div>
-</template>
-<section class="band download" id="downloads" aria-labelledby="dl-title"><div class="section-name"><span class="chapter">A 面 <i>/</i> 01</span><h2 id="dl-title">资源下载</h2><div class="dashes"></div></div><div class="download-grid" id="release-head"><!-- release-head --></div></section>
-<div class="notes"><section class="band" aria-labelledby="readme"><div class="section-name"><span class="chapter">A 面 <i>/</i> 02</span><h2 id="readme">开盘须知</h2></div><ol class="tracks"><li><b>01</b><div><strong>通用游戏汉化</strong><p>选游戏目录或镜像，先看能不能读、能不能写回。支持的格式可导出双语表，人工校对后重刷，不再消耗翻译额度。</p></div></li><li><b>02</b><div><strong>Minecraft 模组汉化</strong><p>扫描整合包的中文缺口，译文单独写进资源包。已有人工汉化优先，桥接模组另行下载。</p></div></li><li><b>03</b><div><strong>动手之前先留原档</strong><p>早期测试版的适配程度因游戏而异。先在副本上体检和试写，尤其是老游戏、掌机与移动端镜像。</p></div></li></ol></section>
-<section class="band notebook" id="notebook" aria-labelledby="dev-title"><div class="section-name"><span class="chapter">盘内 <i>/</i> README</span><h2 id="dev-title">随盘手记</h2></div><h3>从方块世界，到旧游戏。</h3><p>2.0 把 Minecraft 和通用游戏分成两条工作线。吉里吉里、RPG Maker、Godot，以至 PC-98 磁盘镜像，都有了各自的读写路径。Android 和掌机是可处理的游戏格式，不是本工具的安装平台。</p><details class="screen"><summary>翻开工作台截图</summary><img width="920" height="555" loading="lazy" src="./workbench.png" alt="双轨工作台，左侧可选择游戏汉化、模组汉化和翻译引擎"></details><details class="excerpt"><summary>本版 README 更新摘录</summary><div id="readme-notes"><!-- readme-notes --></div></details><a class="doclink" href="https://github.com/RedRea1ity/ProjectFerry#readme">读完整说明书 ↗</a></section></div>
-<section class="band art" id="art" aria-labelledby="art-title"><div class="section-name"><span class="chapter">附录 <i>/</i> CG</span><h2 id="art-title">渡口相册</h2><div class="dashes"></div></div>
-<div class="frames"><figure><img width="1024" height="1024" loading="lazy" src="./ferry-portrait-l10n.webp" alt="校对员的全身立绘，银蓝长发上别着 L10N 水绿色方形发卡，穿水色超大宽袖外套，手持木桨和校样"><figcaption><span>01 / 渡口的校对员</span><button type="button" hidden data-zoom aria-label="放大立绘：渡口的校对员">放大</button></figcaption></figure><figure><img width="1024" height="1024" loading="lazy" src="./ferry-last-boat-l10n.webp" alt="渡船泊在岸边，校对员从售票亭的木窗递出校样，夕光照在水色大衣和 L10N 发卡上"><figcaption><span>02 / 末班渡船</span><button type="button" hidden data-zoom aria-label="放大场景：末班渡船">放大</button></figcaption></figure></div>
-<dialog id="art-view" aria-labelledby="art-caption"><div><strong id="art-caption"></strong><form method="dialog"><button autofocus aria-label="关闭大图">关闭 ×</button></form></div><img alt=""></dialog></section>
-<section class="band archive" id="archive" aria-labelledby="arc-title"><div class="section-name"><span class="chapter">B 面 <i>/</i> 01</span><h2 id="arc-title">版本更新链</h2><div class="dashes"></div></div><div class="archive-intro"><p>按入库时间倒序排列，时间为北京时间。</p><div id="filters" class="filters" hidden role="group" aria-label="筛选版本"><button type="button" data-pick="all" aria-pressed="true">全部</button><button type="button" data-pick="app" aria-pressed="false">工作台</button><button type="button" data-pick="bridge" aria-pressed="false">桥接模组</button></div></div><ol id="chain" class="chain"><!-- release-chain --></ol><p id="archive-empty" hidden>这条线上还没有公开发行。</p><p class="sync-status"><span id="catalog-status" role="status">随盘目录 · <!-- snapshot-date --></span> · <a href="https://github.com/RedRea1ity/ProjectFerry/releases">仓库发行总表 ↗</a></p></section>
-<section class="band forum" id="forum" aria-labelledby="bbs-title"><div class="section-name"><span class="chapter">B 面 <i>/</i> 02</span><h2 id="bbs-title">渡口揭示板</h2><div class="dashes"></div></div><div class="boardbar"><span>码头留言 / BBS</span><a href="https://github.com/RedRea1ity/ProjectFerry/issues/new">＋ 发新帖 ↗</a></div><div id="threads"></div><p id="forum-state" role="status">请前往 GitHub Issues 阅读主题或回复。</p><div class="boardlinks"><a href="https://github.com/RedRea1ity/ProjectFerry/issues?q=is%3Aissue">查看全部帖子 ↗</a><span>发帖与回复使用 GitHub 账号</span></div></section></main>
-<footer><div class="banner88" aria-hidden="true"><span>✧</span><b>摆渡计划<small>FERRY POST</small></b></div><p>渡口通信 · 汉化工具收藏室<br><small>Where words fail, we ferry.</small></p><div class="footlinks"><button id="fx-switch" type="button" hidden>特效</button><a href="#top">返回页首 ↑</a></div><div class="byline">本站及项目作者：<strong>红现实</strong></div></footer>
-<dialog id="bonus-track" aria-labelledby="bonus-title">
-  <header class="bonus-bar"><h2 id="bonus-title">隐藏音轨</h2><form method="dialog"><button type="submit" aria-label="关闭隐藏音轨" autofocus>×</button></form></header>
-  <div class="bonus-screen"><img src="./bonus-point.webp" width="330" height="299" alt="第一张表情包：戴护目镜的角色指向屏幕"><img src="./bonus-phone.webp" width="1080" height="718" alt="第二张表情包：戴贝雷帽的角色坐在水里举起手机，下方配着一行吐槽" hidden></div>
-  <div class="bonus-strip"><span class="bonus-count" role="status">01 / 03</span><button type="button" class="bonus-next">下一轨 ▸</button></div>
-  <div class="bonus-audio"><label for="bonus-audio">揽佬 SKAI ISYOURGOD · 戒色</label><audio id="bonus-audio" aria-label="彩蛋背景音乐" controls loop preload="none" src="./media/bonus-jiese.mp3"></audio><small id="bonus-audio-status" role="status"></small></div>
-  <p class="bonus-letter" hidden>红现实的收件箱<br><a href="mailto:zetadarkdragon@gmail.com">zetadarkdragon@gmail.com</a></p>
-</dialog>
-</div><script type="module" src="./src/depot.js"></script></body></html>
+  <script type="module" src="./src/depot.js"></script>
+</body>
+</html>

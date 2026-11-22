@@ -1,40 +1,461 @@
-.cover{background:#d6e0ea}.cover-art{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 12%}.cover-type{pointer-events:none}.cover .kana,.cover .motto{color:#172e46;text-shadow:0 0 5px #fff,0 1px 2px #fff}.cover-caption{position:absolute;right:14px;bottom:12px;padding:5px 9px;color:white;background:#19374cdc;border:1px solid #cedadc;font:12px Tahoma,"Microsoft YaHei",sans-serif;text-decoration:none}.cover-caption:hover{background:#254d62;color:white}.art{border-top:1px solid #94a8b3;background:#f2f7f6}.frames{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:810px;margin:auto}.frames figure{margin:0;min-width:0;background:#d9e3e5;border:1px solid #738794;box-shadow:inset 1px 1px white;padding:4px}.frames img{display:block;width:100%;height:auto;aspect-ratio:1}.frames figcaption,#art-view>div{display:flex;align-items:center;justify-content:space-between;gap:6px;font:bold 13px Tahoma,"Microsoft YaHei",sans-serif;padding:6px 5px 2px;color:#284456}.frames button,#art-view button{padding:3px 8px;border:1px solid #758e97;background:#f6faf9;color:#234656;cursor:pointer}.frames button:hover,#art-view button:hover{color:#912b5b}.frames button[hidden]{display:none}#art-view{margin:auto;padding:4px;background:#dce8e8;border:1px solid #506b7c;max-width:96vw;max-height:95vh}#art-view>div{background:#294859;color:white;padding:4px 6px}#art-view img{display:block;width:auto;height:auto;max-width:calc(96vw - 12px);max-height:calc(94vh - 45px)}#art-view::backdrop{background:#102337c9}
-@media(max-width:560px){.cover{height:335px}.cover-art{object-position:center 18%}.cover-type{padding-top:172px}.cover .latin,.cover h1{filter:drop-shadow(0 1px 2px #fff)}.cover-caption{right:8px;bottom:7px;font-size:10px}.cover .motto{display:inline-block;background:#eff4efdc;padding:1px 5px}.frames{gap:8px}.frames figcaption{flex-wrap:wrap;font-size:12px;line-height:1.4}.frames button{min-height:30px}.frames figure{padding:3px}}
-.disc-trigger{position:absolute;z-index:2;top:14px;right:16px;width:clamp(112px,15%,178px);display:block;line-height:0;padding:0;border:0;border-radius:50%;background:transparent;cursor:pointer;touch-action:manipulation;user-select:none;-webkit-user-select:none}
-.cover-disc{display:block;width:100%;height:auto;pointer-events:none;filter:drop-shadow(1px 3px 3px #142e4869)}
-@media(max-width:560px){.disc-trigger{top:54px;left:15px;right:auto;width:100px}}
-.disc-trigger:focus-visible{outline:3px dashed #902555;outline-offset:2px}
-#bonus-track{margin:auto;width:min(450px,92vw);max-width:92vw;max-height:92vh;max-height:92dvh;overflow:auto;padding:4px;color:#203d50;background:#dce6e8;border:2px outset #e5eeee;font:14px Tahoma,"Microsoft YaHei",sans-serif;box-shadow:4px 4px 0 #10202b88}
-#bonus-track::backdrop{background:#152631aa}
-#bonus-track .bonus-bar{position:static;display:flex;align-items:center;justify-content:space-between;min-height:0;margin:0;padding:4px 5px 4px 10px;background:#29485c;color:#fff;border:0}
-.bonus-bar h2{margin:0;font:bold 15px/1.3 Tahoma,"Microsoft YaHei",sans-serif}.bonus-bar form{margin:0}
-#bonus-track button{font:inherit;cursor:pointer;border:2px outset #f4f8f8;background:#e4edef;color:#213849;padding:2px 7px;min-height:28px}.bonus-bar button{min-width:30px}
-.bonus-screen{margin:7px 3px 0;border:2px inset #e6eeee;background:#182c39;height:min(285px,41vh);display:grid;place-items:center}.bonus-screen img{display:block;width:100%;height:100%;min-height:0;object-fit:contain}.bonus-screen img[hidden],.bonus-letter[hidden]{display:none}
-.bonus-strip{display:flex;align-items:center;justify-content:space-between;padding:6px 4px 3px}.bonus-count{font:bold 12px Consolas,monospace;color:#3a5567}.bonus-letter{margin:3px;padding:8px 10px;border:1px dotted #829ba6;background:#f6f9f6;line-height:1.5}.bonus-letter a{color:#782755;overflow-wrap:anywhere}
-.cover-scanlines{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,transparent 0 2px,rgba(23,49,60,.14) 2px 3px)}
-.cover-caption{z-index:1}
-.disc-deck{display:grid;grid-template-columns:minmax(0,1fr) minmax(265px,36%);align-items:center;gap:5px 14px;padding:8px clamp(12px,3vw,36px);background:#dce6e8;border-block:1px solid;border-color:#f7fbf8 #92a7ae #879ca5;color:#234557;font:13px Tahoma,'Microsoft YaHei',sans-serif}
-.deck-library{display:flex;align-items:center;gap:8px;min-width:0}
-.deck-library h2{flex:none;margin:0;padding-right:8px;border-right:1px dotted #90a3a8;font:700 16px/1.2 SimSun,serif}
-.deck-library h2 small{display:block;font:700 9px/1.4 Consolas,monospace;color:#446069}
-.deck-library label{font-size:12px}
-.deck-library select{flex:1;min-width:0;background:#f1f5ea;color:#254448;border:1px solid;border-color:#809797 #f6fafa #f6fafa #809797;border-radius:0;padding:4px;font:inherit}
-.deck-library button,.transport .transport-key,#bonus-track .transport-key{border:1px solid;border-color:#fcffff #617784 #617784 #fcffff;border-radius:0;box-shadow:inset -1px -1px #b3c4c8;background:#e3ebed;color:#24475a;cursor:pointer}
-.deck-library button{padding:5px 7px;font:inherit;white-space:nowrap}
-.transport{min-width:0;display:grid;align-items:center;grid-template-columns:30px max-content minmax(28px,1fr) 28px minmax(30px,13%);gap:5px;padding:4px;background:#bccdd1;border:1px solid;border-color:#eff7f7 #899da5 #899da5 #eff7f7}
-.transport .transport-key,#bonus-track .transport-key{display:grid;place-items:center;padding:0;min-height:28px}
-.transport-key svg{display:block;width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
-.play-key svg{fill:currentColor}.play-key .pause-icon,.play-key.playing .start-icon,.mute-key .cross,.mute-key[aria-pressed=true] .waves{display:none}.play-key.playing .pause-icon,.mute-key[aria-pressed=true] .cross{display:inline}
-.transport .transport-key:active,#bonus-track .transport-key:active,.deck-library button:active{border-color:#617784 #fcffff #fcffff #617784;box-shadow:inset 1px 1px #94a8b1}
-.deck-lcd{display:block;padding:3px 5px;border:1px solid;border-color:#5d776d #e0ecde #e0ecde #5d776d;background:#c4d7b4;color:#284536;font:bold 15px/1 Consolas,'Courier New',monospace;font-variant-numeric:tabular-nums}
-.deck-range{appearance:none;width:100%;min-width:0;margin:0;height:28px;border:0;border-radius:0;background:transparent;cursor:pointer;--rail:#56726f;--knob:#e7eee9}
-.deck-range::-webkit-slider-runnable-track{height:5px;background:var(--rail);border:1px solid;border-color:#657a80 #f0f6f4 #f0f6f4 #657a80}
-.deck-range::-moz-range-track{height:3px;background:var(--rail);border:1px solid;border-color:#657a80 #f0f6f4 #f0f6f4 #657a80}
-.deck-range::-webkit-slider-thumb{appearance:none;width:10px;height:16px;margin-top:-6px;border:1px solid;border-color:white #526974 #526974 white;border-radius:0;background:var(--knob);box-shadow:inset -1px -1px #a7b9b9}
-.deck-range::-moz-range-thumb{width:8px;height:14px;border:1px solid;border-color:white #526974 #526974 white;border-radius:0;background:var(--knob);box-shadow:inset -1px -1px #a7b9b9}
-.deck-range:disabled{opacity:.65;cursor:default}.transport :focus-visible,.deck-library :focus-visible{outline:2px solid #8d315d;outline-offset:1px}
-.disc-deck audio,.bonus-audio audio{width:100%;min-width:0;height:36px}.disc-deck>small{grid-column:1/-1}.disc-deck>small:empty,.bonus-audio small:empty{display:none}
-.bonus-audio{margin:4px;display:grid;gap:4px;font-size:12px}.bonus-audio label{font-weight:bold;color:#31525e}
-@media(max-width:760px){.disc-deck{grid-template-columns:minmax(0,1fr);gap:6px}.deck-library label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.deck-library{gap:6px}.deck-library h2{padding-right:6px}.transport{grid-template-columns:32px max-content minmax(30px,1fr) 32px minmax(36px,15%)}}
-@media(pointer:coarse){.transport .transport-key,#bonus-track .transport-key,.deck-range{min-height:34px}.deck-library select,.deck-library button{min-height:32px}}
-@media(forced-colors:active){.deck-range{appearance:auto}.deck-range::-webkit-slider-thumb{appearance:auto}.cover-scanlines{display:none}}
+/* Cover CG Artwork & Double-Click Chibi CD Easter Egg */
+.cover {
+  background: #d6e0ea;
+}
+
+.cover-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 12%;
+}
+
+.cover-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    rgba(0, 24, 48, 0.14) 2px 3px
+  );
+}
+
+html:not(.fx-on) .cover-scanlines {
+  display: none;
+}
+
+.cover-type {
+  pointer-events: none;
+}
+
+.cover .kana,
+.cover .motto {
+  color: #0e2438;
+  text-shadow: 0 0 5px #ffffff, 0 1px 2px #ffffff;
+}
+
+.disc-trigger {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  right: 16px;
+  width: clamp(112px, 15%, 174px);
+  display: block;
+  line-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.cover-disc {
+  display: block;
+  width: 100%;
+  height: auto;
+  pointer-events: none;
+  filter: drop-shadow(2px 3px 3px rgba(0, 0, 0, 0.42));
+}
+
+.disc-trigger:hover .cover-disc {
+  filter: drop-shadow(2px 3px 5px rgba(0, 0, 128, 0.55));
+}
+
+.disc-trigger:focus-visible {
+  outline: 2px dotted #000000;
+  outline-offset: 3px;
+}
+
+/* Windows 9x CD Player Deck (渡口随身听) */
+.disc-deck {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(275px, 38%);
+  align-items: center;
+  gap: 8px 14px;
+  margin: 8px 10px 0;
+  padding: 8px 12px;
+  background: var(--face);
+  border: 2px solid;
+  border-color: var(--light) var(--dark) var(--dark) var(--light);
+  box-shadow: inset -1px -1px 0 var(--shadow), inset 1px 1px 0 var(--face-hi);
+  color: #000;
+  font: 12.5px Tahoma, "SimSun", "Microsoft YaHei", sans-serif;
+}
+
+.deck-library {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.deck-library h2 {
+  flex: none;
+  margin: 0;
+  padding-right: 10px;
+  border-right: 1px solid var(--shadow);
+  box-shadow: 1px 0 0 var(--light);
+  font: 700 15px/1.2 "SimSun", serif;
+  color: #000;
+}
+
+.deck-library h2 small {
+  display: block;
+  font: 700 9px/1.35 Consolas, monospace;
+  color: var(--win-blue);
+}
+
+.deck-library label {
+  font-size: 12px;
+  font-weight: 700;
+  flex: none;
+}
+
+.deck-library select {
+  flex: 1;
+  min-width: 0;
+  background: #ffffff;
+  color: #000000;
+  border: 2px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px 0 var(--dark);
+  border-radius: 0;
+  padding: 3px 5px;
+  font: 12px/1.35 Tahoma, "SimSun", "Microsoft YaHei", sans-serif;
+}
+
+.deck-library button,
+.transport .transport-key,
+#bonus-track .transport-key {
+  background: var(--face);
+  color: #000;
+  border: 2px solid;
+  border-color: var(--light) var(--dark) var(--dark) var(--light);
+  box-shadow: inset -1px -1px 0 var(--shadow), inset 1px 1px 0 var(--face-hi);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.deck-library button {
+  padding: 4px 8px;
+  font: 12px Tahoma, "SimSun", sans-serif;
+  white-space: nowrap;
+}
+
+.transport {
+  min-width: 0;
+  display: grid;
+  align-items: center;
+  grid-template-columns: 30px max-content minmax(34px, 1fr) 28px minmax(34px, 15%);
+  gap: 5px;
+  padding: 4px 5px;
+  background: var(--face);
+  border: 2px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px 0 var(--face-hi);
+}
+
+.transport .transport-key,
+#bonus-track .transport-key {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  min-height: 26px;
+}
+
+.transport-key svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.play-key svg {
+  fill: currentColor;
+}
+
+.play-key .pause-icon,
+.play-key.playing .start-icon,
+.mute-key .cross,
+.mute-key[aria-pressed="true"] .waves {
+  display: none;
+}
+
+.play-key.playing .pause-icon,
+.mute-key[aria-pressed="true"] .cross {
+  display: inline;
+}
+
+.transport .transport-key:active,
+#bonus-track .transport-key:active,
+.deck-library button:active {
+  border-color: var(--dark) var(--light) var(--light) var(--dark);
+  box-shadow: inset 1px 1px 0 var(--shadow);
+}
+
+.mute-key[aria-pressed="true"] {
+  background: repeating-conic-gradient(#ffffff 0 25%, #c0c0c0 0 50%) 0 0 / 2px 2px;
+  border-color: var(--dark) var(--light) var(--light) var(--dark);
+  box-shadow: inset 1px 1px 0 var(--shadow);
+}
+
+/* Classic Win98 CD Player Green-on-Black Digital LCD */
+.deck-lcd {
+  display: block;
+  padding: 4px 6px;
+  border: 2px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px 0 var(--dark);
+  background: #001408;
+  color: #52ff78;
+  font: 700 14px/1 Consolas, "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 3px rgba(82, 255, 120, 0.45);
+}
+
+/* Classic Win9x Trackbar Sliders */
+.deck-range {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  height: 26px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.deck-range::-webkit-slider-runnable-track {
+  height: 5px;
+  background: #ffffff;
+  border: 1px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px 0 var(--dark);
+}
+
+.deck-range::-moz-range-track {
+  height: 3px;
+  background: #ffffff;
+  border: 1px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+}
+
+.deck-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 11px;
+  height: 18px;
+  margin-top: -7px;
+  border: 2px solid;
+  border-color: var(--light) var(--dark) var(--dark) var(--light);
+  border-radius: 0;
+  background: var(--face);
+  box-shadow: inset -1px -1px 0 var(--shadow);
+}
+
+.deck-range::-moz-range-thumb {
+  width: 9px;
+  height: 16px;
+  border: 2px solid;
+  border-color: var(--light) var(--dark) var(--dark) var(--light);
+  border-radius: 0;
+  background: var(--face);
+  box-shadow: inset -1px -1px 0 var(--shadow);
+}
+
+.deck-range:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.disc-deck audio,
+.bonus-audio audio {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+}
+
+.disc-deck > small {
+  grid-column: 1 / -1;
+  color: var(--win-blue);
+  font-size: 12px;
+}
+
+.disc-deck > small:empty,
+.bonus-audio small:empty {
+  display: none;
+}
+
+/* Win9x Hidden Bonus Track Dialog */
+#bonus-track {
+  width: min(460px, 92vw);
+  max-width: 92vw;
+  max-height: 92vh;
+  max-height: 92dvh;
+  overflow: auto;
+}
+
+#bonus-track .bonus-bar {
+  position: static;
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+#bonus-track .bonus-bar h2 {
+  margin: 0;
+}
+
+#bonus-track .bonus-bar form {
+  margin: 0;
+}
+
+.bonus-body {
+  padding: 8px;
+}
+
+.bonus-screen {
+  border: 2px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px 0 var(--dark);
+  background: #000000;
+  height: min(285px, 41vh);
+  display: grid;
+  place-items: center;
+}
+
+.bonus-screen img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+}
+
+.bonus-screen img[hidden],
+.bonus-letter[hidden] {
+  display: none;
+}
+
+.bonus-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 2px 4px;
+}
+
+.bonus-count {
+  font: 700 12px Consolas, monospace;
+  color: var(--win-blue);
+}
+
+.bonus-audio {
+  margin-top: 4px;
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.bonus-audio label {
+  font-weight: 700;
+  color: #000;
+}
+
+.bonus-letter {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--tip);
+  border: 1px solid #8c8c68;
+  line-height: 1.55;
+  font-size: 12.5px;
+}
+
+.bonus-letter a {
+  color: var(--win-blue);
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+@media (max-width: 780px) {
+  .disc-deck {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .deck-library label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .deck-library {
+    gap: 6px;
+  }
+  .deck-library h2 {
+    padding-right: 8px;
+  }
+  .transport {
+    grid-template-columns: 32px max-content minmax(30px, 1fr) 32px minmax(36px, 15%);
+  }
+}
+
+@media (max-width: 560px) {
+  .cover {
+    height: 335px;
+  }
+  .cover-art {
+    object-position: center 18%;
+  }
+  .cover-type {
+    padding-top: 170px;
+  }
+  .cover .latin,
+  .cover h1 {
+    filter: drop-shadow(0 1px 2px #ffffff);
+  }
+  .disc-trigger {
+    top: 52px;
+    left: 14px;
+    right: auto;
+    width: 100px;
+  }
+  .disc-deck {
+    margin-left: 6px;
+    margin-right: 6px;
+    padding: 8px;
+  }
+}
+
+@media (pointer: coarse) {
+  .transport .transport-key,
+  #bonus-track .transport-key,
+  .deck-range {
+    min-height: 34px;
+  }
+  .deck-library select,
+  .deck-library button {
+    min-height: 32px;
+  }
+}
+
+@media (forced-colors: active) {
+  .deck-range {
+    appearance: auto;
+  }
+  .deck-range::-webkit-slider-thumb {
+    appearance: auto;
+  }
+  .cover-scanlines {
+    display: none;
+  }
+}
