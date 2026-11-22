@@ -775,6 +775,77 @@
     if (statusEl) statusEl.textContent = '暂未完成同步，显示随盘存档';
   });
 
+  // --- Retro Win9x Visitor Counter (Vercount JSON API, zero third-party script) ---
+  async function loadVisitCounter() {
+    const uvEl = $('#visit-uv');
+    const pvEl = $('#visit-pv');
+    const box = $('#visit-counter');
+    if (!uvEl || !pvEl) return;
+
+    const CACHE_KEY = 'ferry-visit-cache-v1';
+    const SEEN_KEY = 'ferry-uv-seen-v1';
+    const fmt = n => String(Math.max(0, Math.floor(Number(n) || 0))).padStart(6, '0');
+    const render = (uv, pv) => {
+      uvEl.textContent = fmt(uv);
+      pvEl.textContent = fmt(pv);
+      if (box) box.title = `累计访客 ${Math.floor(uv).toLocaleString()} 人 · 总访问 ${Math.floor(pv).toLocaleString()} 次`;
+    };
+
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      if (cached && Number.isFinite(cached.uv) && Number.isFinite(cached.pv)) {
+        render(cached.uv, cached.pv);
+      }
+    } catch {}
+
+    if (/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname)) return;
+
+    let isNewUv = true;
+    try { isNewUv = !localStorage.getItem(SEEN_KEY); } catch {}
+
+    const payload = JSON.stringify({
+      url: `${location.origin}${location.pathname}`,
+      isNewUv
+    });
+    const endpoints = [
+      'https://cn.vercount.one/api/v2/log',
+      'https://events.vercount.one/api/v2/log'
+    ];
+
+    for (const ep of endpoints) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const res = await fetch(ep, {
+          method: 'POST',
+          credentials: 'omit',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: payload
+        });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const data = json?.data || json;
+        const uv = Number(data?.site_uv);
+        const pv = Number(data?.site_pv);
+        if (Number.isFinite(uv) && Number.isFinite(pv)) {
+          const safeUv = Math.max(uv, pv > 0 ? 1 : 0);
+          render(safeUv, pv);
+          try {
+            localStorage.setItem(SEEN_KEY, '1');
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ uv: safeUv, pv }));
+          } catch {}
+          return;
+        }
+      } catch {
+        // try next endpoint
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+  loadVisitCounter();
+
   if ('IntersectionObserver' in window) {
     const seen = new IntersectionObserver(entries => {
       if (entries.some(e => e.isIntersecting)) {

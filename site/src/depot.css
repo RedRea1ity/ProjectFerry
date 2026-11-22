@@ -790,7 +790,39 @@ footer {
 }
 
 .status-brand {
-  flex: 1 1 260px;
+  flex: 1 1 240px;
+}
+
+.status-counter {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hit-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #000;
+  white-space: nowrap;
+}
+
+.hit-sep {
+  color: var(--shadow);
+}
+
+.hit-lcd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: #001408;
+  color: #52ff78;
+  border: 2px solid;
+  border-color: var(--shadow) var(--light) var(--light) var(--shadow);
+  box-shadow: inset 1px 1px 0 var(--dark);
+  font: 700 13px/1.15 Consolas, "Courier New", monospace;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 3px rgba(82, 255, 120, 0.45);
 }
 
 footer p {
