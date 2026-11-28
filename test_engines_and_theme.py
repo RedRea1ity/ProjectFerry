@@ -100,9 +100,8 @@ class RichTextAndLargeEngineTests(unittest.TestCase):
             self.assertEqual(json.loads(zh_file.read_text(encoding="utf-8")), zh_data)
 
     def test_unitypy_is_available_and_repacks_textasset_and_string_table(self):
-        self.assertTrue(ferryunity.HAS_UNITYPY, "UnityPy 应已安装就绪")
-
         # 构造模拟 UnityPy 环境，验证 TextAsset JSON 与 Localization StringTable 的提取与重打包路径
+        # （CI 跑纯标准库环境，不强依赖系统已安装第三方 UnityPy 包）
         fake_text_data = MagicMock()
         fake_text_data.m_Script = json.dumps({"title": "Start New Adventure"}, ensure_ascii=False)
         fake_text_obj = MagicMock()
@@ -120,10 +119,13 @@ class RichTextAndLargeEngineTests(unittest.TestCase):
         fake_env.objects = [fake_text_obj, fake_table_obj]
         fake_env.file.save.return_value = b"REPACKED_UNITY_ASSET_BYTES"
 
+        fake_unitypy = MagicMock()
+        fake_unitypy.load.return_value = fake_env
+
         with tempfile.TemporaryDirectory() as tmp:
             asset = Path(tmp) / "resources.assets"
             asset.write_bytes(b"\x00" * 128)
-            with patch.object(ferryunity.UnityPy, "load", return_value=fake_env):
+            with patch.object(ferryunity, "HAS_UNITYPY", True), patch.object(ferryunity, "UnityPy", fake_unitypy):
                 entries = ferryunity._extract_unitypy_entries(asset, "Game_Data/resources.assets", "Demo")
                 self.assertEqual({e.english for e in entries}, {"Start New Adventure", "Continue Saved Game"})
 
