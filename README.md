@@ -56,6 +56,11 @@
 <details>
 <summary>展开版本记录</summary>
 
+**v2.0.0-alpha.6.1（补丁更新 · 早期实验测试版）**
+
+- **新增 Leaf LVNS3 (`LEAFPACK`) 适配器（1997 原版《To Heart》等）**：支持直接流式读取 Alcohol 120% `.mdf/.mds` / `.iso` 光盘镜像（跳过 CD-DA 音轨）及本地安装目录，自动反推 11 字节密钥与 Leaf LZSS 压缩重建，保护 `{LV_FN}` / `{LV_LN}` 主角名占位符，并自动将简体中文新字通过 Windows GDI 渲染成 24×24 点阵写回 `KNJ_ALL.KNJ` 字库。
+- **修复大体积光盘镜像卡死/爆内存隐患**：拦截单文件 >64 MB 或光盘镜像后缀误入 `rawbin` 二进制盲扫，并将 7 个适配器 `probe()` 的整文件切片读改为只读文件头字节。
+
 **v2.0.0-alpha.6（早期实验测试版）**
 
 - **新增 Adventure Game Studio (AGS)、世嘉土星 (Saturn)、N64、PS1 / PS2 适配器**：支持 AGS `.tra` 译文包无损重建（含 UTF-8 扩展块、外置中文字体覆盖与 `ags36` 运行时按需下载），土星/PS1/PS2 光盘 `.chd`（按需 `chdman`）与 MODE1/MODE2 EDC/ECC 扇区回写，以及 N64 `.z64/.v64/.n64/.zip` 的 CIC 硬件 CRC 重算。

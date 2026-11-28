@@ -38,6 +38,8 @@ _MARKERS: list[tuple[str, tuple[str, ...]]] = [
     ("Flash / AIR", ("*.swf", "adobe air", "*.swc")),
     ("Adventure Game Studio (AGS)", ("acsetup.cfg", "*.tra", "ac2game.dta", "speech.vox", "music.vox")),
     ("Galgame 老引擎（SystemNNN / CatSystem）", ("*.pac", "cs2.exe", "system40.exe")),
+    ("Leaf Visual Novel System (LVNS / To Heart 等)", ("lvns3scn.pak", "lvns3dat.pak", "lvns3.ex", "lvns3.exe")),
+    ("PC 光盘镜像（Alcohol 120% / Nero / CloneCD，请先挂载或解包游戏目录）", ("*.mdf", "*.mds", "*.nrg", "*.ccd")),
     ("世嘉土星 Sega Saturn", ("ip.bin", "*.cue", "*.chd")),
     ("PlayStation 1 / PlayStation 2", ("system.cnf", "psx.exe", "*.cue", "*.chd")),
     ("任天堂 Nintendo 64", ("*.z64", "*.v64", "*.n64")),

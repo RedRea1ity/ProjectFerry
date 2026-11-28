@@ -151,7 +151,8 @@ class OnscripterAdapter(Adapter):
             p = root / name
             if p.is_file():
                 try:
-                    head = p.read_bytes()[:4096]
+                    with p.open("rb") as fh:
+                        head = fh.read(4096)
                 except OSError:
                     continue
                 if b"*define" in head.lower() or b"*start" in head.lower():

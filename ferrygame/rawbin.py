@@ -47,6 +47,13 @@ _MEDIA_SUFFIXES = {
     ".zip", ".7z", ".rar",
 }
 
+# 光盘 / 整机镜像不能直接走原始二进制盲扫：不仅动辄数百 MB ~ 数 GB（且往往夹带 CD-DA 音频轨），
+# 直接原地改字节也会破坏 ISO-9660 / EDC-ECC / 子通道结构。
+_DISC_IMAGE_SUFFIXES = {
+    ".mdf", ".mds", ".iso", ".img", ".nrg", ".cdi", ".ccd", ".sub",
+    ".chd", ".cue", ".cso", ".pbp", ".rvz", ".wbfs", ".gcm", ".xci", ".nsp",
+}
+
 _SKIP_DIRS = {
     ".git", "__pycache__", ".ferry-backup", "savedata", "save", "saves",
     "log", "logs", "cache", "temp", "node_modules",
@@ -580,9 +587,20 @@ def patch_blob(
 def candidate_files(root: Path, max_file_mb: int = 64) -> list[Path]:
     """挑出目录里可能藏着剧情和菜单的二进制/数据文件。"""
     root = Path(root)
-    if root.is_file():
-        return [root]
     limit = max_file_mb * 1024 * 1024
+    if root.is_file():
+        suf = root.suffix.lower()
+        if suf in _MEDIA_SUFFIXES or suf in _DISC_IMAGE_SUFFIXES:
+            return []
+        if suf == ".tbl" and is_thingy_tbl_file(root):
+            return []
+        try:
+            size = root.stat().st_size
+        except OSError:
+            return []
+        if size <= 16 or size > limit:
+            return []
+        return [root]
     out: list[Path] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -594,7 +612,7 @@ def candidate_files(root: Path, max_file_mb: int = 64) -> list[Path]:
         if low.endswith(".cn.exe") or low.startswith(".ferry") or low == "ferry_tl.json":
             continue
         suf = path.suffix.lower()
-        if suf in _MEDIA_SUFFIXES:
+        if suf in _MEDIA_SUFFIXES or suf in _DISC_IMAGE_SUFFIXES:
             continue
         if suf == ".tbl" and is_thingy_tbl_file(path):
             continue
@@ -647,7 +665,22 @@ class RawBinaryAdapter(Adapter):
         units = self.scan_units(root)
         if not units:
             notes = ["二进制盲扫未发现成规模的 Shift-JIS 剧情或菜单字符串"]
-            if src_tbl is not None:
+            if root.is_file():
+                suf = root.suffix.lower()
+                try:
+                    fsize = root.stat().st_size
+                except OSError:
+                    fsize = 0
+                if suf in _DISC_IMAGE_SUFFIXES:
+                    notes = [
+                        f"{root.name}（{fsize / 1048576:.1f} MB）是光盘/整机镜像，已拦截原始二进制盲扫以防内存溢出与破坏光盘结构；"
+                        "若是 PC 安装盘镜像（如 .mdf/.mds/.iso/.nrg），请先挂载或解包出游戏安装目录后再拖入。"
+                    ]
+                elif fsize > 64 * 1024 * 1024:
+                    notes = [
+                        f"{root.name}（{fsize / 1048576:.1f} MB）超过二进制盲扫 64 MB 安全上限，已跳过以防卡死。"
+                    ]
+            elif src_tbl is not None:
                 notes = [f"已加载外挂码表 {src_tbl.name}，但未在二进制文件中命中符合条件的字符串"]
             return ProbeReport(
                 engine="未知二进制 / 单 EXE",

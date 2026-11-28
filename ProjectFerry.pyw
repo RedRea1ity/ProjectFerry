@@ -25,7 +25,7 @@ ICON_FILE = Path(__file__).with_name("ferry_icon.png")
 
 APP_NAME = "ProjectFerry"
 APP_DISPLAY = "摆渡计划"
-APP_VERSION = "2.0.0-alpha.6"
+APP_VERSION = "2.0.0-alpha.6.1"
 APP_AUTHOR = "红现实"
 APP_LICENSE = "MIT License"
 APP_SLOGAN = "人无语言则茫然无依，故为摆渡。"
@@ -1898,9 +1898,9 @@ class FerryApp(tk_root_base(tk)):
         path = filedialog.askopenfilename(
             title="选择游戏镜像 / 安装包（.apk/.ipa/.vpk/.iso/.cso/.nds/.jar/.sis/.cod/.bar/.swf/.hdi/.dir）或单 EXE 游戏",
             filetypes=[
-                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.chd *.cue *.bin *.iso *.cso *.nds *.z64 *.v64 *.n64 *.tra *.apk *.ipa *.vpk *.jar *.sis *.sisx *.cod *.bar *.swf *.hdi *.fdi *.nhd *.dir *.dxr *.cst *.ald *.love *.xp3 *.pck *.pfs *.locres *.exe *.com *.dat"),
-                ("主机与掌机镜像 (.chd/.cue/.bin/.iso/.cso/.nds/.z64/.v64/.n64/.vpk)", "*.chd *.cue *.bin *.iso *.cso *.nds *.z64 *.v64 *.n64 *.vpk"),
-                ("移动端 / 功能机 / 复古与 AGS (.apk/.ipa/.jar/.sis/.swf/.hdi/.tra)", "*.apk *.ipa *.jar *.sis *.sisx *.cod *.bar *.swf *.dir *.dxr *.cst *.ald *.hdi *.fdi *.nhd *.tra"),
+                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.chd *.cue *.bin *.iso *.mdf *.mds *.cso *.nds *.z64 *.v64 *.n64 *.tra *.apk *.ipa *.vpk *.jar *.sis *.sisx *.cod *.bar *.swf *.hdi *.fdi *.nhd *.dir *.dxr *.cst *.ald *.love *.xp3 *.pck *.pfs *.pak *.locres *.exe *.com *.dat"),
+                ("主机与掌机镜像 (.chd/.cue/.bin/.iso/.mdf/.cso/.nds/.z64/.v64/.n64/.vpk)", "*.chd *.cue *.bin *.iso *.mdf *.mds *.cso *.nds *.z64 *.v64 *.n64 *.vpk"),
+                ("移动端 / 功能机 / 复古与 AGS (.apk/.ipa/.jar/.sis/.swf/.hdi/.tra/.pak)", "*.apk *.ipa *.jar *.sis *.sisx *.cod *.bar *.swf *.dir *.dxr *.cst *.ald *.hdi *.fdi *.nhd *.tra *.pak"),
                 ("所有文件", "*.*"),
             ],
             parent=self,
@@ -2117,8 +2117,8 @@ class FerryApp(tk_root_base(tk)):
         self._loc_status_var.set("字节侦查完成")
 
     _SINGLE_FILE_GAME_EXTS = {
-        ".chd", ".cue", ".bin", ".iso", ".cso", ".nds", ".z64", ".v64", ".n64",
-        ".vpk", ".apk", ".ipa", ".swf", ".hdi", ".fdi", ".nhd", ".tra",
+        ".chd", ".cue", ".bin", ".iso", ".mdf", ".mds", ".cso", ".nds", ".z64", ".v64", ".n64",
+        ".vpk", ".apk", ".ipa", ".swf", ".hdi", ".fdi", ".nhd", ".tra", ".pak",
     }
 
     def _loc_progress_busy(self, active: bool, *, fill_done: bool = False) -> None:

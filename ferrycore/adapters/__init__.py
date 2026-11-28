@@ -52,6 +52,15 @@ from .hsp import HspAdapter
 from .i18n_table import I18nTableAdapter
 from .j2me import J2meAdapter, extract_class_utf8_strings, rebuild_class_utf8_strings
 from .kirikiri import KirikiriAdapter
+from .leaf_lvns import (
+    LeafLvnsAdapter,
+    leaf_lzss_compress,
+    leaf_lzss_decompress,
+    open_iso_disc,
+    parse_leafpack,
+    rebuild_leafpack,
+    recover_leafpack_key,
+)
 from .love2d import Love2dAdapter
 from .mobile import (
     ApkAdapter,
@@ -129,6 +138,7 @@ _CORE_REGISTRY: list[type[Adapter]] = [
     Ps2Adapter,
     N64Adapter,
     FlashAdapter,
+    LeafLvnsAdapter,
     RetroWinAdapter,
     OnscripterAdapter,
     KirikiriAdapter,

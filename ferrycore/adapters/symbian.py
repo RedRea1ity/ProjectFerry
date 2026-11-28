@@ -363,7 +363,9 @@ class SymbianAdapter(Adapter):
                 )
         for p in candidates:
             try:
-                ok, _ = is_symbian_sis(p.read_bytes()[:32])
+                with p.open("rb") as fh:
+                    head32 = fh.read(32)
+                ok, _ = is_symbian_sis(head32)
                 if ok:
                     return p
             except OSError:

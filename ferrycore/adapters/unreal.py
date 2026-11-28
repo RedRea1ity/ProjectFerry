@@ -848,7 +848,8 @@ class UnrealAdapter(Adapter):
             if ".ferry-backup" in p.parts or not p.is_file():
                 continue
             try:
-                head = p.read_bytes()[:4096]
+                with p.open("rb") as fh:
+                    head = fh.read(4096)
                 if _is_datatable_uasset(head):
                     count += 1
             except OSError:

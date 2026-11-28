@@ -147,8 +147,11 @@ class RetroWinAdapter(Adapter):
             if ".cn" in p.stem.lower():
                 continue
             suf = p.suffix.lower()
+            if suf not in _DIRECTOR_SUFFIXES and suf not in (".ald", ".exe", ".dll"):
+                continue
             try:
-                head = p.read_bytes()[:65536]
+                with p.open("rb") as fh:
+                    head = fh.read(65536)
             except OSError:
                 continue
 

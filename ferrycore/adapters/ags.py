@@ -579,7 +579,8 @@ def inspect_ags_archive(root: Path) -> AgsArchiveInfo | None:
         low = root.name.lower()
         if low in ("ac2game.dta", "game28.dta"):
             try:
-                head = root.read_bytes()[:256]
+                with root.open("rb") as fh:
+                    head = fh.read(256)
             except OSError:
                 return None
             if head.startswith(DTA_MAGIC):
@@ -602,7 +603,8 @@ def inspect_ags_archive(root: Path) -> AgsArchiveInfo | None:
         dta_path = base / dta_name
         if dta_path.is_file():
             try:
-                head = dta_path.read_bytes()[:256]
+                with dta_path.open("rb") as fh:
+                    head = fh.read(256)
             except OSError:
                 continue
             if head.startswith(DTA_MAGIC):

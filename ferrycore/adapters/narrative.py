@@ -264,14 +264,16 @@ class NarrativeAdapter(Adapter):
                 result["trs"].append(p)
             elif low.endswith(".json"):
                 try:
-                    head = p.read_bytes()[:512]
+                    with p.open("rb") as fh:
+                        head = fh.read(512)
                 except OSError:
                     continue
                 if b'"inkVersion"' in head:
                     result["ink"].append(p)
             elif low.endswith((".html", ".htm")):
                 try:
-                    content = p.read_bytes()[:65536]
+                    with p.open("rb") as fh:
+                        content = fh.read(65536)
                 except OSError:
                     continue
                 if b"<tw-storydata" in content or b"<tw-passagedata" in content:

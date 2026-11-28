@@ -44,7 +44,8 @@ def is_blackberry_cod(path: Path) -> tuple[bool, str]:
     if path.suffix.lower() != ".cod" or not path.is_file():
         return False, ""
     try:
-        head = path.read_bytes()[:16]
+        with path.open("rb") as fh:
+            head = fh.read(16)
     except OSError:
         return False, ""
     if head.startswith(RIM_COD_MAGIC):
