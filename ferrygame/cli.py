@@ -19,8 +19,11 @@ from pathlib import Path
 from ferrycore.adapters.undo import revert as revert_game
 from ferrycore.config import load_config
 from ferrycore.engine import ENGINES_WITH_KEY, resolve_translate_settings
+from ferrycore.fontpatch import patch_game_font
+from ferrycore.patchpack import export_patch_pack
 
 from .pipeline import (
+    analyze_game,
     apply_project,
     get_adapter,
     registered_adapters,
@@ -210,9 +213,74 @@ def cmd_run(args: argparse.Namespace) -> int:
         out=out,
         dry_run=bool(args.dry_run),
         force=bool(args.force),
+        analyze=bool(getattr(args, "analyze", False)),
     )
     print(res.summary())
     return 0 if (res.probe.ready if args.dry_run else res.ok) else 1
+
+
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """第 0 步：轻量剧本预分析，自动产出可手改的 ferry_worldbook.json（世界观/人物/术语表）。"""
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+    settings = _resolve_settings(root, args)
+    if settings is None:
+        return 2
+    options = {"aes_key": args.aes_key} if getattr(args, "aes_key", None) else None
+    adapter = get_adapter(args.adapter, **(options or {})) if getattr(args, "adapter", None) else None
+    try:
+        wb, _proj, _probe = analyze_game(
+            root,
+            settings=settings,
+            adapter=adapter,
+            adapter_options=options,
+            force=bool(getattr(args, "force", False)),
+            save=True,
+        )
+    except Exception as exc:
+        print(f"剧本预分析失败：{exc}", file=sys.stderr)
+        return 1
+    print(f"剧本预分析完成：{wb.summary()}")
+    if wb.path:
+        print(f"设定集已落盘（可用记事本编辑微调）：{wb.path}")
+    for note in wb.notes:
+        print(f"  · {note}")
+    return 0
+
+
+def cmd_export_patch(args: argparse.Namespace) -> int:
+    """一键导出纯净可分享的汉化补丁 ZIP。"""
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+    out = Path(args.out) if getattr(args, "out", None) else None
+    report = export_patch_pack(root, out_zip=out, include_source=not bool(getattr(args, "no_source", False)))
+    print(report.summary())
+    for note in report.notes:
+        print(f"  · {note}")
+    return 0 if report.ok else 1
+
+
+def cmd_fontpatch(args: argparse.Namespace) -> int:
+    """一键为高频引擎注入中文字体回退。"""
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+    font_path = Path(args.font) if getattr(args, "font", None) else None
+    report = patch_game_font(
+        root,
+        engine=str(getattr(args, "engine", "auto") or "auto"),
+        font_path=font_path,
+        dry_run=bool(getattr(args, "dry_run", False)),
+    )
+    print(report.summary())
+    for note in report.notes:
+        print(f"  · {note}")
+    return 0 if report.ok else 1
 
 
 def cmd_revert(args: argparse.Namespace) -> int:
@@ -275,15 +343,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_ap.add_argument("--out", default=None)
     p_ap.set_defaults(func=cmd_apply)
 
+    p_an = sub.add_parser("analyze", help="第 0 步：轻量剧本预分析，自动产出可手改的 ferry_worldbook.json（世界观/人设/术语表）")
+    p_an.add_argument("game", nargs="?", default=".")
+    p_an.add_argument("--adapter", default=None)
+    p_an.add_argument("--aes-key", default=None, help="虚幻引擎加密 .pak 的 256 位 AES 密钥")
+    p_an.add_argument("--force", action="store_true", help="忽略已有设定集，重新生成")
+    _add_engine_args(p_an)
+    p_an.set_defaults(func=cmd_analyze)
+
     p_run = sub.add_parser("run", help="一步到位：scan → translate → apply（同时落盘 ferry_tl.json）")
     p_run.add_argument("game", nargs="?", default=".")
     p_run.add_argument("--list-adapters", action="store_true")
     p_run.add_argument("--adapter", default=None)
     p_run.add_argument("--dry-run", action="store_true")
     p_run.add_argument("--force", action="store_true")
+    p_run.add_argument("--analyze", action="store_true", help="翻译前先执行轻量剧本预分析生成 ferry_worldbook.json")
     p_run.add_argument("--out", default=None)
     _add_engine_args(p_run)
     p_run.set_defaults(func=cmd_run)
+
+    p_ep = sub.add_parser("export-patch", help="导出纯净可分享的汉化补丁 ZIP（含自动安装/还原脚本，不含原版游戏大文件）")
+    p_ep.add_argument("game", nargs="?", default=".")
+    p_ep.add_argument("--out", default=None)
+    p_ep.add_argument("--no-source", action="store_true", help="不附带 ferry_tl.json / ferry_tl.tsv 译文协作文件")
+    p_ep.set_defaults(func=cmd_export_patch)
+
+    p_fp = sub.add_parser("fontpatch", help="一键为高频引擎注入中文字体回退（支持撤销）")
+    p_fp.add_argument("game", nargs="?", default=".")
+    p_fp.add_argument("--engine", default="auto")
+    p_fp.add_argument("--font", default=None)
+    p_fp.add_argument("--dry-run", action="store_true")
+    p_fp.set_defaults(func=cmd_fontpatch)
 
     p_rev = sub.add_parser("revert", help="按 .ferry-undo.json 一键撤销汉化")
     p_rev.add_argument("game", nargs="?", default=".")

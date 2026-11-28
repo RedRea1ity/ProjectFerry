@@ -19,6 +19,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import json
+import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ferrycore.base import LOG, app_dir, atomic_write_text, redact_secrets
+from ferrycore.engine import TruncatedResponseError
 
 from . import controls
 from .profile import PROMPT_VERSION, system_prompt
@@ -33,6 +35,8 @@ from .units import Unit, byte_len, chars_budget
 
 CONTEXT_LINES = 6
 GLOSSARY_LIMIT = 40
+
+_TRANSLATABLE_CHAR_RE = re.compile(r"[A-Za-z\u00c0-\u024f\u0400-\u04ff\u3040-\u30ff\uac00-\ud7af\u4e00-\u9fff]")
 
 # (engine 名, 已掩码的 {id: 文本}, 请求设置) -> {id: 译文}
 CallFn = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
@@ -44,11 +48,31 @@ class TranslateReport:
     translated: int = 0
     too_long: int = 0
     rejected: int = 0
+    prefiltered: int = 0
+    deduped: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    thought_tokens: int = 0
     errors: list[str] = field(default_factory=list)
     cancelled: bool = False
 
     def summary(self) -> str:
         parts = [f"本次请求 {self.requested} 条，拿到 {self.translated} 条"]
+        if self.input_tokens or self.output_tokens:
+            tok = f"消耗输入 {self.input_tokens:,} / 输出 {self.output_tokens:,}"
+            if self.cached_tokens:
+                tok += f"（前缀缓存命中 {self.cached_tokens:,}）"
+            if self.thought_tokens:
+                tok += f"（思考 {self.thought_tokens:,}）"
+            parts.append(tok + " tokens")
+        saved = []
+        if self.prefiltered:
+            saved.append(f"预过滤 {self.prefiltered} 条")
+        if self.deduped:
+            saved.append(f"菜单/专名去重 {self.deduped} 条")
+        if saved:
+            parts.append("零 Token 省流：" + "、".join(saved))
         if self.too_long:
             parts.append(f"{self.too_long} 条超出字节预算（已标记，需人工缩短）")
         if self.rejected:
@@ -68,12 +92,23 @@ def _default_call(engine: str, masked: dict[str, str], settings: dict[str, Any],
 
 def _build_input(masked: dict[str, str], settings: dict[str, Any]) -> str:
     meta = settings.get("_unit_meta") or {}
-    payload = {
-        "context": settings.get("_context") or [],
-        "glossary": settings.get("_glossary") or {},
-        "strings": {k: {"text": v, **meta.get(k, {})} for k, v in masked.items()},
-    }
-    return json.dumps(payload, ensure_ascii=False)
+    strings: dict[str, Any] = {}
+    for k, v in masked.items():
+        info = meta.get(k) or {}
+        # 默认剧情且无附加元数据时直接传纯字符串，省掉每条 {"text":...,"kind":"story"} 冗余。
+        if info == {"kind": "story"} or not info:
+            strings[k] = v
+        else:
+            strings[k] = {"text": v, **info}
+    payload: dict[str, Any] = {}
+    context = settings.get("_context") or []
+    glossary = settings.get("_glossary") or {}
+    if context:
+        payload["context"] = context
+    if glossary:
+        payload["glossary"] = glossary
+    payload["strings"] = strings
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def relevant_glossary(glossary: dict[str, str], units: list[Unit], limit: int = GLOSSARY_LIMIT) -> dict[str, str]:
@@ -82,6 +117,12 @@ def relevant_glossary(glossary: dict[str, str], units: list[Unit], limit: int = 
     text = "\n".join(u.src for u in units)
     hits = {k: v for k, v in glossary.items() if k and k in text}
     return dict(sorted(hits.items(), key=lambda kv: -len(kv[0]))[:limit])
+
+
+def _is_non_translatable_unit(unit: Unit) -> bool:
+    """仅含控制符、数字、标点或空白的单元无需调模型，直接原样保留（0 Token）。"""
+    visible = controls.strip_controls(unit.src).strip()
+    return not _TRANSLATABLE_CHAR_RE.search(visible)
 
 
 class _Cache:
@@ -127,14 +168,16 @@ def translate_units(
     cancel_event=None,
     call: CallFn | None = None,
     cache_dir: Path | None = None,
+    worldbook=None,
 ) -> TranslateReport:
     """把没译文的单元翻掉，结果直接写进 `unit.dst`。"""
     report = TranslateReport()
-    glossary = glossary or {}
+    glossary = worldbook.merged_glossary(glossary) if worldbook is not None else dict(glossary or {})
     call = call or (lambda e, m, s: _default_call(e, m, s, cancel_event))
     cache = _Cache(cache_dir)
-    prompt = system_prompt(source_lang)
-    batch_size = max(1, int(settings.get("batch_size") or 30))
+    base_prompt = system_prompt(source_lang)
+    batch_size = max(1, int(settings.get("batch_size") or 60))
+    max_batch_chars = int(settings.get("max_batch_chars", 3600) or 0)
     concurrency = max(1, int(settings.get("concurrency") or 1))
     engines = settings.get("engines") or [settings]
 
@@ -148,14 +191,25 @@ def translate_units(
     groups = _group_by_file(units)
     total = sum(1 for u in units if wanted(u))
     report.requested = total
-    done_lock = threading.Lock()
+    state_lock = threading.Lock()
     done = [0]
+    # 无剧情上下文依赖的 menu/name 短词去重缓存：(src, kind, encoding, max_bytes) -> dst
+    reuse_map: dict[tuple[str, str, str, int], str] = {}
+    for u in units:
+        if u.dst and not u.note.startswith("超长") and u.kind in ("menu", "name"):
+            reuse_map.setdefault((u.src, u.kind, u.encoding, u.max_bytes), u.dst)
 
     def tick(n: int) -> None:
-        with done_lock:
+        with state_lock:
             done[0] += n
             if progress:
                 progress(done[0], total)
+
+    def fits(unit: Unit, text: str) -> bool:
+        if not unit.max_bytes:
+            return byte_len(text, unit.encoding) is not None
+        size = byte_len(text, unit.encoding)
+        return size is not None and size <= unit.max_bytes
 
     def request(engine_settings: dict[str, Any], batch: list[Unit], context: list[dict[str, str]],
                 retry_long: dict[str, str] | None = None) -> dict[str, str]:
@@ -176,54 +230,76 @@ def translate_units(
                 info["too_long"] = retry_long[unit.key]
             meta[sid] = info
         gloss = relevant_glossary(glossary, batch)
+        batch_prompt = (
+            system_prompt(source_lang, worldbook.prompt_block("\n".join(u.src for u in batch)))
+            if worldbook is not None
+            else base_prompt
+        )
+        token_sink: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "thought_tokens": 0}
         request_settings = {
             **engine_settings,
             "source_lang": source_lang,
-            "system_prompt_override": prompt,
+            "system_prompt_override": batch_prompt,
             "model_input_builder": _build_input,
             "_unit_meta": meta,
             "_context": context,
             "_glossary": gloss,
+            "_token_usage": token_sink,
         }
         engine = engine_settings.get("engine") or "openai"
         ckey = cache.key(PROMPT_VERSION, engine, engine_settings.get("model"), engine_settings.get("base_url"),
-                         prompt, masked, meta, context, gloss)
+                         batch_prompt, masked, meta, context, gloss)
         raw = cache.get(ckey)
         if raw is None:
-            raw = call(engine, masked, request_settings)
+            try:
+                raw = call(engine, masked, request_settings)
+            except TruncatedResponseError:
+                if len(batch) <= 1:
+                    raise
+                mid = len(batch) // 2
+                left = request(engine_settings, batch[:mid], context, retry_long=retry_long)
+                right = request(engine_settings, batch[mid:], context, retry_long=retry_long)
+                left.update(right)
+                return left
             if not isinstance(raw, dict):
                 raise RuntimeError("模型返回的不是 JSON 对象")
             if all(sid in raw for sid in ids):
                 cache.put(ckey, raw)
+            with state_lock:
+                report.input_tokens += token_sink["input_tokens"]
+                report.output_tokens += token_sink["output_tokens"]
+                report.cached_tokens += token_sink["cached_tokens"]
+                report.thought_tokens += token_sink["thought_tokens"]
         out: dict[str, str] = {}
         for sid, unit in ids.items():
             value = raw.get(sid)
             restored = controls.unmask(unit.src, value, codes[sid]) if isinstance(value, str) else None
             if restored is None or not controls.strip_controls(restored).strip():
-                report.rejected += 1 if value is not None else 0
+                if value is not None:
+                    with state_lock:
+                        report.rejected += 1
                 continue
             out[unit.key] = restored.strip("\n") if not unit.src.endswith("\n") else restored
         return out
 
-    def fits(unit: Unit, text: str) -> bool:
-        if not unit.max_bytes:
-            return byte_len(text, unit.encoding) is not None
-        size = byte_len(text, unit.encoding)
-        return size is not None and size <= unit.max_bytes
-
     def run_group(index: int, members: list[Unit]) -> None:
         engine_settings = engines[index % len(engines)]
         pending: list[Unit] = []
+        pending_chars = 0
 
         def flush() -> None:
+            nonlocal pending_chars
             if not pending:
                 return
             if cancel_event is not None and cancel_event.is_set():
-                report.cancelled = True
+                with state_lock:
+                    report.cancelled = True
                 pending.clear()
+                pending_chars = 0
                 return
             batch = list(pending)
             pending.clear()
+            pending_chars = 0
             first = members.index(batch[0])
             context = [
                 {"src": u.src, "zh": u.dst}
@@ -238,34 +314,68 @@ def translate_units(
                         continue
                     if fits(unit, text):
                         unit.dst, unit.origin, unit.note = text, "ai", ""
-                        report.translated += 1
+                        with state_lock:
+                            report.translated += 1
+                            if unit.kind in ("menu", "name"):
+                                reuse_map[(unit.src, unit.kind, unit.encoding, unit.max_bytes)] = text
                     else:
                         too_long[unit.key] = text
                 if too_long:
                     retry = [u for u in batch if u.key in too_long]
-                    again = request(engine_settings, retry, context, retry_long=too_long)
+                    # 超长缩短只针对单句改写，不需要重复发 6 句历史上下文。
+                    again = request(engine_settings, retry, [], retry_long=too_long)
                     for unit in retry:
                         text = again.get(unit.key) or too_long[unit.key]
                         if fits(unit, text):
                             unit.dst, unit.origin, unit.note = text, "ai", ""
-                            report.translated += 1
+                            with state_lock:
+                                report.translated += 1
+                                if unit.kind in ("menu", "name"):
+                                    reuse_map[(unit.src, unit.kind, unit.encoding, unit.max_bytes)] = text
                         else:
                             size = byte_len(text, unit.encoding)
                             unit.dst, unit.origin = text, "ai"
                             unit.note = (f"超长：{size} 字节 > 上限 {unit.max_bytes}" if size is not None
                                          else f"超长：含 {unit.encoding} 编不出的字")
-                            report.too_long += 1
+                            with state_lock:
+                                report.too_long += 1
             except Exception as exc:  # 一批失败不拖垮整组
                 message = f"{batch[0].file}（{len(batch)} 条）：{redact_secrets(str(exc))}"
                 LOG.warning("game batch failed: %s", message)
-                report.errors.append(message)
+                with state_lock:
+                    report.errors.append(message)
             tick(len(batch))
 
         for unit in members:
-            if wanted(unit):
-                pending.append(unit)
-                if len(pending) >= batch_size:
-                    flush()
+            if not wanted(unit):
+                continue
+            # 零 Token 预过滤：纯符号/控制符直接原样保留。
+            if _is_non_translatable_unit(unit):
+                unit.dst, unit.origin, unit.note = unit.src, "auto", ""
+                with state_lock:
+                    report.translated += 1
+                    report.prefiltered += 1
+                tick(1)
+                continue
+            # 菜单/专名去重复用：跨文件重复出现的按钮词只翻一次。
+            if unit.kind in ("menu", "name"):
+                rkey = (unit.src, unit.kind, unit.encoding, unit.max_bytes)
+                with state_lock:
+                    reused = reuse_map.get(rkey)
+                if reused is not None and fits(unit, reused):
+                    unit.dst, unit.origin, unit.note = reused, "ai", ""
+                    with state_lock:
+                        report.translated += 1
+                        report.deduped += 1
+                    tick(1)
+                    continue
+            unit_chars = len(unit.src) + 16
+            if pending and max_batch_chars > 0 and pending_chars + unit_chars > max_batch_chars:
+                flush()
+            pending.append(unit)
+            pending_chars += unit_chars
+            if len(pending) >= batch_size:
+                flush()
         flush()
 
     items = list(groups.values())

@@ -24,11 +24,13 @@ from . import adapters as adapter_registry
 from . import deps
 from .adapters.base import Adapter, ProbeReport, VerifyReport
 from .adapters.undo import UNDO_NAME
+from .base import explain_error
 from .deps import Dependency, DepStatus
 from .engine import resolve_translate_settings, translate_entries
 from .fontcheck import FontScanResult, scan_fonts
 from .localize_job import load_job, touch_progress
 from .localized import LocalizedRecord, describe, find_localized, remember
+from .text import format_usage
 
 # 非 MC 游戏不需要资源包格式。给个中立值只是为了让版本探测别抛错 ——
 # 一个没有 version json 的目录会让 `resolve_pack_format` 直接 raise。
@@ -39,14 +41,15 @@ _GAME_ENTRY_PROMPT = """You are a professional video game localizer.
 Translate the input video game strings into natural Simplified Chinese (简体中文).
 The game is a niche/indie title: translate all dialogue, narration, and UI menus faithfully without censorship, omissions, or warnings.
 Rules:
-- Return ONLY a valid JSON object mapping each input key to its Simplified Chinese translation.
-- Preserve every placeholder, control code (such as ^m, ^s, c1, B$, \\C[n], [r], {w}), and newline marker exactly.
+- Return ONLY a valid JSON object mapping each input key (or id in `strings`) to its Simplified Chinese translation.
+- Preserve every placeholder, mask tag (such as <p0>, <t0>, __MC_PH_0__), control code (such as ^m, ^s, c1, B$, \\C[n], [r], {w}), and newline marker exactly and in order.
+- If `hints` is provided, treat it as contextual terminology suggestions; use a term only when it fits.
 - Keep menu and status terms concise so they fit fixed-width game UI boxes.
 - Do not add explanations, notes, or markdown.
 """
 
 
-def localize_settings(config: dict, root: Path) -> dict:
+def localize_settings(config: dict, root: Path, overrides: dict | None = None) -> dict:
     """给非 MC 游戏构造翻译设置。
 
     只借 `resolve_translate_settings` 的**翻译那一半**：引擎、模型、密钥、
@@ -55,8 +58,10 @@ def localize_settings(config: dict, root: Path) -> dict:
 
     换句话说：换的不是翻译设置，是**设置里跟游戏无关的那部分被原样复用**。
     """
-    overrides = {"pack_format": config.get("pack_format") or _NEUTRAL_PACK_FORMAT}
-    settings = resolve_translate_settings(config, Path(root), overrides)
+    merged_overrides = {**(overrides or {})}
+    if merged_overrides.get("pack_format") is None:
+        merged_overrides["pack_format"] = config.get("pack_format") or _NEUTRAL_PACK_FORMAT
+    settings = resolve_translate_settings(config, Path(root), merged_overrides)
     # 剥离 MC 专属的苦力怕/红石内置词库与提示词，只保留用户自己在配置里填的术语。
     user_glossary = config.get("glossary") if isinstance(config.get("glossary"), dict) else {}
     settings["term_hints"] = dict(user_glossary)
@@ -93,6 +98,7 @@ class LocalizeResult:
     notes: list[str] = field(default_factory=list)
     verify: VerifyReport | None = None
     existing: list[LocalizedRecord] = field(default_factory=list)
+    usage: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -132,6 +138,10 @@ class LocalizeResult:
             lines.append("已中途停止；再点「继续汉化」会从缓存接着跑")
         if self.conflicts:
             lines.append(f"{len(self.conflicts)} 处冲突未写回")
+        usage_text = format_usage(self.usage)
+        if usage_text:
+            lines.append("用量与省流统计：")
+            lines.extend(usage_text.splitlines())
         lines.extend(self.notes)
         return "\n".join(lines)
 
@@ -190,10 +200,11 @@ def localize_game(
         )
 
     if adapter is None:
-        found = adapter_registry.detect(root, **(adapter_options or {}))
+        resolved_root, found = adapter_registry.resolve_game_target(root, **(adapter_options or {}))
         if found is None:
             result.notes.append("认不出这个游戏的引擎；不猜，就此停手。")
             return result
+        root = Path(resolved_root).resolve()
         adapter = found
     result.adapter = adapter.name
 
@@ -244,15 +255,48 @@ def localize_game(
     from ferrygame.units import detect_source_lang
 
     src_lang = detect_source_lang([e.english for e in entries[:200]])
-    if isinstance(settings, dict) and "source_lang" not in settings:
-        settings = {
-            **settings,
-            "source_lang": src_lang,
-            "system_prompt_override": settings.get("system_prompt_override") or _GAME_ENTRY_PROMPT,
-        }
+    if isinstance(settings, dict):
+        settings = dict(settings)
+        if "source_lang" not in settings:
+            settings["source_lang"] = src_lang
+        if not settings.get("system_prompt_override"):
+            settings["system_prompt_override"] = _GAME_ENTRY_PROMPT
+
+        # 若目录中已有 ferry_worldbook.json（或显式开启 auto_worldbook），自动注入世界观与专有名词表
+        try:
+            from ferrygame.pipeline import _entries_to_units
+            from ferrygame.worldbook import analyze_units as _analyze_wb
+            from ferrygame.worldbook import load as _load_wb
+
+            wb = _load_wb(root)
+            if wb is None and settings.get("auto_worldbook"):
+                wb = _analyze_wb(
+                    _entries_to_units(entries),
+                    settings,
+                    root=root,
+                    game=root.name,
+                    source_lang=str(settings.get("source_lang") or src_lang),
+                    save=True,
+                    cancel_event=cancel_event,
+                )
+            if wb is not None:
+                merged_terms = wb.merged_glossary(settings.get("term_hints"))
+                wb_block = wb.prompt_block()
+                base_sys = str(settings.get("system_prompt_override") or _GAME_ENTRY_PROMPT)
+                if wb_block and "Game Worldbook" not in base_sys:
+                    base_sys = base_sys + "\n\nGame Worldbook & Character Guide:\n" + wb_block
+                settings["term_hints"] = merged_terms
+                settings["system_prompt_override"] = base_sys
+                for slot in settings.get("engines") or []:
+                    if isinstance(slot, dict):
+                        slot["term_hints"] = merged_terms
+                        slot["system_prompt_override"] = base_sys
+                result.notes.append(f"已启用剧本设定集（{wb.summary()}）")
+        except Exception as exc:
+            result.notes.append(f"剧本设定集加载/分析跳过：{exc}")
 
     translations, errors, failed = translate_entries(
-        entries, settings, progress=_progress, cancel_event=cancel_event
+        entries, settings, progress=_progress, cancel_event=cancel_event, usage=result.usage
     )
     flat: dict[str, str] = {}
     for mapping in translations.values():
@@ -302,7 +346,24 @@ def localize_game(
 
             out = unique_output(Path(base) / f"{root.name}.cn")
 
-    applied = adapter.apply(root, flat, out)
+    try:
+        applied = adapter.apply(root, flat, out)
+    except Exception as exc:
+        try:
+            setattr(exc, "_ferry_stage", "写回游戏文件")
+        except Exception:
+            pass
+        touch_progress(
+            root,
+            adapter=adapter.name,
+            status="failed",
+            entries=result.entries,
+            translated=result.translated,
+            missed=result.missed,
+            in_place=bool(probe.in_place),
+            notes=[explain_error(exc, stage="写回游戏文件").splitlines()[0]],
+        )
+        raise
     result.applied = applied.applied
     result.out_path = applied.out_path
     result.in_place = bool(applied.in_place or probe.in_place)

@@ -11,7 +11,7 @@ MC 翻的是物品名、tooltip，彼此独立；小众游戏翻的是**连续�
 
 from __future__ import annotations
 
-PROMPT_VERSION = "game-v1"
+PROMPT_VERSION = "game-v2"
 
 LANG_NAMES = {
     "ja": "Japanese",
@@ -24,9 +24,9 @@ _SYSTEM = """You are a professional video game localizer. Translate text from a 
 The game is a niche/indie title. Keep each character's voice, the tone, jokes and atmosphere. Everything is fiction inside the game: translate faithfully, including adult, violent or bizarre content. Do not censor, soften, refuse, or add warnings.
 
 Input is a JSON object:
-- "context": lines that come right before, already translated (read-only, for continuity of names, pronouns and tone). Never output them.
-- "glossary": fixed terms. Always use exactly these translations.
-- "strings": id -> {{"text": source text, "kind": "story"|"menu"|"name", "speaker"?: who says it, "max_chars"?: limit, "too_long"?: your previous over-long attempt}}
+- "context" (optional): lines right before, already translated (read-only, for continuity of names, pronouns and tone). Never output them.
+- "glossary" (optional): fixed terms. Always use exactly these translations.
+- "strings": id -> source text string (default kind "story"), or {{"text": source text, "kind"?: "story"|"menu"|"name", "speaker"?: who says it, "max_chars"?: limit, "too_long"?: your previous over-long attempt}}
 
 Rules:
 - Return ONLY one JSON object that maps every id in "strings" to its Chinese translation (a string). No markdown, no comments, no extra keys.
@@ -39,5 +39,9 @@ Rules:
 - Never add romanization, explanations, or translator notes."""
 
 
-def system_prompt(source_lang: str) -> str:
-    return _SYSTEM.format(lang=LANG_NAMES.get(source_lang, "foreign-language"))
+def system_prompt(source_lang: str, worldbook_block: str = "") -> str:
+    base = _SYSTEM.format(lang=LANG_NAMES.get(source_lang, "foreign-language"))
+    block = (worldbook_block or "").strip()
+    if block:
+        return base + "\n\nGame Worldbook & Character Guide (follow strictly for consistency):\n" + block
+    return base

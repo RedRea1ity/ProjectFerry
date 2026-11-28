@@ -17,28 +17,34 @@ PLACEHOLDER_RE = re.compile(
     r"%%"
     r"|%(?:\([A-Za-z_][A-Za-z0-9_]*\))?(?:\d+\$)?[-+#0]*(?:\d+)?(?:\.\d+)?(?:[hlLzjt])?[a-zA-Z]"
     r"|\$\{[^}]+\}|\{\d+\}|\{[A-Za-z_][A-Za-z0-9_.-]*\}"
-    r"|§[0-9a-fk-orx]|\$\([^\s)]*\)",
+    r"|§[0-9a-fk-orx]|\$\([^\s)]*\)"
+    r"|</?(?:color|sprite|size|style|align|alpha|cspace|font|indent|line-height|line-indent|link|margin|mark|mspace|noparse|pos|rotate|space|voffset|width|b|i|u|s|sup|sub|br)\b[^>\n]*>",
     re.IGNORECASE,
 )
 
 SYSTEM_PROMPT = """You are a careful Minecraft Java Edition localization assistant.
 Translate English Minecraft mod strings into Simplified Chinese.
 Rules:
-- Return ONLY a valid JSON object mapping each input key to its translation.
-- Preserve every placeholder, formatting code, newline marker, and punctuation variable exactly.
+- Return ONLY a valid JSON object mapping each input key (or id in `strings`) to its translation.
+- Preserve every placeholder, formatting code, mask tag (such as <p0>, <t0>, __MC_PH_0__), and newline marker exactly and in order.
 - Do not translate registry ids, technical identifiers, proper mod names, or values inside placeholders.
+- If `hints` is provided, treat it as contextual terminology suggestions; use a term only when it fits.
 - Use concise natural in-game Chinese. Item/block/entity names should be noun phrases.
 - Keep the original meaning; do not add explanations, notes, markdown, or extra keys.
 """
 
-TRANSLATION_PROMPT_VERSION = "contextual-glossary-v2"
+TRANSLATION_PROMPT_VERSION = "compact-cache-v3"
 
-REFINE_PROMPT = """Use the provided human English/Chinese pairs as terminology and style references for this mod.
-Translate only the untranslated keys in `strings` into natural, consistent Simplified Chinese.
-The human reference translations must remain unchanged; they are context only and must never appear as output keys.
+REFINE_PROMPT = """Use `references` (English -> Chinese human pairs) as terminology and style context for this mod.
+Translate ONLY the keys in `strings` into natural, consistent Simplified Chinese; never output keys from `references`.
 Return ONLY a JSON object for the keys in `strings`.
-Preserve all placeholders and formatting codes exactly. Do not invent meanings or add keys.
+Preserve all placeholders and mask tags exactly. Do not invent meanings or add keys.
 """
+
+_MASK_TOKEN_RE = re.compile(r"__MC_(?:PH|TERM)_\d+__|__T\d+__")
+_TRANSLATABLE_CHAR_RE = re.compile(r"[A-Za-z\u00c0-\u024f\u0400-\u04ff\u3040-\u30ff\uac00-\ud7af\u4e00-\u9fff]")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
 
 
 def _lenient_json_text(text: str) -> str:
@@ -217,16 +223,49 @@ def restore_and_validate(source: str, translated: str, glossary: dict[str, str],
     return restored
 
 
-def group_entries(entries: list[Entry], batch_size: int) -> list[list[Entry]]:
+def prefilter_translation(
+    source: str,
+    glossary: dict[str, str],
+    keep: set[str],
+    source_lang: str = "en",
+) -> str | None:
+    """零 Token 预过滤：判断一条原文能否不经过 AI 直接得到合法译文。
+
+    返回非 None 表示可直接采用（0 Token）；返回 None 表示仍需送给模型翻译。
+    覆盖三类场景：
+    1. 掩码后不含任何自然语言字符（纯占位符/纯数字/纯符号，或整句被术语表/保留词完全覆盖）；
+    2. 英文源（MC 等）里本身就已经是纯中文的条目（注意：日文源绝不跳过纯汉字词如「設定」）。
+    """
+    masked, _ = mask_all(source, glossary, keep)
+    residual = _MASK_TOKEN_RE.sub("", masked).strip()
+    if not _TRANSLATABLE_CHAR_RE.search(residual):
+        return restore_and_validate(source, masked, glossary, keep)
+    if (source_lang or "en").lower().startswith("en"):
+        if _CJK_RE.search(residual) and not _LATIN_RE.search(residual):
+            return restore_and_validate(source, masked, glossary, keep)
+    return None
+
+
+def group_entries(entries: list[Entry], batch_size: int, max_chars: int = 0) -> list[list[Entry]]:
+    """按 modid + 条数上限 + 字符预算动态分批。
+
+    - 短词条可按 `batch_size` 凑成更大批，摊薄固定系统提示词成本；
+    - 长段落（如 Patchouli / FTB / 剧情文本）触及 `max_chars` 自动切批，防止撞 max_tokens 截断。
+    """
     groups: list[list[Entry]] = []
     current: list[Entry] = []
     current_modid: str | None = None
+    current_chars = 0
     for entry in entries:
-        if current and (entry.modid != current_modid or len(current) >= batch_size):
+        entry_chars = len(entry.english) + 12
+        over_chars = max_chars > 0 and current and (current_chars + entry_chars > max_chars)
+        if current and (entry.modid != current_modid or len(current) >= batch_size or over_chars):
             groups.append(current)
             current = []
+            current_chars = 0
         current.append(entry)
         current_modid = entry.modid
+        current_chars += entry_chars
     if current:
         groups.append(current)
     return groups
@@ -246,30 +285,46 @@ def cache_key(entries: list[Entry], engine: str, model: str, glossary: dict[str,
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+def _compact_references(raw_refs: Any) -> dict[str, str]:
+    """把参考例句列表压成紧凑的 {en: zh} 映射，去掉无意义的超长 key。"""
+    if isinstance(raw_refs, dict):
+        return {str(k): str(v) for k, v in raw_refs.items() if k and v}
+    result: dict[str, str] = {}
+    if isinstance(raw_refs, list):
+        for item in raw_refs:
+            if isinstance(item, dict):
+                en = str(item.get("en") or "").strip()
+                zh = str(item.get("zh") or "").strip()
+                if en and zh and en not in result:
+                    result[en] = zh
+    return result
+
+
 def _model_input(masked: dict[str, str], settings: dict[str, Any]) -> str:
     # 通用游戏线（ferrygame）自带输入格式（上下文、字节预算），由它自己拼。
     builder = settings.get("model_input_builder")
     if callable(builder):
         return builder(masked, settings)
-    if settings.get("refine_community"):
-        return json.dumps({"strings": masked, "references": settings.get("reference_examples", [])}, ensure_ascii=False)
-    return json.dumps(masked, ensure_ascii=False)
+    hints = settings.get("term_hints") or {}
+    refs = _compact_references(settings.get("reference_examples")) if settings.get("refine_community") else {}
+    if hints or refs:
+        payload: dict[str, Any] = {}
+        if refs:
+            payload["references"] = refs
+        if hints:
+            payload["hints"] = dict(sorted(hints.items()))
+        payload["strings"] = masked
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(masked, ensure_ascii=False, separators=(",", ":"))
 
 
 def _system_prompt(settings: dict[str, Any]) -> str:
-    # 通用游戏线不要 MC 的提示词；给了覆盖就整段替换。
+    # 保持 system prompt 100% 静态（动态 term_hints 已移入 user 消息），
+    # 避免每批系统提示词变化击穿 OpenAI / DeepSeek / Anthropic / Gemini 的前缀缓存。
     override = settings.get("system_prompt_override")
     if override:
         return str(override)
-    prompt = SYSTEM_PROMPT + ("\n" + REFINE_PROMPT if settings.get("refine_community") else "")
-    hints = settings.get("term_hints") or {}
-    if hints:
-        prompt += (
-            "\nTerminology hints for this batch (English -> Simplified Chinese). "
-            "These are contextual suggestions, not unconditional substitutions; use a term only when its meaning fits the sentence.\n"
-            + json.dumps(hints, ensure_ascii=False, sort_keys=True)
-        )
-    return prompt
+    return SYSTEM_PROMPT + ("\n" + REFINE_PROMPT if settings.get("refine_community") else "")
 
 
 def _parse_ai_json(content: Any) -> dict[str, str]:
@@ -316,8 +371,37 @@ def format_usage(usage: dict[str, dict[str, int]]) -> str:
     if not usage:
         return ""
     lines = []
+    saved = usage.get("_saved")
     for label, record in sorted(usage.items()):
-        lines.append(
-            f"· {label}：{record.get('keys', 0)} 条 / {record.get('batches', 0)} 批 / 约 {record.get('chars', 0)} 字"
-        )
+        if label == "_saved":
+            continue
+        base = f"· {label}：{record.get('keys', 0)} 条 / {record.get('batches', 0)} 批"
+        in_tok = int(record.get("input_tokens", 0) or 0)
+        out_tok = int(record.get("output_tokens", 0) or 0)
+        cached_tok = int(record.get("cached_tokens", 0) or 0)
+        thought_tok = int(record.get("thought_tokens", 0) or 0)
+        if in_tok or out_tok:
+            tok_parts = [f"输入 {in_tok:,}", f"输出 {out_tok:,}"]
+            if cached_tok:
+                tok_parts.append(f"前缀缓存命中 {cached_tok:,}")
+            if thought_tok:
+                tok_parts.append(f"思考 {thought_tok:,}")
+            base += " / " + "，".join(tok_parts) + " tokens"
+        else:
+            base += f" / 约 {record.get('chars', 0)} 字"
+        lines.append(base)
+    if isinstance(saved, dict):
+        parts = []
+        if saved.get("prefiltered"):
+            parts.append(f"预过滤直出 {saved['prefiltered']} 条")
+        if saved.get("corpus_exact"):
+            parts.append(f"语料直复用 {saved['corpus_exact']} 条")
+        if saved.get("tm_hits"):
+            parts.append(f"条目缓存命中 {saved['tm_hits']} 条")
+        if saved.get("batch_cache_hits"):
+            parts.append(f"批次缓存命中 {saved['batch_cache_hits']} 条")
+        if saved.get("deduped"):
+            parts.append(f"去重省翻 {saved['deduped']} 条")
+        if parts:
+            lines.append("· 零 Token 省流：" + " / ".join(parts))
     return "\n".join(lines)

@@ -46,10 +46,11 @@ GAME_REPORT_NAME = "ferrybridge-diagnose.txt"
 
 # 这些字段的值可以直接展示（都是设置项，不含密钥、不含个人信息）。
 _SAFE_VALUE_KEYS = {
-    "engine", "batch_size", "timeout", "delay", "concurrency", "pack_format",
+    "engine", "batch_size", "max_batch_chars", "disable_thinking", "prompt_cache",
+    "timeout", "delay", "concurrency", "pack_format",
     "pack_name", "fill_community", "refine_community", "community_enabled",
     "community_notice_accepted", "disclaimer_accepted", "notice_dismissed",
-    "settings_expanded", "online_pack_format", "translate_hardcoded",
+    "settings_expanded", "theme", "online_pack_format", "translate_hardcoded",
     "auto_export_bridge", "auto_update_literalbridge", "update_auto_check",
     "deepl_free", "openai_model", "anthropic_model", "gemini_model", "local_model",
     "openai_base_url", "anthropic_base_url", "gemini_base_url", "local_base_url",

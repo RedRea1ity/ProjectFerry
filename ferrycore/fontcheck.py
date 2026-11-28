@@ -331,7 +331,16 @@ def scan_fonts(root: Path, max_files: int = _MAX_SCAN_FILES, depth: int = _SCAN_
     root = Path(root)
     result = FontScanResult()
     if root.is_file():
-        result.found.append(check_font(root))
+        suffix = root.suffix.lower()
+        if suffix in FONT_SUFFIXES:
+            result.found.append(check_font(root))
+        elif suffix in BITMAP_SUFFIXES:
+            result.bitmap.append(root)
+        else:
+            result.note = (
+                "单文件目标未发现独立字体文件 —— 字体可能内嵌在资源包或引擎字库里，"
+                "这种情况静态扫不到，不能据此判断中文能显示"
+            )
         return result
 
     base_depth = len(root.parts)

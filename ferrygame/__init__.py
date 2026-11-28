@@ -9,7 +9,7 @@
 PC-98 磁盘镜像（.hdi / .fdi / .nhd），聚焦**剧情 + 操作菜单**。
 """
 
-from . import controls, pc98, pipeline, profile, project, rawbin, recon, translate, units
+from . import controls, pc98, pipeline, profile, project, rawbin, recon, tbl, translate, units
 from .pc98 import PC98Adapter, PC98FontMapper
 from .pipeline import (
     GameRunResult,
@@ -40,6 +40,16 @@ from .rawbin import (
     scan_utf16le_strings,
 )
 from .recon import ReconReport, inspect_game, shannon_entropy
+from .tbl import (
+    RelativeHit,
+    ThingyTable,
+    encode_tbl_padded,
+    find_tbl_pair,
+    load_tbl,
+    parse_tbl,
+    relative_search,
+    scan_tbl_strings,
+)
 from .translate import TranslateReport, translate_units
 from .units import Unit, classify, detect_source_lang
 
@@ -50,8 +60,10 @@ __all__ = [
     "Project",
     "RawBinaryAdapter",
     "ReconReport",
+    "RelativeHit",
     "TL_NAME",
     "TSV_NAME",
+    "ThingyTable",
     "TranslateReport",
     "Unit",
     "apply_project",
@@ -60,12 +72,16 @@ __all__ = [
     "detect_adapter",
     "detect_source_lang",
     "encode_padded",
+    "encode_tbl_padded",
     "export_tsv",
+    "find_tbl_pair",
     "get_adapter",
     "import_external_translations",
     "inspect_game",
     "load",
+    "load_tbl",
     "merge",
+    "parse_tbl",
     "patch_blob",
     "pc98",
     "pipeline",
@@ -74,10 +90,13 @@ __all__ = [
     "rawbin",
     "recon",
     "registered_adapters",
+    "relative_search",
     "run_game",
     "scan_game",
     "scan_sjis_strings",
+    "scan_tbl_strings",
     "shannon_entropy",
+    "tbl",
     "translate",
     "translate_project",
     "translate_units",

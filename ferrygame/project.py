@@ -102,7 +102,7 @@ class Project:
             atomic_write_text(target, text)
         self.path = target
         try:
-            export_tsv(self, target.with_name(TSV_NAME))
+            export_tsv(self, _tsv_sibling(target))
         except OSError:
             pass
         return target
@@ -110,7 +110,9 @@ class Project:
 
 def default_path(root: Path) -> Path:
     root = Path(root)
-    return (root.parent if root.is_file() else root) / TL_NAME
+    if root.is_file():
+        return root.parent / f"{root.stem}.{TL_NAME}"
+    return root / TL_NAME
 
 
 def fallback_path(root: Path) -> Path:
@@ -126,6 +128,14 @@ def find(root: Path) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _tsv_sibling(json_path: Path) -> Path:
+    name = json_path.name
+    if name.endswith(f".{TL_NAME}"):
+        prefix = name[: -len(TL_NAME)]
+        return json_path.with_name(f"{prefix}{TSV_NAME}")
+    return json_path.with_name(TSV_NAME)
 
 
 def load(root: Path) -> Project | None:
@@ -148,7 +158,7 @@ def load(root: Path) -> Project | None:
         notes=[str(n) for n in data.get("notes") or []],
         path=path,
     )
-    tsv_sibling = path.with_name(TSV_NAME)
+    tsv_sibling = _tsv_sibling(path)
     if tsv_sibling.is_file():
         try:
             import_external_translations(project, tsv_sibling, save=False)
@@ -188,7 +198,7 @@ def _unesc_cell(text: str) -> str:
 def export_tsv(project: Project, path: Path | None = None) -> Path:
     """将项目的待翻/已翻条目导出为 Excel / 记事本 / ParaTranz 友好的 UTF-8-BOM `.tsv` 双语表。"""
     base_json = project.path or default_path(project.root)
-    target = Path(path) if path is not None else base_json.with_name(TSV_NAME)
+    target = Path(path) if path is not None else _tsv_sibling(base_json)
     lines = ["key\tkind\tmax_bytes\tsrc\tdst\tnote"]
     for u in project.units:
         if not u.translatable:
@@ -214,7 +224,7 @@ def import_external_translations(
     返回成功更新/回录的条数。
     """
     base_json = project.path or default_path(project.root)
-    src_file = Path(path) if path is not None else base_json.with_name(TSV_NAME)
+    src_file = Path(path) if path is not None else _tsv_sibling(base_json)
     if not src_file.is_file():
         return 0
 

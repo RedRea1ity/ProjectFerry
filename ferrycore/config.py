@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,10 @@ DEFAULT_CONFIG = {
     "output_dir": "",
     "cache_dir": "",
     "pack_format": 0,
-    "batch_size": 30,
+    "batch_size": 60,
+    "max_batch_chars": 3600,
+    "disable_thinking": False,
+    "prompt_cache": True,
     "timeout": 180,
     "delay": 0.2,
     "concurrency": 1,
@@ -59,9 +63,10 @@ DEFAULT_CONFIG = {
     "skip_keys": {},
     # 是否已确认"部分模组无法完全汉化"的启动声明
     "disclaimer_accepted": False,
-    # GUI 状态：首次引导是否不再显示、翻译设置是否展开
+    # GUI 状态：首次引导是否不再显示、翻译设置是否展开、界面主题（system / light / dark）
     "notice_dismissed": False,
     "settings_expanded": False,
+    "theme": "system",
     # 本地版本表查不到 / 表尾待定时，联网核对远程版本表
     "online_pack_format": True,
     # 「查询在线汉化」的自定义来源：每行一个网址模板，{modid} 会替换成模组 ID；
@@ -236,3 +241,32 @@ def remove_progress_modids(modids: set[str], path: Path = PROGRESS_FILE) -> None
     for modid in modids:
         progress.pop(modid, None)
     save_progress(progress, path)
+
+
+THEME_MODES = ("system", "light", "dark")
+
+
+def detect_system_theme() -> str:
+    """检测操作系统当前应用深浅色偏好，返回 'dark' 或 'light'。"""
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                return "light" if int(value) else "dark"
+        except Exception:
+            return "light"
+    return "light"
+
+
+def resolve_theme_mode(mode: object) -> tuple[str, str]:
+    """把配置里的主题模式（system/light/dark）规范化并解析为实际生效主题（light/dark）。"""
+    normalized = str(mode or "system").strip().lower()
+    if normalized not in THEME_MODES:
+        normalized = "system"
+    effective = detect_system_theme() if normalized == "system" else normalized
+    return normalized, effective

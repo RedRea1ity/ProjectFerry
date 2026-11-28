@@ -395,6 +395,23 @@ def open_container(root: Path) -> Container | None:
     会改一份游戏根本不读的文件，然后报告「已汉化」——玩家打开还是日文。
     这种「改了但没生效」比报错难查得多。
     """
+    root = Path(root)
+    if root.is_file():
+        low = root.name.lower()
+        if low.endswith(".exe") and not low.endswith(SELF_OUTPUT_SUFFIX):
+            span = locate_appended_zip(root)
+            if span is not None:
+                container = ZipInExe(root.parent, root, span)
+                if container.list_files((".ks",)):
+                    return container
+        elif low.endswith(".asar") and not low.endswith(".cn.asar"):
+            try:
+                container = AsarContainer(root.parent, root)
+                if container.list_files((".ks",)):
+                    return container
+            except Exception:
+                pass
+        return None
     if not root.is_dir():
         return None
     for candidate in sorted(root.glob("*.exe")):

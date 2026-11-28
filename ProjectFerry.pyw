@@ -14,6 +14,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import mc_ai_translator as core
+from ferrycore.win_dnd import classify_dropped_path, enable_window_file_drop, tk_root_base
 from ferrycore.workbench import ProjectIndex, Workbench
 
 
@@ -65,19 +66,74 @@ CUSTOM_LABEL_TO_ENGINE = {v: k for k, v in CUSTOM_ENGINES.items()}
 
 PLACEHOLDER_MODID = "—— 无待汉化模组 ——"
 
-# —— 视觉基调：渡口水色。冷灰底 + 渡船蓝，只让主操作带颜色，其余安静。 ——
-BG = "#F2F5F4"          # 窗底
-CARD = "#FFFFFF"        # 卡片 / 表格底
-BORDER = "#D8DEE6"      # 描边
-INK = "#182E2B"         # 主文字
-BODY_INK = "#4E5964"    # 次文字
-MUTED = "#526761"       # 说明文字
-FAINT = "#9AA5B1"       # 弱提示
-ACCENT = "#096B61"      # 渡船蓝：主操作 / 链接 / 进度
-GREEN = "#1E7A3C"       # 完成 / 开始翻译
-AMBER = "#9A6A00"       # 部分完成 / 待确认
-RED = "#C2372E"         # 失败 / 停止
-SELECT_BG = "#C7E6D9"   # 表格选中行
+# —— 视觉基调：渡口水色（日间）/ 夜渡深青（夜间）。只让主操作带颜色，其余安静。 ——
+THEMES: dict[str, dict[str, str]] = {
+    "light": {
+        "bg": "#F2F5F4",
+        "card": "#FFFFFF",
+        "border": "#D8DEE6",
+        "ink": "#182E2B",
+        "body_ink": "#4E5964",
+        "muted": "#526761",
+        "faint": "#9AA5B1",
+        "accent": "#096B61",
+        "green": "#1E7A3C",
+        "amber": "#9A6A00",
+        "red": "#C2372E",
+        "select_bg": "#C7E6D9",
+        "row_even": "#F6F8FB",
+        "row_odd": "#FFFFFF",
+        "field_bg": "#FFFFFF",
+        "btn_bg": "#E7ECEB",
+        "btn_hover": "#D9E2E0",
+        "trough": "#E2E7EE",
+        "rail": "#203D38",
+        "rail_active_bg": "#C7E6D9",
+        "rail_active_fg": "#182E2B",
+        "rail_sub": "#B7D4C9",
+        "rail_sep": "#49675F",
+        "rail_hover": "#396158",
+    },
+    "dark": {
+        "bg": "#141A19",
+        "card": "#1C2423",
+        "border": "#2D3C3A",
+        "ink": "#E6EFEC",
+        "body_ink": "#C0CFCB",
+        "muted": "#8FA6A0",
+        "faint": "#627872",
+        "accent": "#26A69A",
+        "green": "#38B26C",
+        "amber": "#E0A43B",
+        "red": "#E05A50",
+        "select_bg": "#244B44",
+        "row_even": "#18201F",
+        "row_odd": "#1C2423",
+        "field_bg": "#151C1B",
+        "btn_bg": "#253230",
+        "btn_hover": "#30413E",
+        "trough": "#232E2C",
+        "rail": "#0F1716",
+        "rail_active_bg": "#244B44",
+        "rail_active_fg": "#E6EFEC",
+        "rail_sub": "#85A39B",
+        "rail_sep": "#253633",
+        "rail_hover": "#1D2E2B",
+    },
+}
+
+BG = THEMES["light"]["bg"]
+CARD = THEMES["light"]["card"]
+BORDER = THEMES["light"]["border"]
+INK = THEMES["light"]["ink"]
+BODY_INK = THEMES["light"]["body_ink"]
+MUTED = THEMES["light"]["muted"]
+FAINT = THEMES["light"]["faint"]
+ACCENT = THEMES["light"]["accent"]
+GREEN = THEMES["light"]["green"]
+AMBER = THEMES["light"]["amber"]
+RED = THEMES["light"]["red"]
+SELECT_BG = THEMES["light"]["select_bg"]
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_TITLE = (FONT_FAMILY, 12, "bold")
 FONT_BODY = (FONT_FAMILY, 10)
@@ -162,6 +218,12 @@ class RoundedButton(tk.Canvas):
 
     def _on_enter(self, _event: object = None) -> None:
         self._hover = True
+
+    def set_surface_bg(self, bg: str, highlight: str | None = None) -> None:
+        self.configure(bg=bg, highlightbackground=bg)
+        if highlight:
+            self.configure(highlightcolor=highlight)
+        self._draw()
         self._draw()
 
     def _on_leave(self, _event: object = None) -> None:
@@ -264,7 +326,7 @@ def get_work_area(root: tk.Misc) -> tuple[int, int, int, int]:
     return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
 
 
-class FerryApp(tk.Tk):
+class FerryApp(tk_root_base(tk)):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"{APP_DISPLAY} · 游戏本地化工作台")
@@ -311,15 +373,70 @@ class FerryApp(tk.Tk):
         self._nbt_candidates: dict[str, dict[str, list[str]]] = {}
         self._last_nbt_count = 0
         self._last_engine: str = str(self.config.get("engine", "mymemory"))
+        self._theme_mode, self._theme = core.resolve_theme_mode(self.config.get("theme", "system"))
+        self._card_frames: list[tk.Frame] = []
+        self._themed_buttons: list[tuple[RoundedButton, str]] = []
+        self._dnd_hook = None
         self._build_ui()
+        self._apply_theme(self._theme_mode, save=False)
         self._apply_geometry()
         self._sync_engine_ui()
+        self.bind("<FocusIn>", self._on_root_focus_in, add="+")
         self._drain_after = self.after(100, self._drain_queue)
         self._initial_afters = [
+            self.after(80, self._setup_file_drop),
             self.after(700, self._security_check),
             self.after(5000, self._maybe_auto_update_check),
         ]
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _setup_file_drop(self) -> None:
+        if self._closing or self._dnd_hook is not None:
+            return
+        self._dnd_hook = enable_window_file_drop(self, self._on_files_dropped)
+
+    def _on_files_dropped(self, paths: list[Path]) -> None:
+        """处理直接拖进主窗口的游戏目录、程序、镜像或 Minecraft 实例。"""
+        if not paths or self._closing:
+            return
+        if self.translating or self._localizing or self.scanning:
+            msg = "正在执行当前任务，请等结束后再拖入新游戏。"
+            if self._active_mode == "game" and self._loc_alive():
+                self._loc_status_var.set(msg)
+            else:
+                self.status_var.set(msg)
+            return
+        kind = "invalid"
+        target = Path(paths[0])
+        for item in paths:
+            kind, target = classify_dropped_path(Path(item))
+            if kind != "invalid":
+                break
+        if kind == "invalid":
+            return
+        if kind == "mc":
+            self._switch_mode("mc")
+            self.path_var.set(str(target))
+            self.config["last_instance"] = str(target)
+            try:
+                core.save_config(self.config)
+            except OSError:
+                pass
+            if target in self.instance_paths:
+                self._set_instance_options(self.instance_paths, select=self.instance_paths.index(target))
+            else:
+                self.instance_paths.append(target)
+                self._set_instance_options(self.instance_paths, select=len(self.instance_paths) - 1)
+            self.start_scan()
+        else:
+            self._switch_mode("game")
+            self._loc_path_var.set(str(target))
+            if hasattr(self, "_loc_path_entry"):
+                try:
+                    self._loc_path_entry.xview_moveto(1.0)
+                except tk.TclError:
+                    pass
+            self._loc_start_probe()
 
     def _build_ui(self) -> None:
         style = ttk.Style(self)
@@ -346,7 +463,6 @@ class FerryApp(tk.Tk):
         style.configure("Horizontal.TProgressbar", troughcolor="#E2E7EE", background=ACCENT, thickness=6, borderwidth=0)
 
         self.shell = Workbench(self, self._switch_mode, self._icon_image(32), (
-            ("运行日志", self._show_log), ("导出诊断", self._export_diagnostics),
             ("使用说明", self._show_help), ("关于摆渡", self._show_about)))
         self.shell.pack(fill="both", expand=True)
         self._mode_hint_var = self.shell.hint
@@ -355,24 +471,152 @@ class FerryApp(tk.Tk):
         self._mc_started = False
         self._loc_win = self
         self._home_page = ProjectIndex(host, (
-            ("游戏汉化", "游戏目录、磁盘镜像和独立程序", (
+            ("游戏汉化", "游戏目录、磁盘镜像和独立程序（可直接拖进窗口）", (
                 ("选择目录…", lambda: self._open_from_home("game")),
                 ("镜像或程序…", lambda: self._open_from_home("file")))),
-            ("模组汉化", "Minecraft 实例与整合包", (
+            ("模组汉化", "Minecraft 实例与整合包（可直接拖进窗口）", (
                 ("选择实例…", lambda: self._open_from_home("mc")),)),
-        ), self._open_record)
+        ), self._open_record, on_remove=self._remove_record, on_clear=self._clear_records)
         self._game_page = ttk.Frame(host)
-        self._engine_page = ttk.Frame(host)
+        self._settings_page = ttk.Frame(host)
+        self._engine_page = self._settings_page
         self._mc_tabs = ttk.Notebook(host)
         self._mc_page = ttk.Frame(self._mc_tabs, padding=(8, 6))
         self._mc_tools = ttk.Frame(self._mc_tabs, padding=12)
         self._mc_tabs.add(self._mc_page, text="实例与翻译清单")
         self._mc_tabs.add(self._mc_tools, text="资源与桥接")
-        self._pages = {"home": self._home_page, "game": self._game_page, "mc": self._mc_tabs, "engine": self._engine_page}
+        self._pages = {"home": self._home_page, "game": self._game_page, "mc": self._mc_tabs, "settings": self._settings_page}
         self._build_mc_page()
         self._build_game_page(self._game_page)
-        self._build_engine_page()
+        self._build_settings_page()
         self._switch_mode(self._active_mode, persist=False)
+
+    def _palette(self) -> dict[str, str]:
+        return THEMES.get(self._theme, THEMES["light"])
+
+    def _toggle_theme(self) -> None:
+        self._apply_theme("dark" if self._theme == "light" else "light", save=True)
+
+    def _on_theme_mode_selected(self) -> None:
+        self._apply_theme(self.theme_mode_var.get(), save=True)
+
+    def _on_root_focus_in(self, event: tk.Event) -> None:
+        if event.widget is self:
+            self._refresh_system_theme()
+
+    def _refresh_system_theme(self) -> None:
+        if self._theme_mode != "system" or self._closing:
+            return
+        _, effective = core.resolve_theme_mode("system")
+        if effective != self._theme:
+            self._apply_theme("system", save=False)
+
+    def _apply_theme(self, theme_name: str, *, save: bool = False) -> None:
+        mode, effective = core.resolve_theme_mode(theme_name)
+        self._theme_mode = mode
+        self._theme = effective
+        p = self._palette()
+        style = ttk.Style(self)
+        self.configure(bg=p["bg"])
+        style.configure("TFrame", background=p["bg"])
+        style.configure("TLabel", background=p["bg"], foreground=p["ink"], font=FONT_BODY)
+        style.configure("Muted.TLabel", background=p["bg"], foreground=p["muted"], font=FONT_SMALL)
+        style.configure("Card.TFrame", background=p["card"])
+        style.configure("Card.TLabel", background=p["card"], foreground=p["ink"], font=FONT_BODY)
+        style.configure("Card.Muted.TLabel", background=p["card"], foreground=p["muted"], font=FONT_SMALL)
+        style.configure("Card.TCheckbutton", background=p["card"], foreground=p["ink"], font=FONT_BODY)
+        style.configure("TCheckbutton", background=p["bg"], foreground=p["ink"], font=FONT_BODY)
+        style.map("TCheckbutton", background=[("active", p["bg"])], foreground=[("active", p["ink"])])
+        style.configure("TRadiobutton", background=p["bg"], foreground=p["ink"], font=FONT_BODY)
+        style.map("TRadiobutton", background=[("active", p["bg"])], foreground=[("active", p["ink"])])
+        style.configure("Card.TRadiobutton", background=p["card"], foreground=p["ink"], font=FONT_BODY)
+        style.map("Card.TRadiobutton", background=[("active", p["card"])], foreground=[("active", p["ink"])])
+        style.configure("TButton", font=FONT_BODY, padding=(8, 4), background=p["btn_bg"], foreground=p["ink"], bordercolor=p["border"])
+        style.map("TButton", background=[("active", p["btn_hover"]), ("disabled", p["bg"])], foreground=[("disabled", p["faint"])])
+        style.configure("TEntry", fieldbackground=p["field_bg"], foreground=p["ink"], insertcolor=p["ink"], bordercolor=p["border"])
+        style.configure("TCombobox", fieldbackground=p["field_bg"], background=p["btn_bg"], foreground=p["ink"], arrowcolor=p["ink"], bordercolor=p["border"])
+        style.map("TCombobox", fieldbackground=[("readonly", p["field_bg"])], foreground=[("readonly", p["ink"])])
+        style.configure("TSpinbox", fieldbackground=p["field_bg"], background=p["btn_bg"], foreground=p["ink"], arrowcolor=p["ink"])
+        style.configure("TNotebook", background=p["bg"], bordercolor=p["border"])
+        style.configure("TNotebook.Tab", font=FONT_SMALL_BOLD, padding=(12, 5), background=p["btn_bg"], foreground=p["body_ink"])
+        style.map("TNotebook.Tab", background=[("selected", p["card"])], foreground=[("selected", p["ink"])])
+        style.configure("TLabelframe", background=p["bg"], bordercolor=p["border"])
+        style.configure("TLabelframe.Label", background=p["bg"], foreground=p["ink"], font=FONT_SMALL_BOLD)
+        style.configure("Treeview", rowheight=30, font=FONT_BODY, background=p["card"], fieldbackground=p["card"], foreground=p["ink"], borderwidth=0)
+        style.configure("Treeview.Heading", font=FONT_SMALL_BOLD, background=p["bg"], foreground=p["body_ink"], relief="flat", padding=(2, 6))
+        style.map("Treeview.Heading", background=[("active", p["bg"])])
+        style.map("Treeview", background=[("selected", p["select_bg"])], foreground=[("selected", p["ink"])])
+        style.configure("Horizontal.TProgressbar", troughcolor=p["trough"], background=p["accent"], thickness=6, borderwidth=0)
+        style.configure("Vertical.TScrollbar", background=p["btn_bg"], troughcolor=p["bg"], bordercolor=p["border"], arrowcolor=p["muted"])
+        style.configure("Horizontal.TScrollbar", background=p["btn_bg"], troughcolor=p["bg"], bordercolor=p["border"], arrowcolor=p["muted"])
+
+        # 更新卡片容器与圆角按钮底色
+        for frame in self._card_frames:
+            try:
+                frame.configure(bg=p["card"], highlightbackground=p["border"])
+            except tk.TclError:
+                pass
+        for btn, surface in self._themed_buttons:
+            try:
+                btn.set_surface_bg(p["card"] if surface == "card" else p["bg"], highlight=p["accent"])
+            except tk.TclError:
+                pass
+        if hasattr(self, "_settings_canvas"):
+            try:
+                self._settings_canvas.configure(bg=p["bg"])
+            except tk.TclError:
+                pass
+        if hasattr(self, "_engine_feedback_label"):
+            try:
+                self._engine_feedback_label.configure(foreground=p["accent"])
+            except tk.TclError:
+                pass
+
+        # 同步设置页外观控件状态
+        if hasattr(self, "theme_mode_var"):
+            self.theme_mode_var.set(self._theme_mode)
+        if hasattr(self, "theme_status_var"):
+            effective_label = "夜间模式" if self._theme == "dark" else "日间模式"
+            suffix = "（跟随系统）" if self._theme_mode == "system" else ""
+            self.theme_status_var.set(f"当前生效：{effective_label}{suffix}")
+
+        # 更新 MC 表格与空状态标签
+        if hasattr(self, "tree"):
+            self.tree.tag_configure("row_even", background=p["row_even"])
+            self.tree.tag_configure("row_odd", background=p["row_odd"])
+            self.tree.tag_configure("status_done", foreground=p["green"])
+            self.tree.tag_configure("status_partial", foreground=p["amber"])
+            self.tree.tag_configure("status_pending", foreground=p["body_ink"])
+            self.tree.tag_configure("status_complete", foreground=p["green"])
+            self.tree.tag_configure("status_excluded", foreground=p["faint"])
+            self.tree.tag_configure("failed", foreground=p["red"])
+        if hasattr(self, "empty_state"):
+            self.empty_state.configure(bg=p["card"], fg=p["muted"])
+
+        # 更新游戏页报告文本框
+        if hasattr(self, "_loc_report"):
+            self._loc_report.configure(bg=p["card"], fg=p["ink"], insertbackground=p["ink"])
+            self._loc_report.tag_configure("head", foreground=p["ink"])
+            self._loc_report.tag_configure("ok", foreground=p["green"])
+            self._loc_report.tag_configure("warn", foreground=p["amber"])
+            self._loc_report.tag_configure("bad", foreground=p["red"])
+            self._loc_report.tag_configure("dim", foreground=p["muted"])
+
+        # 更新侧边栏与首页产物表
+        if hasattr(self, "shell"):
+            self.shell.apply_theme(p)
+        if hasattr(self, "_home_page"):
+            self._home_page.apply_theme(p)
+
+        if hasattr(self, "status_label"):
+            self._tone_status()
+
+        if save:
+            self.config["theme"] = self._theme_mode
+            try:
+                core.save_config(self.config)
+            except OSError:
+                pass
 
     def _build_mc_page(self) -> None:
 
@@ -382,6 +626,7 @@ class FerryApp(tk.Tk):
         # 第一步：选实例。收进一张白卡片，让「扫描」成为这一屏唯一的主按钮。
         ttk.Label(self._mc_page, text="实例", font=FONT_SMALL_BOLD, foreground=MUTED).pack(anchor="w", pady=(0, 3))
         instance_card = tk.Frame(self._mc_page, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+        self._card_frames.append(instance_card)
         instance_card.pack(fill="x", pady=(0, 8))
         instance_box = ttk.Frame(instance_card, style="Card.TFrame", padding=10)
         instance_box.pack(fill="both", expand=True)
@@ -394,6 +639,7 @@ class FerryApp(tk.Tk):
         self.instance_combo.grid(row=0, column=0, sticky="ew")
         self.instance_combo.bind("<<ComboboxSelected>>", self._instance_selected)
         self.scan_button = make_action_button(inst_row, "扫描", self.start_scan, ACCENT, bg=CARD)
+        self._themed_buttons.append((self.scan_button, "card"))
         self.scan_button.grid(row=0, column=1, padx=(8, 0))
         ttk.Button(inst_row, text="浏览…", command=self.choose_path).grid(row=0, column=2, padx=(6, 0))
         ttk.Button(inst_row, text="刷新", command=self.refresh_instances).grid(row=0, column=3, padx=(6, 0))
@@ -410,7 +656,7 @@ class FerryApp(tk.Tk):
         # 状态行：一件事一行。左边说进展，右边给游戏版本；颜色随内容变化（忙=蓝，成=绿，坏=红）。
         status_row = ttk.Frame(self._mc_page)
         status_row.pack(fill="x", pady=(0, 6))
-        self.status_var = tk.StringVar(value="正在探测本机 Minecraft 实例……")
+        self.status_var = tk.StringVar(value="正在探测实例……")
         self.status_label = ttk.Label(status_row, textvariable=self.status_var, foreground=ACCENT, wraplength=600, justify="left", font=FONT_BODY)
         self.status_label.pack(side="left", fill="x", expand=True)
         self.pack_format_var = tk.StringVar(value="")
@@ -438,6 +684,7 @@ class FerryApp(tk.Tk):
         ttk.Button(toolbar, text="全选", command=self._select_all_visible).pack(side="right", padx=(0, 6))
 
         table_card = tk.Frame(self._mc_page, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+        self._card_frames.append(table_card)
         self.show_instance_column = False
         self.sort_column = "missing"
         self.sort_desc = True
@@ -498,6 +745,7 @@ class FerryApp(tk.Tk):
         self.translate_all_button.pack(side="right", padx=(8, 10))
         self.translate_selected_button = make_action_button(run_bar, "翻译选中模组", self._translate_selected, ACCENT)
         self.translate_selected_button.pack(side="right")
+        self._themed_buttons.extend([(self.stop_button, "bg"), (self.translate_all_button, "bg"), (self.translate_selected_button, "bg")])
         progress_row = ttk.Frame(run_zone)
         progress_row.pack(fill="x", pady=(7, 0))
         self.progress_text_var = tk.StringVar(value="")
@@ -520,8 +768,8 @@ class FerryApp(tk.Tk):
         self.fill_var = tk.BooleanVar(value=bool(self.config.get("fill_community", False)))
         self.refine_var = tk.BooleanVar(value=bool(self.config.get("refine_community", False)))
         self.community_var = tk.BooleanVar(value=bool(self.config.get("community_enabled", True)))
-        for text, var in (("填补人工汉化缺失", self.fill_var), ("参考人工译文补全缺失词条", self.refine_var),
-                          ("联网查询社区汉化", self.community_var)):
+        for text, var in (("补全人工汉化缺失", self.fill_var), ("参考人工译文补缺", self.refine_var),
+                          ("联网查社区汉化", self.community_var)):
             ttk.Checkbutton(self._mc_tools, text=text, variable=var, command=self._save_mc_policy).pack(anchor="w", pady=2)
         ttk.Separator(self._mc_tools).pack(fill="x", pady=12)
         tools = ttk.Frame(self._mc_tools)
@@ -536,14 +784,48 @@ class FerryApp(tk.Tk):
         self.limits_button.state(["disabled"])
         ttk.Label(self._mc_tools, textvariable=self.status_var, wraplength=600, style="Muted.TLabel").pack(anchor="w", pady=10)
 
-    def _build_engine_page(self) -> None:
-        settings_box = self._engine_page
+    def _build_settings_page(self) -> None:
+        host = self._settings_page
+        canvas = tk.Canvas(host, bg=self._palette()["bg"], highlightthickness=0, bd=0)
+        scrollbar = ttk.Scrollbar(host, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self._settings_canvas = canvas
+
+        content = ttk.Frame(canvas, padding=(0, 2, 10, 12))
+        win_id = canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def _sync_scroll(_event: object = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_width(event: tk.Event) -> None:
+            canvas.itemconfigure(win_id, width=max(320, event.width))
+
+        def _on_wheel(event: tk.Event) -> None:
+            if self._active_mode != "settings":
+                return
+            bbox = canvas.bbox("all")
+            if not bbox or bbox[3] <= canvas.winfo_height():
+                return
+            delta = int(-event.delta / 120) if event.delta else 0
+            if delta:
+                canvas.yview_scroll(delta, "units")
+
+        content.bind("<Configure>", _sync_scroll)
+        canvas.bind("<Configure>", _sync_width)
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_wheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        # ── 1. 翻译引擎 ──
+        engine_group = ttk.LabelFrame(content, text="翻译引擎", padding=(14, 10))
+        engine_group.pack(fill="x", pady=(0, 12))
+
         self.settings_summary_var = tk.StringVar()
         self.engine_feedback = tk.StringVar()
-        ttk.Label(settings_box, textvariable=self.settings_summary_var, font=FONT_BOLD).pack(anchor="w", pady=(8, 12))
-        self.grid_frame = ttk.Frame(settings_box)
+        ttk.Label(engine_group, textvariable=self.settings_summary_var, font=FONT_BOLD).pack(anchor="w", pady=(0, 10))
+        self.grid_frame = ttk.Frame(engine_group)
         self.grid_frame.pack(fill="x")
-
         self.grid_frame.columnconfigure(1, weight=1)
 
         ttk.Label(self.grid_frame, text="翻译引擎").grid(row=0, column=0, sticky="w", padx=(0, 14), pady=4)
@@ -564,10 +846,10 @@ class FerryApp(tk.Tk):
 
         # P0-2：API Key 默认掩码，右侧「显示」按钮切换明文（只改显示，不改存储）。
         # 存储本身在 Windows 上走 DPAPI 加密（见 ferrycore/secrets.py），不是明文躺着。
-        ttk.Label(self.grid_frame, text="密钥").grid(row=3, column=0, sticky="w", pady=(12, 4))
+        ttk.Label(self.grid_frame, text="密钥").grid(row=3, column=0, sticky="w", pady=(10, 4))
         self.api_key_var = tk.StringVar()
         key_frame = ttk.Frame(self.grid_frame)
-        key_frame.grid(row=3, column=1, sticky="ew", padx=(0, 10), pady=(12, 4))
+        key_frame.grid(row=3, column=1, sticky="ew", padx=(0, 10), pady=(10, 4))
         key_frame.columnconfigure(0, weight=1)
         self.api_key_entry = ttk.Entry(key_frame, textvariable=self.api_key_var, show="•", font=FONT_BODY)
         self.api_key_entry.grid(row=0, column=0, sticky="ew")
@@ -582,29 +864,79 @@ class FerryApp(tk.Tk):
         self.model_entry = ttk.Entry(self.grid_frame, textvariable=self.model_var, font=FONT_BODY)
         self.model_entry.grid(row=5, column=1, sticky="ew", padx=(0, 10), pady=4)
 
+        ttk.Label(self.grid_frame, text="深度思考").grid(row=6, column=0, sticky="w", pady=(8, 2))
+        self.disable_thinking_var = tk.BooleanVar(value=bool(self.config.get("disable_thinking", False)))
+        ttk.Checkbutton(
+            self.grid_frame,
+            text="关闭深度思考（省流提速）",
+            variable=self.disable_thinking_var,
+            command=self._update_settings_summary,
+        ).grid(row=6, column=1, sticky="w", padx=(0, 10), pady=(8, 2))
+        ttk.Label(
+            self.grid_frame,
+            text="对 DeepSeek / Qwen3 / GLM / 豆包 / Gemini 2.5 / OpenAI 推理系列生效；关闭可大幅省输出 Token 并提速，但文学剧情润色可能略降，建议自行对比。",
+            style="Muted.TLabel",
+            wraplength=540,
+        ).grid(row=7, column=1, sticky="w", padx=(0, 10), pady=(0, 6))
+
         actions = ttk.Frame(self.grid_frame)
-        actions.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        actions.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Button(actions, text="保存预设", command=self._save_profile).pack(side="left")
         ttk.Button(actions, text="删除预设", command=self._delete_profile).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="保存设置", command=self._save_settings).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="测试连接", command=self._test_connection).pack(side="left", padx=(6, 0))
         ttk.Button(actions, text="并发与模型池…", command=self._show_settings).pack(side="left", padx=(6, 0))
+        ttk.Button(actions, text="Batch API（5折异步）…", command=self._show_batch_api_dialog).pack(side="left", padx=(6, 0))
         self.concurrency_var = tk.IntVar(value=int(self.config.get("concurrency", 1)))
-        ttk.Label(settings_box, textvariable=self.engine_feedback, foreground=ACCENT, wraplength=600).pack(anchor="w", pady=14)
+        self._engine_feedback_label = ttk.Label(engine_group, textvariable=self.engine_feedback, foreground=self._palette()["accent"], wraplength=600)
+        self._engine_feedback_label.pack(anchor="w", pady=(8, 0))
+
+        # ── 2. 外观与主题 ──
+        theme_group = ttk.LabelFrame(content, text="外观与主题", padding=(14, 10))
+        theme_group.pack(fill="x", pady=(0, 12))
+        theme_row = ttk.Frame(theme_group)
+        theme_row.pack(fill="x")
+        self.theme_mode_var = tk.StringVar(value=self._theme_mode)
+        self.theme_status_var = tk.StringVar()
+        for value, label in (("system", "跟随系统"), ("light", "日间模式"), ("dark", "夜间模式")):
+            ttk.Radiobutton(
+                theme_row,
+                text=label,
+                value=value,
+                variable=self.theme_mode_var,
+                command=self._on_theme_mode_selected,
+            ).pack(side="left", padx=(0, 18))
+        ttk.Label(theme_row, textvariable=self.theme_status_var, style="Muted.TLabel").pack(side="right")
+
+        # ── 3. 日志与诊断 ──
+        diag_group = ttk.LabelFrame(content, text="日志与诊断", padding=(14, 10))
+        diag_group.pack(fill="x")
+        diag_row = ttk.Frame(diag_group)
+        diag_row.pack(fill="x")
+        ttk.Button(diag_row, text="运行日志", command=self._show_log).pack(side="left")
+        ttk.Button(diag_row, text="导出诊断包", command=self._export_diagnostics).pack(side="left", padx=(8, 0))
+        ttk.Label(
+            diag_row,
+            text="查看实时运行日志，或一键导出脱敏诊断包用于排障（不含 API 密钥）。",
+            style="Muted.TLabel",
+        ).pack(side="left", padx=(14, 0))
+
+    _build_engine_page = _build_settings_page
 
     def _tone_status(self, *_args: object) -> None:
         """状态文字按内容着色：失败=红、完成=绿、没有/待确认=琥珀、进行中=渡船蓝。"""
+        p = self._palette()
         text = self.status_var.get()
         if any(word in text for word in ("失败", "错误", "出错")):
-            color = RED
+            color = p["red"]
         elif any(word in text for word in ("完成", "已保存", "已删除", "已更新", "已安装", "已生成", "已重载")):
-            color = GREEN
+            color = p["green"]
         elif any(word in text for word in ("没有", "待确认", "无需", "未找到")):
-            color = AMBER
+            color = p["amber"]
         elif text.startswith("正在"):
-            color = ACCENT
+            color = p["accent"]
         else:
-            color = INK
+            color = p["ink"]
         self.status_label.configure(foreground=color)
 
     def _show_empty(self, text: str | None) -> None:
@@ -634,7 +966,8 @@ class FerryApp(tk.Tk):
             concurrency = int(self.concurrency_var.get())
         except Exception:
             concurrency = 1
-        self.settings_summary_var.set(f"引擎 {self._engine_label(engine)}，模型 {model}，并发 {concurrency}")
+        suffix = "，已关思考" if getattr(self, "disable_thinking_var", None) and self.disable_thinking_var.get() else ""
+        self.settings_summary_var.set(f"引擎 {self._engine_label(engine)}，模型 {model}，并发 {concurrency}{suffix}")
 
     def _configure_tree_columns(self, show_instance: bool) -> None:
         columns = ["modid", "complete", "status", "missing", "ai", "community"]
@@ -991,6 +1324,9 @@ class FerryApp(tk.Tk):
                     self.after_cancel(after_id)
                 except tk.TclError:
                     pass
+        if getattr(self, "_dnd_hook", None) is not None:
+            self._dnd_hook.uninstall()
+            self._dnd_hook = None
         self._save_ui_state()
         self.destroy()
 
@@ -1118,6 +1454,8 @@ class FerryApp(tk.Tk):
         config["auto_export_bridge"] = bool(self.auto_export_var.get())
         config["auto_update_literalbridge"] = bool(self.auto_update_var.get())
         config["concurrency"] = int(self.concurrency_var.get())
+        config["disable_thinking"] = bool(self.disable_thinking_var.get())
+        config["theme"] = self._theme_mode
         return config
 
     def _choose_pack_format(self, instance: Path | None = None) -> bool:
@@ -1307,7 +1645,7 @@ class FerryApp(tk.Tk):
             return
         config = self._snapshot_config()
         engine = self._current_engine()
-        settings = {**core.DEFAULT_CONFIG, **core._resolve_engine_fields(config, engine, {})}
+        settings = {**core.DEFAULT_CONFIG, **config, **core._resolve_engine_fields(config, engine, {})}
         settings["timeout"] = 12
         settings["delay"] = 0
         self.engine_feedback.set("正在测试翻译接口连接……")
@@ -1325,9 +1663,11 @@ class FerryApp(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _show_log(self) -> None:
+        p = self._palette()
         window = tk.Toplevel(self)
         window.title("运行日志")
-        text = tk.Text(window, wrap="none", state="normal")
+        window.configure(bg=p["bg"])
+        text = tk.Text(window, wrap="none", state="normal", bg=p["card"], fg=p["ink"], insertbackground=p["ink"])
         text.pack(fill="both", expand=True, padx=12, pady=(12, 0))
         def refresh() -> None:
             text.configure(state="normal")
@@ -1346,6 +1686,8 @@ class FerryApp(tk.Tk):
     # 切换时只隐藏页面，进行中的任务和控件内容保持原样。
 
     def _switch_mode(self, mode: str, persist: bool = True) -> None:
+        if mode == "engine":
+            mode = "settings"
         mode = mode if isinstance(mode, str) and mode in self._pages else "home"
         self._active_mode = mode
         for name, page in self._pages.items():
@@ -1354,10 +1696,12 @@ class FerryApp(tk.Tk):
         self._pages[mode].pack(fill="both", expand=True)
         hints = {"home": "打开项目", "mc": "Minecraft 实例与整合包",
                  "game": "已注册适配器：" + " / ".join(core.engine_adapters.registered()),
-                 "engine": "游戏与模组共用的翻译服务"}
+                 "settings": "翻译引擎、外观主题与日志诊断"}
         self.shell.select(mode, hints[mode])
         if mode == "home":
             self._home_page.refresh(core.load_localize_history())
+        if mode == "settings":
+            self._refresh_system_theme()
         if mode == "mc" and not self._mc_started:
             self._mc_started = True
             self.refresh_instances()
@@ -1390,6 +1734,28 @@ class FerryApp(tk.Tk):
             return
         os.startfile(str(path if path.is_dir() else path.parent))
 
+    def _remove_record(self, path: Path) -> None:
+        core.remove_localize_history(path)
+        self._home_page.refresh(core.load_localize_history())
+
+    def _clear_records(self) -> None:
+        records = core.load_localize_history()
+        if not records:
+            messagebox.showinfo("清理历史", "产物历史已经是空的。", parent=self)
+            return
+        if not messagebox.askyesno(
+            "清理产物历史",
+            f"当前共有 {len(records)} 条历史记录。\n"
+            "只清空软件里的历史登记，不会删除磁盘上的任何游戏或汉化副本。\n\n"
+            "确认清空全部产物历史？",
+            parent=self,
+        ):
+            return
+        core.clear_localize_history()
+        self._home_page.refresh([])
+        if self._loc_alive():
+            self._loc_status_var.set("已清空产物历史")
+
     def _loc_alive(self) -> bool:
         try:
             return not self._closing and bool(self.winfo_exists())
@@ -1407,6 +1773,7 @@ class FerryApp(tk.Tk):
         ).pack(anchor="w", pady=(0, 3))
 
         target_card = tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+        self._card_frames.append(target_card)
         target_card.pack(fill="x", pady=(0, 8))
         box = ttk.Frame(target_card, style="Card.TFrame", padding=10)
         box.pack(fill="both", expand=True)
@@ -1415,6 +1782,7 @@ class FerryApp(tk.Tk):
         pick.pack(fill="x")
         self._loc_path_var = tk.StringVar(value=str(self._load_ui_state().get("localize_dir") or ""))
         entry = ttk.Entry(pick, textvariable=self._loc_path_var, font=FONT_BODY)
+        self._loc_path_entry = entry
         entry.pack(side="left", fill="x", expand=True)
         entry.bind("<Return>", lambda _e: self._loc_start_probe())
         ttk.Button(pick, text="选游戏目录…", command=self._loc_choose).pack(side="left", padx=(6, 0))
@@ -1429,16 +1797,33 @@ class FerryApp(tk.Tk):
         out_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
         ttk.Button(out_row, text="浏览…", command=self._loc_choose_output).pack(side="left", padx=(6, 0))
 
+        opt_row = ttk.Frame(box, style="Card.TFrame")
+        opt_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(opt_row, text="UE AES 密钥（可选）", style="Card.Muted.TLabel").pack(side="left")
+        self._loc_aes_var = tk.StringVar(value="")
+        aes_entry = ttk.Entry(opt_row, textvariable=self._loc_aes_var, font=FONT_BODY, width=26)
+        aes_entry.pack(side="left", fill="x", expand=True, padx=(8, 10))
+        aes_entry.bind("<Return>", lambda _e: self._loc_start_probe())
+        self._loc_worldbook_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            opt_row,
+            text="翻译前自动预分析设定集",
+            variable=self._loc_worldbook_var,
+        ).pack(side="left")
+
         tools = ttk.Frame(parent)
         tools.pack(fill="x", pady=(0, 6))
         self._loc_probe_button = make_action_button(tools, "检测游戏", self._loc_start_probe, ACCENT)
         self._loc_probe_button.pack(side="left")
         self._loc_recon_button = ttk.Button(tools, text="字节侦查", command=self._loc_start_recon)
         self._loc_recon_button.pack(side="left", padx=(6, 0))
+        self._loc_analyze_button = ttk.Button(tools, text="剧本预分析", command=self._loc_start_analyze)
+        self._loc_analyze_button.pack(side="left", padx=(6, 0))
         self._loc_run_button = make_action_button(tools, "开始汉化", self._loc_start, GREEN, state="disabled")
         self._loc_run_button.pack(side="left", padx=(8, 0))
         self._loc_stop_button = make_action_button(tools, "停止", self._loc_stop, RED, state="disabled")
         self._loc_stop_button.pack(side="right")
+        self._themed_buttons.extend([(self._loc_probe_button, "bg"), (self._loc_run_button, "bg"), (self._loc_stop_button, "bg")])
         self._loc_status_var = tk.StringVar(value="等待检测")
         ttk.Label(parent, textvariable=self._loc_status_var, foreground=MUTED, font=FONT_SMALL, wraplength=620).pack(anchor="w")
 
@@ -1446,6 +1831,7 @@ class FerryApp(tk.Tk):
         self._loc_progress.pack(fill="x", pady=(0, 6))
 
         report_card = tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+        self._card_frames.append(report_card)
         self._loc_report = tk.Text(
             report_card, height=11, wrap="word", bg=CARD, fg=INK, font=FONT_BODY,
             relief="flat", padx=12, pady=10,
@@ -1468,23 +1854,33 @@ class FerryApp(tk.Tk):
         foot = ttk.Frame(parent)
         foot.pack(side="bottom", fill="x", pady=(6, 0))
         report_card.pack(fill="both", expand=True)
-        self._loc_edit_tl_button = ttk.Button(foot, text="① 提取文本(自翻)", command=self._loc_open_tl_file)
+        foot_row1 = ttk.Frame(foot)
+        foot_row1.pack(fill="x")
+        self._loc_edit_tl_button = ttk.Button(foot_row1, text="① 提取文本(自翻)", command=self._loc_open_tl_file)
         self._loc_edit_tl_button.pack(side="left")
-        self._loc_apply_button = ttk.Button(foot, text="② 自翻回录重打包", command=self._loc_apply_only)
+        self._loc_apply_button = ttk.Button(foot_row1, text="② 自翻回录重打包", command=self._loc_apply_only)
         self._loc_apply_button.pack(side="left", padx=(6, 6))
-        self._loc_import_tl_button = ttk.Button(foot, text="导入外部译文…", command=self._loc_import_external_tl)
-        self._loc_import_tl_button.pack(side="left", padx=(0, 10))
-        self._loc_open_button = ttk.Button(foot, text="打开游戏目录", command=self._loc_open_output, state="disabled")
+        self._loc_import_tl_button = ttk.Button(foot_row1, text="导入外部译文…", command=self._loc_import_external_tl)
+        self._loc_import_tl_button.pack(side="left", padx=(0, 6))
+        self._loc_fontpatch_button = ttk.Button(foot_row1, text="修复中文字体", command=self._loc_fontpatch)
+        self._loc_fontpatch_button.pack(side="left", padx=(0, 6))
+        self._loc_export_patch_button = ttk.Button(foot_row1, text="导出补丁包", command=self._loc_export_patch)
+        self._loc_export_patch_button.pack(side="left")
+
+        foot_row2 = ttk.Frame(foot)
+        foot_row2.pack(fill="x", pady=(4, 0))
+        self._loc_open_button = ttk.Button(foot_row2, text="打开游戏目录", command=self._loc_open_output, state="disabled")
         self._loc_open_button.pack(side="left")
-        self._loc_revert_button = ttk.Button(foot, text="撤销汉化", command=self._loc_revert_game)
-        self._loc_revert_button.pack(side="left", padx=(8, 0))
-        self._loc_history_button = ttk.Button(foot, text="最近记录", command=self._loc_show_history)
-        self._loc_history_button.pack(side="left", padx=(8, 0))
+        self._loc_revert_button = ttk.Button(foot_row2, text="撤销汉化", command=self._loc_revert_game)
+        self._loc_revert_button.pack(side="left", padx=(6, 0))
+        self._loc_history_button = ttk.Button(foot_row2, text="最近记录", command=self._loc_show_history)
+        self._loc_history_button.pack(side="left", padx=(6, 0))
+        ttk.Button(foot_row2, text="清理历史", command=self._clear_records).pack(side="left", padx=(6, 0))
 
         self._loc_play_path: Path | None = None
         self._loc_write([
             ("head", "检测报告"),
-            ("dim", "尚未检测游戏。选择目录、镜像或程序后，这里会列出可提取的文本和写回条件。"),
+            ("dim", "尚未检测游戏。支持直接把游戏文件夹、.exe 或镜像拖进本窗口，松手即自动识别并体检。"),
         ])
 
     def _close_localize(self) -> None:
@@ -1502,17 +1898,207 @@ class FerryApp(tk.Tk):
         path = filedialog.askopenfilename(
             title="选择游戏镜像 / 安装包（.apk/.ipa/.vpk/.iso/.cso/.nds/.jar/.sis/.cod/.bar/.swf/.hdi/.dir）或单 EXE 游戏",
             filetypes=[
-                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx *.cod *.bar *.swf *.hdi *.fdi *.nhd *.dir *.dxr *.cst *.ald *.love *.xp3 *.pck *.pfs *.locres *.exe *.com *.dat"),
-                ("移动端 / 功能机 / 掌机包 (.apk/.ipa/.vpk/.iso/.cso/.nds/.jar/.sis/.cod/.bar)", "*.apk *.ipa *.vpk *.iso *.cso *.nds *.jar *.sis *.sisx *.cod *.bar"),
-                ("Flash / 复古 Win3.1 / PC-98 (.swf / .dir / .dxr / .ald / .hdi / .fdi / .nhd)", "*.swf *.dir *.dxr *.cst *.ald *.hdi *.fdi *.nhd"),
+                ("全平台游戏镜像 / 安装包 / 可执行文件", "*.chd *.cue *.bin *.iso *.cso *.nds *.z64 *.v64 *.n64 *.tra *.apk *.ipa *.vpk *.jar *.sis *.sisx *.cod *.bar *.swf *.hdi *.fdi *.nhd *.dir *.dxr *.cst *.ald *.love *.xp3 *.pck *.pfs *.locres *.exe *.com *.dat"),
+                ("主机与掌机镜像 (.chd/.cue/.bin/.iso/.cso/.nds/.z64/.v64/.n64/.vpk)", "*.chd *.cue *.bin *.iso *.cso *.nds *.z64 *.v64 *.n64 *.vpk"),
+                ("移动端 / 功能机 / 复古与 AGS (.apk/.ipa/.jar/.sis/.swf/.hdi/.tra)", "*.apk *.ipa *.jar *.sis *.sisx *.cod *.bar *.swf *.dir *.dxr *.cst *.ald *.hdi *.fdi *.nhd *.tra"),
                 ("所有文件", "*.*"),
             ],
             parent=self,
         )
         if path:
             p = Path(path)
-            self._loc_path_var.set(str(p.parent if p.is_file() else p))
+            self._loc_path_var.set(str(p))
+            if hasattr(self, "_loc_path_entry"):
+                try:
+                    self._loc_path_entry.xview_moveto(1.0)
+                except tk.TclError:
+                    pass
             self._loc_start_probe()
+
+    def _loc_adapter_options(self) -> dict[str, object]:
+        opts: dict[str, object] = {}
+        raw_aes = (self._loc_aes_var.get() if hasattr(self, "_loc_aes_var") else "").strip()
+        if raw_aes:
+            opts["aes_key"] = raw_aes
+        return opts
+
+    def _loc_start_analyze(self) -> None:
+        if not self._loc_alive() or self._localizing:
+            return
+        raw = self._loc_path_var.get().strip().strip('"')
+        if not raw or not Path(raw).exists():
+            messagebox.showinfo("剧本预分析", "请先选择一个有效的游戏目录或文件。", parent=self)
+            return
+        root = Path(raw)
+        from ferrygame.worldbook import find as find_wb
+
+        existing = find_wb(root)
+        force = False
+        if existing is not None:
+            choice = messagebox.askyesnocancel(
+                "剧本设定集已存在",
+                f"检测到该游戏已有设定集：\n{existing}\n\n"
+                "· 点「是」：直接打开手改\n"
+                "· 点「否」：重新调用大模型预分析并覆盖\n"
+                "· 点「取消」：返回",
+                parent=self,
+            )
+            if choice is None:
+                return
+            if choice is True:
+                try:
+                    os.startfile(str(existing))
+                except OSError as exc:
+                    messagebox.showerror("打开设定集", core.explain_error(exc, stage="打开设定集"), parent=self)
+                return
+            force = True
+
+        config = self._snapshot_config()
+        try:
+            settings = core.localize_settings(config, root)
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("剧本预分析", core.explain_error(exc, stage="准备分析配置"), parent=self)
+            return
+        if settings["engine"] in core.ENGINES_WITH_KEY and not settings.get("api_key"):
+            messagebox.showinfo(
+                "缺少 API Key",
+                f"当前引擎「{settings['engine']}」需要 API Key，请先在「设置」页配置。",
+                parent=self,
+            )
+            return
+
+        opts = self._loc_adapter_options()
+        self._localizing = True
+        self._loc_cancel.clear()
+        self._loc_set_busy(True)
+        self._loc_status_var.set("正在通读抽样剧本，生成世界观与专有名词表……")
+        self._loc_write([("dim", "正在执行第 0 步：轻量剧本预分析（通常只需 1 次模型调用）……")])
+        threading.Thread(
+            target=self._loc_analyze_worker,
+            args=(root, settings, opts, force),
+            daemon=True,
+        ).start()
+
+    def _loc_analyze_worker(self, root: Path, settings: dict, opts: dict, force: bool) -> None:
+        try:
+            from ferrygame.pipeline import analyze_game
+
+            wb, _proj, _probe = analyze_game(
+                root,
+                settings=settings,
+                adapter_options=opts,
+                force=force,
+                save=True,
+                cancel_event=self._loc_cancel,
+            )
+            self.result_queue.put(("loc_analyze_done", wb))
+        except Exception as exc:
+            core.LOG.exception("localize: analyze failed")
+            self.result_queue.put(("loc_error", ("analyze", core.explain_error(exc, stage="剧本预分析"))))
+
+    def _loc_fontpatch(self) -> None:
+        raw = self._loc_path_var.get().strip().strip('"')
+        if not raw or not Path(raw).exists():
+            messagebox.showinfo("修复中文字体", "请先选择一个游戏目录。", parent=self)
+            return
+        root = Path(raw)
+        if root.is_file():
+            root = root.parent
+        engine = "auto"
+        if self._loc_probe is not None and getattr(self._loc_probe, "engine", ""):
+            low = self._loc_probe.engine.lower()
+            if "ren'py" in low or "renpy" in low:
+                engine = "renpy"
+            elif "ace" in low or "vx" in low or "xp" in low:
+                engine = "rpgmaker_ace"
+            elif "rpg maker" in low:
+                engine = "rpgmaker"
+            elif "kirikiri" in low:
+                engine = "kirikiri"
+            elif "godot" in low:
+                engine = "godot"
+        font_choice = filedialog.askopenfilename(
+            title="选择开源/本机中文字体（直接点取消则自动使用摆渡 fonts/ 或系统黑体/等线）",
+            filetypes=[("TrueType / OpenType 字体", "*.ttf *.otf"), ("所有文件", "*.*")],
+            parent=self,
+        )
+        font_path = Path(font_choice) if font_choice else None
+        try:
+            rep = core.patch_game_font(root, engine=engine, font_path=font_path)
+        except Exception as exc:
+            messagebox.showerror("修复中文字体", core.explain_error(exc, stage="注入中文字体"), parent=self)
+            return
+        tag = "ok" if rep.ok else "warn"
+        lines: list[tuple[str, str]] = [(tag, rep.summary())]
+        for note in rep.notes:
+            lines.append(("dim", f"· {note}"))
+        if rep.ok:
+            lines.append(("dim", "已纳入 .ferry-undo.json，随时可点「撤销汉化」还原，也会自动收入「导出补丁包」。"))
+        self._loc_write(lines)
+        self._loc_status_var.set("中文字体回退已注入" if rep.ok else "未写入字体文件")
+
+    def _loc_export_patch(self) -> None:
+        raw = self._loc_path_var.get().strip().strip('"')
+        if not raw or not Path(raw).exists():
+            messagebox.showinfo("导出纯净补丁包", "请先选择一个已汉化或已提取文本的游戏目录。", parent=self)
+            return
+        root = Path(raw)
+        base = root.parent if root.is_file() else root
+        out_path = filedialog.asksaveasfilename(
+            title="导出可分享的纯净汉化补丁包（不含原版游戏大文件）",
+            initialdir=str(base.parent),
+            initialfile=f"{base.name}_汉化补丁.zip",
+            defaultextension=".zip",
+            filetypes=[("ZIP 补丁压缩包", "*.zip")],
+            parent=self,
+        )
+        if not out_path:
+            return
+        try:
+            rep = core.export_patch_pack(base, out_zip=Path(out_path), include_source=True)
+        except Exception as exc:
+            messagebox.showerror("导出补丁包", core.explain_error(exc, stage="导出汉化补丁包"), parent=self)
+            return
+        tag = "ok" if rep.ok else "warn"
+        lines: list[tuple[str, str]] = [(tag, rep.summary())]
+        for note in rep.notes:
+            lines.append(("dim", f"· {note}"))
+        for sk in rep.skipped[:10]:
+            lines.append(("warn", f"跳过：{sk}"))
+        self._loc_write(lines)
+        self._loc_status_var.set("已导出纯净补丁包" if rep.ok else "未导出补丁包")
+        if rep.ok and rep.out_zip is not None:
+            if messagebox.askyesno("导出成功", f"{rep.summary()}\n\n是否打开补丁包所在文件夹？", parent=self):
+                try:
+                    os.startfile(str(rep.out_zip.parent))
+                except OSError:
+                    pass
+
+    def _loc_offer_missing_deps(self, root: Path, needs: list[str]) -> None:
+        if not needs:
+            return
+        status = core.resolve_dependencies(needs)
+        if not status.missing:
+            return
+        dep = status.missing[0]
+        if not messagebox.askyesno("缺少外部汉化工具", dep.prompt(), parent=self):
+            return
+        self._loc_set_busy(True)
+        self._loc_status_var.set(f"正在下载安装 {dep.name}……")
+        self._loc_write([("dim", f"正在下载并安装 {dep.name} 到 {dep.target}，请稍候……")])
+        threading.Thread(
+            target=self._loc_dep_install_worker,
+            args=(root, dep),
+            daemon=True,
+        ).start()
+
+    def _loc_dep_install_worker(self, root: Path, dep) -> None:
+        def _prog(done: int, total: int) -> None:
+            if total > 0:
+                self.result_queue.put(("loc_dep_progress", (dep.name, done, total)))
+
+        ok, message = core.install_dependency(dep, progress=_prog)
+        self.result_queue.put(("loc_dep_done", (root, ok, message)))
 
     def _loc_start_recon(self) -> None:
         raw = self._loc_path_var.get().strip().strip('"')
@@ -1530,34 +2116,69 @@ class FerryApp(tk.Tk):
         self._loc_write(lines)
         self._loc_status_var.set("字节侦查完成")
 
+    _SINGLE_FILE_GAME_EXTS = {
+        ".chd", ".cue", ".bin", ".iso", ".cso", ".nds", ".z64", ".v64", ".n64",
+        ".vpk", ".apk", ".ipa", ".swf", ".hdi", ".fdi", ".nhd", ".tra",
+    }
+
+    def _loc_progress_busy(self, active: bool, *, fill_done: bool = False) -> None:
+        """统一驱动游戏汉化页的进度条（体检、提取文本、AI 汉化共用同一条进度条）。"""
+        if not self._loc_alive():
+            return
+        if active:
+            self._loc_progress.configure(mode="indeterminate", maximum=100, value=0)
+            self._loc_progress.start(14)
+        else:
+            self._loc_progress.stop()
+            self._loc_progress.configure(mode="determinate", maximum=100, value=100 if fill_done else 0)
+
     def _loc_open_tl_file(self) -> None:
+        if not self._loc_alive() or self._localizing:
+            return
         raw = self._loc_path_var.get().strip().strip('"')
         if not raw or not Path(raw).exists():
             messagebox.showinfo("提取文本（自翻导出）", "请先选择一个游戏目录或文件。", parent=self)
             return
-        from ferrygame.pipeline import scan_game
-        from ferrygame.project import TSV_NAME, export_tsv, load as load_tl
-
         root = Path(raw)
-        proj = load_tl(root)
-        if proj is None or not proj.units:
-            proj, probe = scan_game(root, save=True)
-            if proj.path is None or not proj.units:
-                messagebox.showinfo("提取文本（自翻导出）", f"尚未提取出可翻译条目：\n{probe.summary()}", parent=self)
-                return
-        tsv_path = export_tsv(proj)
-        lines: list[tuple[str, str]] = [
-            ("head", f"文本提取完成（0 Token）：{proj.summary()}"),
-            ("ok", f"· Excel/记事本自翻表格（改 dst 列即可）：{tsv_path}"),
-            ("ok", f"· JSON 完整双语工程表（改 \"dst\" 字段即可）：{proj.path}"),
-            ("dim", "提示：编辑保存上述任一文件后，直接点击下方「② 自翻回录重打包」即可写回游戏并重打包！"),
-        ]
-        self._loc_write(lines)
+        self._localizing = True
+        self._loc_set_busy(True)
+        self._loc_progress_busy(True)
+        self._loc_status_var.set("正在解包并提取游戏文本……")
+        self._loc_write([
+            ("head", "正在提取文本（0 Token）……"),
+            ("dim", f"目标：{root}"),
+            ("dim", "大体积镜像（如 .chd / .iso / .pak）首次解包可能需要数秒，请稍候。"),
+        ])
+        opts = self._loc_adapter_options()
+        threading.Thread(target=self._loc_extract_worker, args=(root, opts), daemon=True).start()
+
+    def _loc_extract_worker(self, root: Path, opts: dict | None = None) -> None:
         try:
-            os.startfile(str(tsv_path if tsv_path.is_file() else proj.path))
-            self._loc_status_var.set(f"已提取并打开自翻表 {tsv_path.name}")
-        except OSError as exc:
-            messagebox.showerror("提取文本", str(exc), parent=self)
+            from ferrygame.pipeline import scan_game
+            from ferrygame.project import export_tsv, load as load_tl
+
+            adapter_opts = dict(opts or {})
+            root, detected = core.engine_adapters.resolve_game_target(root, **adapter_opts)
+            proj = load_tl(root)
+            need_rescan = (
+                proj is None
+                or not proj.units
+                or (proj.game and proj.game != root.name)
+                or (detected is not None and proj.adapter and proj.adapter != detected.name)
+            )
+            probe_summary = ""
+            if need_rescan:
+                proj, probe = scan_game(root, adapter=detected, save=True)
+                probe_summary = probe.summary()
+                if proj.path is None or not proj.units:
+                    self.result_queue.put(("loc_extract_done", (None, None, None, probe_summary)))
+                    return
+            tsv_path = export_tsv(proj)
+            out_dir = tsv_path.parent if tsv_path.is_file() else (proj.path.parent if proj.path else root)
+            self.result_queue.put(("loc_extract_done", (proj, tsv_path, out_dir, probe_summary)))
+        except Exception as exc:
+            core.LOG.exception("localize: extract_worker failed")
+            self.result_queue.put(("loc_extract_error", core.explain_error(exc, stage="提取游戏文本")))
 
     def _loc_import_external_tl(self) -> None:
         raw = self._loc_path_var.get().strip().strip('"')
@@ -1601,7 +2222,12 @@ class FerryApp(tk.Tk):
             return
         out_str = (self._loc_out_var.get() or "").strip()
         out = Path(out_str) if out_str else None
-        ap = apply_project(proj, out=out)
+        try:
+            ap = apply_project(proj, out=out)
+        except Exception as exc:
+            core.LOG.exception("localize: apply_only failed")
+            messagebox.showerror("写回译文表", core.explain_error(exc, stage="写回游戏文件"), parent=self)
+            return
         lines: list[tuple[str, str]] = [
             ("head", f"写回完成（0 Token）：成功 {ap.applied} 条"),
             ("ok", f"产出位置：{ap.out_path}"),
@@ -1689,6 +2315,8 @@ class FerryApp(tk.Tk):
             return
         self._loc_probe_button.configure(state="disabled" if busy else "normal")
         self._loc_stop_button.configure(state="normal" if busy else "disabled")
+        if hasattr(self, "_loc_edit_tl_button"):
+            self._loc_edit_tl_button.configure(state="disabled" if busy else "normal")
         if busy:
             self._loc_run_button.configure(state="disabled")
         else:
@@ -1709,13 +2337,10 @@ class FerryApp(tk.Tk):
             return
         raw = self._loc_path_var.get().strip().strip('"')
         if not raw:
-            messagebox.showinfo("体检", "先选一个游戏目录。", parent=self._loc_win)
+            messagebox.showinfo("体检", "先选一个游戏目录或文件。", parent=self._loc_win)
             return
         root = Path(raw)
-        if root.is_file():
-            root = root.parent
-            self._loc_path_var.set(str(root))
-        if not root.is_dir():
+        if not root.exists():
             messagebox.showinfo("体检", f"这个路径不存在：\n{raw}", parent=self._loc_win)
             return
         self._loc_root = root
@@ -1725,16 +2350,30 @@ class FerryApp(tk.Tk):
         self._remember_localize_dir(root)
         if self._loc_alive():
             self._loc_open_button.configure(state="disabled")
-            self._loc_progress.configure(value=0)
-            self._loc_status_var.set("正在体检……")
-            self._loc_write([("dim", "正在看这个游戏的目录结构，稍等。")])
+            self._loc_progress_busy(True)
+            if root.is_file():
+                self._loc_status_var.set(f"正在体检文件：{root.name}……")
+                self._loc_write([("dim", f"正在精准识别文件「{root.name}」，不扫描同目录其他文件，稍等。")])
+            else:
+                self._loc_status_var.set("正在体检……")
+                self._loc_write([("dim", "正在看这个游戏的目录结构，稍等。")])
         self._loc_set_busy(True)
-        threading.Thread(target=self._loc_probe_worker, args=(root,), daemon=True).start()
+        opts = self._loc_adapter_options()
+        threading.Thread(target=self._loc_probe_worker, args=(root, opts), daemon=True).start()
 
-    def _loc_probe_worker(self, root: Path) -> None:
+    def _loc_probe_worker(self, root: Path, opts: dict | None = None) -> None:
         try:
-            adapter = core.engine_adapters.detect(root)
+            adapter_opts = dict(opts or {})
+            root, adapter = core.engine_adapters.resolve_game_target(root, **adapter_opts)
             existing_lines = core.existing_localize_lines(root)
+            try:
+                from ferrygame.worldbook import load as load_wb
+
+                wb = load_wb(root)
+                if wb is not None:
+                    existing_lines = list(existing_lines) + [f"剧本设定集：{wb.summary()}（{wb.path}）"]
+            except Exception:
+                pass
             if adapter is None:
                 hints = core.scan_hints(root)
                 self.result_queue.put(("loc_probe", (root, None, "", hints, existing_lines)))
@@ -1743,7 +2382,7 @@ class FerryApp(tk.Tk):
             try:
                 from ferrygame.pipeline import scan_game
 
-                tl_proj, _ = scan_game(root, adapter=adapter, save=True)
+                tl_proj, _ = scan_game(root, adapter=adapter, adapter_options=adapter_opts, save=True)
                 if tl_proj.units and tl_proj.path:
                     existing_lines = list(existing_lines) + [
                         f"双语译文表：{tl_proj.summary()}",
@@ -1753,10 +2392,16 @@ class FerryApp(tk.Tk):
                 pass
             self.result_queue.put(("loc_probe", (root, report, adapter.name, [], existing_lines)))
         except Exception as exc:
-            self.result_queue.put(("loc_error", ("probe", core.redact_secrets(str(exc)))))
+            core.LOG.exception("localize: probe failed")
+            self.result_queue.put(("loc_error", ("probe", core.explain_error(exc, stage="游戏体检"))))
 
     def _loc_probe_lines(self, report, adapter_name: str, existing_lines: list[str] | None = None) -> list[tuple[str, str]]:
         lines: list[tuple[str, str]] = [("head", f"引擎：{report.engine}（适配器 {adapter_name}）")]
+        target_root = report.root or self._loc_root
+        if target_root is not None:
+            tp = Path(target_root)
+            kind_label = "目标文件" if tp.is_file() else "目标目录"
+            lines.append(("dim", f"{kind_label}：{tp.name}（{tp}）"))
         if report.container or report.text_format:
             lines.append(("dim", f"容器：{report.container or '未标注'}　｜　文本格式：{report.text_format or '未标注'}"))
         lines.append(("", f"待翻：{report.unit_count} 条"))
@@ -1846,8 +2491,11 @@ class FerryApp(tk.Tk):
         try:
             settings = core.localize_settings(config, root)
         except (ValueError, OSError) as exc:
-            messagebox.showerror("开始汉化", core.redact_secrets(str(exc)), parent=self._loc_win)
+            messagebox.showerror("开始汉化", core.explain_error(exc, stage="准备汉化配置"), parent=self._loc_win)
             return
+        if hasattr(self, "_loc_worldbook_var") and self._loc_worldbook_var.get():
+            settings["auto_worldbook"] = True
+        adapter_opts = self._loc_adapter_options()
         if settings["engine"] in core.ENGINES_WITH_KEY and not settings.get("api_key"):
             messagebox.showinfo(
                 "缺少 API Key",
@@ -1864,7 +2512,7 @@ class FerryApp(tk.Tk):
             self._loc_status_var.set("正在翻译……")
             self._loc_progress.configure(maximum=max(1, probe.unit_count), value=0)
             self._loc_open_button.configure(state="disabled")
-        threading.Thread(target=self._loc_worker, args=(root, settings), daemon=True).start()
+        threading.Thread(target=self._loc_worker, args=(root, settings, adapter_opts), daemon=True).start()
 
     def _loc_stop(self) -> None:
         if not self._localizing:
@@ -1873,20 +2521,25 @@ class FerryApp(tk.Tk):
         if self._loc_alive():
             self._loc_status_var.set("已请求停止，等当前批次返回后收尾……")
 
-    def _loc_worker(self, root: Path, settings: dict) -> None:
+    def _loc_worker(self, root: Path, settings: dict, adapter_opts: dict | None = None) -> None:
         def progress(done: int, total: int, modid: str) -> None:
             self.result_queue.put(("loc_progress", (done, total, modid)))
 
         try:
             result = core.localize_game(
-                root, settings=settings, progress=progress, cancel_event=self._loc_cancel
+                root,
+                settings=settings,
+                progress=progress,
+                cancel_event=self._loc_cancel,
+                adapter_options=adapter_opts,
             )
             core.LOG.info("localize: done entries=%s translated=%s applied=%s out=%s",
                           result.entries, result.translated, result.applied, result.out_path)
             self.result_queue.put(("loc_done", result))
         except Exception as exc:
             core.LOG.exception("localize: worker failed")
-            self.result_queue.put(("loc_error", ("run", core.redact_secrets(str(exc)))))
+            stage = str(getattr(exc, "_ferry_stage", "") or "汉化游戏")
+            self.result_queue.put(("loc_error", ("run", core.explain_error(exc, stage=stage))))
 
     def _loc_show_result(self, result) -> None:
         lines: list[tuple[str, str]] = []
@@ -2181,54 +2834,24 @@ class FerryApp(tk.Tk):
             reading.insert("end", "\n".join(lines) + "\n")
 
         section("游戏汉化", [
-            "选择游戏目录、镜像或程序，先检测是否能提取文本和写回。检测不调用翻译服务。",
-            "检测通过后可以开始汉化。要校对现有译文，编辑译文表后直接写回，无需再次翻译。",
-            "完成后从项目工作台打开产物目录。原地写入和生成副本是不同方式，以检测和结果报告为准。",
+            "直接把游戏文件夹、.exe 或镜像拖进窗口即可自动体检（0 费用）。",
+            "检测通过后点击开始汉化；也可提取双语表手动校对后 0 Token 写回。",
+            "完成后可在首页打开或清理产物历史记录（清理历史不会删游戏文件）。",
         ])
         section("模组汉化", [
-            "1. 选一个 Minecraft 实例，点「扫描」。",
-            "2. 表格里只列缺中文的模组，已有人工汉化的自动让位。",
-            "3. 点「翻译全部待AI」生成资源包，进游戏启用（删除即还原）。",
-        ])
-        section("表格操作", [
-            "双击行：直接翻译该模组。",
-            "Ctrl / Shift 点选：多选；Ctrl+A：全选可见行。",
-            "右键行：删除 AI 汉化、重载译文、还原英文、",
-            "　　　　重翻整个模组、安装人工汉化包、设置不翻译词条。",
-            "F5：重新扫描；Esc：清空搜索。",
-            "选中模组后点「查询在线汉化」，可查多个网站有没有现成汉化；查询源在「设置」里自定义。",
-            "右键「加入不翻译名单」：此模组完全跳过 AI 翻译（状态列显示 ∅），右键可移出恢复。",
-            "【推荐】全在摆渡里一次做完，不用反复进游戏：选实例 → 扫描 → 勾「翻译硬编码文本」",
-            "　　→ 开始翻译。译完会自动把映射写进游戏目录（勾了「译完自动导出桥映射」时），",
-            "　　进游戏点 F9 看「已替换」在涨就成。tooltip、聊天栏文本都走这条线。",
-            "　　游戏里按 F9 还会顺手在游戏目录写一份 ferrybridge-diagnose.txt —— 桥要是",
-            "　　哪里不对劲，把那个文件整份发出来就行（不用自己去翻日志）。",
-            "「导出桥接映射」：规则写进实例 config/literalbridge/ferry.json（给 LiteralBridge），",
-            "　　映射写进游戏目录的 ferrybridge-mappings.json（给自研摆渡桥，每秒热重载、不用重启）。",
-            "　　实例 mods 里没装 LiteralBridge 时：网络通就直接从 GitHub 下匹配你加载器",
-            "　　和游戏版本的那个 jar 丢进 mods（模组要重启游戏才加载）；网络不通或没有",
-            "　　支持你这版的才打开项目页自己下。注意它官方只有 Forge 版、MC 1.20.1–1.20.x，",
-            "　　NeoForge / 1.21+ 上装不上，那种情况只能靠自研摆渡桥。",
-            "　　已经装了的话（勾了「自动升级 LiteralBridge」时）顺带查一次新版，有就自动换掉，",
-            "　　旧版改名成 .jar.bak-… 留在原地备份，想回退把名字改回去就行。",
-            "「导入游戏采集（开发者补漏）」：只给开发者用的兜底 —— 桥在游戏里记下没翻到的英文，",
-            "　　回摆渡翻译后合并进同一份映射表。普通用户不需要它，桌面扫描已经覆盖绝大部分。",
-            "两个入口写的是同一份摆渡桥映射表，会合并，不会互相覆盖。",
+            "1. 拖入或选择 Minecraft 实例并扫描，已有人工汉化的模组会自动让位。",
+            "2. 双击行单翻、Ctrl/Shift 多选、右键可删除/重载/还原/排除模组，F5 重扫。",
+            "3. 生成资源包进游戏启用即可；硬编码文本可勾「翻译硬编码文本」并导出桥映射。",
         ])
         section("状态符号", [
-            "✓ 已 AI 汉化完成（AI 从零翻完）　✓ 已 AI 补完（人工打底、AI 只补缺口）",
-            "◈ 人工·完整（全是人工汉化，摆渡没插手）　◐ 部分翻译　○ 待翻译",
-            "⚠ 含硬编码·待翻N（走桥的那部分还没翻完）　⊗ AI 汉化已卸载",
-            "⊘ 已还原英文　∅ 已排除（不翻译）　✗ 上次翻译失败",
+            "✓ 已完成　◈ 人工完整　◐ 部分翻译　○ 待翻译",
+            "⚠ 含硬编码　⊗ AI 已卸载　⊘ 已还原英文　∅ 已排除　✗ 上次失败",
         ])
-        section("能力边界", [
-            "只能改语言文件：写死在模组代码、图片纹理、NBT 描述里的文字无法覆盖，扫描后点「汉化限制」查看。",
+        section("省流与 Batch API", [
+            "内置预过滤、去重、条目级缓存与前缀缓存；「设置」页可开关深度思考、切换日夜主题或使用国内/国际 5 折 Batch API。",
         ])
         section("密钥安全", [
-            "API Key 只存在本机的 ferry_config.json，只用来调你自己选的翻译接口，不上传到任何服务器。",
-            "Windows 上会用系统自带的 DPAPI 加密后再落盘 —— 文件被别人拿到、传到别的机器也解不开。",
-            "进程内存里仍是明文（不然没法拿去调接口）：要防的是文件泄漏，不是同机抓内存。",
-            "输入框默认打码显示，右侧「显示」只切换画面显示，不影响存储。",
+            "API Key 仅保存在本机 ferry_config.json（Windows 上经 DPAPI 加密落盘），不上传到任何第三方。",
         ])
         reading.configure(state="disabled")
         self._center_over(window, 580, 500)
@@ -2784,7 +3407,7 @@ class FerryApp(tk.Tk):
         body = ttk.Frame(window, padding=14)
         body.pack(fill="both", expand=True)
         ttk.Label(body, text="疑似无法完全汉化的模组", font=FONT_TITLE).pack(anchor="w")
-        ttk.Label(body, text="这些模组含硬编码文本（不在语言文件里），资源包无法覆盖。列表为启发式检测，可能包含少量技术字符串，仅供参考。", foreground=BODY_INK, wraplength=880).pack(anchor="w", pady=(4, 8))
+        ttk.Label(body, text="以下模组含硬编码文本（不在语言文件里，资源包无法覆盖），启发式检测仅供参考。", foreground=BODY_INK, wraplength=880).pack(anchor="w", pady=(4, 8))
         btn_row = ttk.Frame(body)
         btn_row.pack(side="bottom", fill="x", pady=(8, 0))
         ttk.Button(btn_row, text="关闭", command=window.destroy).pack(side="right")
@@ -2866,30 +3489,24 @@ class FerryApp(tk.Tk):
             "支持原地写入、生成汉化副本、撤销恢复，并记录最近的汉化产物。",
         ], 0, 0)
         section(content, "Minecraft 模组", [
-            "扫描实例与模组语言文件，AI 只补缺失内容，人工、官方和社区译文优先。",
-            "以资源包输出，删除即可恢复；支持硬编码文本桥接、质量检查和术语表。",
-            "提供在线汉化查询与游戏内采集导入，方便继续维护已有译文。",
+            "扫描模组语言文件，人工与社区译文优先，AI 只补缺口。",
+            "以低优先级资源包输出，支持硬编码桥接与术语表。",
         ], 0, 1)
         section(content, "翻译引擎", [
-            "支持 MyMemory、DeepL Free、OpenAI 兼容、Anthropic、Gemini。",
-            "支持 Ollama、LM Studio 等本地模型，以及 API 预设、多模型并发池和连接测试。",
+            "支持 OpenAI 兼容、Anthropic、Gemini、本地模型及国内/国际 5 折 Batch API。",
+            "支持 API 预设、多模型并发池、思考链开关与条目级本地缓存。",
         ], 1, 0)
         section(content, "数据与安全", [
-            "项目文件保存在本地，API Key 使用现有本地保护机制。",
-            "诊断导出会脱敏，汉化副本和撤销记录可追踪。",
+            "配置与译文缓存留在本地，API Key 经 DPAPI 加密落盘，诊断包自动脱敏。",
         ], 1, 1)
         section(content, "能力边界", [
-            "图片里的文字需要单独处理。",
-            "动态拼接或运行时才出现的文本，可能需要桥接或游戏内采集。",
-            "能提取语言文件不代表游戏所有界面都会自动汉化，最终以检测报告为准。",
+            "图片文字需单独处理；部分硬编码或运行时拼接文本需桥接支持。",
         ], 2, 0)
         section(content, "数据来源与致谢", [
-            "Losketch / LiteralBridge：硬编码文本的通用显示层桥接，摆渡导出它的规则文件（Apache-2.0）",
-            "Minecraft 官方语言文件（Mojang）：术语表数据来源",
-            "PandaDevOfficial / Minecraft-All-Lang：Minecraft 语言文件镜像",
-            "CFPAOrg / Minecraft-Mod-Language-Package：社区汉化基线（遵守其许可证与署名要求）",
-            "Minecraft Wiki · Pack_format：资源包格式与版本号参考",
-            "Python 标准库：本项目无第三方 Python 依赖",
+            "Losketch / LiteralBridge（Apache-2.0）",
+            "Mojang 官方语言文件 / PandaDevOfficial 镜像",
+            "CFPAOrg / Minecraft-Mod-Language-Package（社区汉化基线）",
+            "Python 标准库 + tkinterdnd2（拖放支持）",
         ], 2, 1)
         ttk.Separator(body).pack(fill="x", pady=(12, 8))
         full_width_labels = [intro]
@@ -3005,6 +3622,308 @@ class FerryApp(tk.Tk):
 
         ttk.Button(body, text="保存", command=save).pack(anchor="e", pady=(12, 0))
         self._center_over(window, 660, 420)
+
+    def _show_batch_api_dialog(self) -> tk.Toplevel:
+        """国内/国际 Batch API（5 折异步批量翻译）可视化管理窗口。"""
+        window = tk.Toplevel(self)
+        window.title("Batch API（5折异步批量翻译） - 摆渡计划")
+        window.transient(self)
+
+        body = ttk.Frame(window, padding=14)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(
+            body,
+            text="支持阿里云百炼 / 智谱 BigModel / 硅基流动 / 百度千帆等国内 OpenAI 兼容平台，以及 OpenAI / Anthropic / Gemini 官方 Batch API。",
+            foreground=MUTED,
+            wraplength=760,
+        ).pack(anchor="w", pady=(0, 8))
+
+        form = ttk.LabelFrame(body, text="Batch 平台与接口配置", padding=10)
+        form.pack(fill="x", pady=(0, 10))
+        form.columnconfigure(1, weight=1)
+        form.columnconfigure(3, weight=1)
+
+        snap = self._snapshot_config()
+        current_engine = snap.get("engine") if snap.get("engine") in core.BATCH_PROVIDERS else "openai"
+        resolved_cur = core._resolve_engine_fields(snap, current_engine, {})
+
+        preset_labels = ["沿用当前引擎配置"] + [item["label"] for item in core.BATCH_PRESETS.values()]
+        label_to_preset_key = {item["label"]: k for k, item in core.BATCH_PRESETS.items()}
+
+        preset_var = tk.StringVar(value="沿用当前引擎配置")
+        provider_var = tk.StringVar(value=current_engine)
+        url_var = tk.StringVar(value=resolved_cur.get("base_url") or "")
+        model_var = tk.StringVar(value=resolved_cur.get("model") or "")
+        endpoint_var = tk.StringVar(value=core.resolve_batch_endpoint(current_engine, url_var.get()))
+        key_var = tk.StringVar(value=resolved_cur.get("api_key") or "")
+        note_var = tk.StringVar(value="先点「生成预览 JSONL（0费用）」可检查待提交批次，确认后再提交云端。")
+
+        ttk.Label(form, text="平台预设：").grid(row=0, column=0, sticky="w", pady=3)
+        preset_combo = ttk.Combobox(form, textvariable=preset_var, state="readonly", values=preset_labels, width=30)
+        preset_combo.grid(row=0, column=1, sticky="ew", padx=(4, 12), pady=3)
+
+        ttk.Label(form, text="协议类型：").grid(row=0, column=2, sticky="w", pady=3)
+        provider_combo = ttk.Combobox(form, textvariable=provider_var, state="readonly", values=["openai", "anthropic", "gemini"], width=14)
+        provider_combo.grid(row=0, column=3, sticky="w", padx=(4, 0), pady=3)
+
+        ttk.Label(form, text="接口地址：").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Entry(form, textvariable=url_var).grid(row=1, column=1, sticky="ew", padx=(4, 12), pady=3)
+
+        ttk.Label(form, text="模型名：").grid(row=1, column=2, sticky="w", pady=3)
+        ttk.Entry(form, textvariable=model_var).grid(row=1, column=3, sticky="ew", padx=(4, 0), pady=3)
+
+        ttk.Label(form, text="API Key：").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Entry(form, textvariable=key_var, show="•").grid(row=2, column=1, sticky="ew", padx=(4, 12), pady=3)
+
+        ttk.Label(form, text="Batch Endpoint：").grid(row=2, column=2, sticky="w", pady=3)
+        ttk.Entry(form, textvariable=endpoint_var).grid(row=2, column=3, sticky="ew", padx=(4, 0), pady=3)
+
+        def on_preset_changed(_evt=None) -> None:
+            chosen = preset_var.get()
+            pkey = label_to_preset_key.get(chosen)
+            if pkey:
+                p = core.BATCH_PRESETS[pkey]
+                provider_var.set(p["provider"])
+                url_var.set(p["base_url"])
+                model_var.set(p["model"])
+                endpoint_var.set(p["endpoint"])
+                note_var.set(p["note"])
+            else:
+                provider_var.set(current_engine)
+                url_var.set(resolved_cur.get("base_url") or "")
+                model_var.set(resolved_cur.get("model") or "")
+                endpoint_var.set(core.resolve_batch_endpoint(current_engine, url_var.get()))
+                note_var.set("当前使用「设置」页中已填好的翻译引擎配置。")
+
+        preset_combo.bind("<<ComboboxSelected>>", on_preset_changed)
+
+        def apply_preset_to_main() -> None:
+            prov = provider_var.get().strip() or "openai"
+            if prov in CUSTOM_ENGINES:
+                self.category_var.set(CUSTOM_CATEGORY_LABEL)
+                self.provider_var.set(CUSTOM_ENGINES[prov])
+                self._provider_selected()
+            if url_var.get().strip():
+                self.url_var.set(url_var.get().strip())
+            if model_var.get().strip():
+                self.model_var.set(model_var.get().strip())
+            if key_var.get().strip():
+                self.api_key_var.set(key_var.get().strip())
+            self._update_settings_summary()
+            note_var.set("已填入「设置」页翻译引擎区域（记得在「设置」页点「保存设置」持久化）。")
+
+        ttk.Label(form, textvariable=note_var, foreground=ACCENT, font=FONT_SMALL, wraplength=620).grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0)
+        )
+        ttk.Button(form, text="套用到主设置", command=apply_preset_to_main).grid(row=3, column=3, sticky="e", pady=(6, 0))
+
+        # ── 零费用生成预览 JSONL ──
+        gen_row = ttk.Frame(body)
+        gen_row.pack(fill="x", pady=(0, 8))
+        status_var = tk.StringVar(value="就绪：可先生成 0 费用预览 JSONL，或选择下方任务刷新进度 / 取回缓存。")
+
+        def build_batch_settings(root_path: Path, is_game: bool = False) -> dict:
+            cfg = self._snapshot_config()
+            prov = provider_var.get().strip() or "openai"
+            overrides = {
+                "engine": prov,
+                "base_url": url_var.get().strip(),
+                "api_key": key_var.get().strip(),
+                "model": model_var.get().strip(),
+                "pack_format": 15,
+                "disable_thinking": bool(self.disable_thinking_var.get()),
+            }
+            settings = core.localize_settings(cfg, root_path, overrides) if is_game else core.resolve_translate_settings(cfg, root_path, overrides)
+            settings["batch_endpoint"] = core.resolve_batch_endpoint(prov, settings.get("base_url", ""), endpoint_var.get().strip())
+            return settings
+
+        # ── 本地任务列表 ──
+        list_box = ttk.Frame(body)
+        list_box.pack(fill="both", expand=True)
+        cols = ("job_id", "provider", "status", "counts", "saved")
+        tree = ttk.Treeview(list_box, columns=cols, show="headings", height=8, selectmode="browse")
+        for col, heading, width in (
+            ("job_id", "任务 ID", 190),
+            ("provider", "平台 / 模型", 170),
+            ("status", "状态", 90),
+            ("counts", "条目 / 批次", 110),
+            ("saved", "省流 / Token", 210),
+        ):
+            tree.heading(col, text=heading, anchor="w")
+            tree.column(col, width=width, minwidth=60, stretch=col == "saved")
+        scroll = ttk.Scrollbar(list_box, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        cache_dir = self.config.get("cache_dir") or None
+
+        def refresh_jobs() -> None:
+            tree.delete(*tree.get_children())
+            for job in core.list_batch_jobs(cache_dir):
+                saved_parts = []
+                if job.prefiltered:
+                    saved_parts.append(f"预过滤{job.prefiltered}")
+                if job.tm_hits:
+                    saved_parts.append(f"缓存{job.tm_hits}")
+                if job.deduped:
+                    saved_parts.append(f"去重{job.deduped}")
+                if job.input_tokens or job.output_tokens:
+                    saved_parts.append(f"入{job.input_tokens}/出{job.output_tokens}")
+                tree.insert(
+                    "",
+                    "end",
+                    iid=job.job_id,
+                    values=(
+                        job.job_id,
+                        f"{job.provider}:{job.model}",
+                        job.status,
+                        f"{job.entry_count} 条 / {job.request_count} 批",
+                        " · ".join(saved_parts) or "—",
+                    ),
+                )
+
+        def run_async(label: str, fn) -> None:
+            status_var.set(f"正在{label}……")
+
+            def worker() -> None:
+                try:
+                    msg = fn()
+                    if window.winfo_exists():
+                        window.after(0, lambda: (refresh_jobs(), status_var.set(msg)))
+                except Exception as exc:
+                    core.LOG.exception("batch_api: %s failed", label)
+                    explained = core.explain_error(exc, stage=label)
+                    first_line = explained.splitlines()[0]
+                    if window.winfo_exists():
+                        window.after(0, lambda: (status_var.set(first_line), messagebox.showerror("Batch API", explained, parent=window)))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def prepare_mc() -> None:
+            raw_path = self.path_var.get().strip()
+            if not raw_path or not Path(raw_path).is_dir():
+                status_var.set("请先在「模组汉化」页选好 Minecraft 实例目录。")
+                return
+            instance = Path(raw_path)
+
+            def task() -> str:
+                cfg = self._snapshot_config()
+                settings = build_batch_settings(instance, is_game=False)
+                scan = core.scan_inputs(instance / "mods", instance / "resourcepacks", instance)
+                baseline = core.fetch_community_baseline(scan, cfg, Path(settings["cache_dir"]))
+                baseline_files = [core.LangFile(m, "zh_cn", "community-baseline", d) for m, d in baseline.items()]
+                entries = core.entries_with_baseline(
+                    scan, baseline, set(self.whitelist), None, settings["fill_community"], settings["refine_community"]
+                )
+                entries.extend(core.missing_patchouli_entries(scan))
+                entries = core.skip_ignored_entries(entries, cfg)
+                if not entries:
+                    return "当前实例没有待翻译条目，无需生成 Batch 任务。"
+                corpus = core.community_corpus(scan.english, scan.community + baseline_files, scan.reference_only) if settings["refine_community"] else None
+                job = core.prepare_batch_job(entries, settings, corpus=corpus, meta={"instance": str(instance)})
+                return f"已生成预览 JSONL（0费用）：{job.summary()}"
+
+            run_async("扫描实例并生成 Batch 预览", task)
+
+        def prepare_game() -> None:
+            chosen = filedialog.askdirectory(parent=window, title="选择要生成 Batch 预览的游戏目录")
+            if not chosen:
+                return
+            root_path = Path(chosen)
+
+            def task() -> str:
+                adapter = core.engine_adapters.detect(root_path)
+                if adapter is None:
+                    raise ValueError("未能识别该目录的游戏引擎，无法抽取文本。")
+                entries = adapter.collect(root_path)
+                if not entries:
+                    return "未抽取到待翻译文本。"
+                settings = build_batch_settings(root_path, is_game=True)
+                from ferrygame.units import detect_source_lang
+                settings["source_lang"] = detect_source_lang([e.english for e in entries[:200]])
+                job = core.prepare_batch_job(entries, settings, meta={"game": str(root_path), "adapter": adapter.name})
+                return f"已生成游戏 Batch 预览（0费用）：{job.summary()}"
+
+            run_async("抽取游戏文本并生成 Batch 预览", task)
+
+        def selected_job_id() -> str | None:
+            sel = tree.selection()
+            if not sel:
+                status_var.set("请先在下方列表选中一条 Batch 任务。")
+                return None
+            return str(sel[0])
+
+        def do_submit() -> None:
+            jid = selected_job_id()
+            if not jid:
+                return
+            settings = build_batch_settings(Path("."), is_game=False)
+            run_async("提交 Batch 任务到云端", lambda: "已提交：" + core.submit_batch_job(jid, settings).summary())
+
+        def do_poll() -> None:
+            jid = selected_job_id()
+            if not jid:
+                return
+            settings = build_batch_settings(Path("."), is_game=False)
+            run_async("查询云端 Batch 进度", lambda: core.poll_batch_job(jid, settings).summary())
+
+        def do_collect() -> None:
+            jid = selected_job_id()
+            if not jid:
+                return
+            settings = build_batch_settings(Path("."), is_game=False)
+
+            def task() -> str:
+                tr, errs, failed, job = core.collect_batch_results(jid, settings)
+                ok_n = sum(len(v) for v in tr.values())
+                fail_n = sum(len(v) for v in failed.values())
+                extra = f"（{len(errs)} 批出错）" if errs else ""
+                return f"取回完成：成功 {ok_n} 条（已写入条目缓存，点正常翻译可 0 Token 秒写回），失败 {fail_n} 条{extra}"
+
+            run_async("取回 Batch 译文并写入缓存", task)
+
+        def do_cancel() -> None:
+            jid = selected_job_id()
+            if not jid:
+                return
+            settings = build_batch_settings(Path("."), is_game=False)
+            run_async("取消云端 Batch 任务", lambda: core.cancel_batch_job(jid, settings).summary())
+
+        def open_jobs_dir() -> None:
+            folder = core.batch_jobs_dir(cache_dir)
+            try:
+                os.startfile(str(folder))
+            except OSError:
+                status_var.set(f"Batch 任务目录：{folder}")
+
+        ttk.Button(gen_row, text="从当前 MC 实例生成预览 JSONL（0费用）", command=prepare_mc).pack(side="left")
+        ttk.Button(gen_row, text="从游戏目录生成预览 JSONL（0费用）", command=prepare_game).pack(side="left", padx=(6, 0))
+        ttk.Button(gen_row, text="打开 JSONL 目录", command=open_jobs_dir).pack(side="right")
+
+        op_row = ttk.Frame(body)
+        op_row.pack(fill="x", pady=(8, 4))
+        ttk.Button(op_row, text="提交到云端", command=do_submit).pack(side="left")
+        ttk.Button(op_row, text="刷新进度", command=do_poll).pack(side="left", padx=(6, 0))
+        ttk.Button(op_row, text="取回并写入缓存", command=do_collect).pack(side="left", padx=(6, 0))
+        ttk.Button(op_row, text="取消任务", command=do_cancel).pack(side="left", padx=(6, 0))
+        ttk.Button(op_row, text="刷新列表", command=refresh_jobs).pack(side="left", padx=(6, 0))
+        ttk.Button(op_row, text="关闭", command=window.destroy).pack(side="right")
+
+        ttk.Label(body, textvariable=status_var, foreground=ACCENT, wraplength=760).pack(anchor="w", pady=(4, 0))
+
+        refresh_jobs()
+        self._center_over(window, 820, 560)
+        window._batch_controls = {
+            "preset_var": preset_var,
+            "provider_var": provider_var,
+            "url_var": url_var,
+            "model_var": model_var,
+            "endpoint_var": endpoint_var,
+            "on_preset_changed": on_preset_changed,
+        }
+        return window
 
     def _engine_label(self, engine: str) -> str:
         if engine in FREE_ENGINES:
@@ -3763,7 +4682,7 @@ class FerryApp(tk.Tk):
         if self.translating:
             self.cancel_event.set()
             self.stop_button.configure(state="disabled")
-            self.status_var.set("正在停止…… 已翻译的内容会被写进资源包；若翻译其实已经完成，则只是老实打包。")
+            self.status_var.set("正在停止，保留已翻译条目…")
 
     def _set_translating_ui(self, active: bool) -> None:
         state = "disabled" if active else "normal"
@@ -3792,7 +4711,7 @@ class FerryApp(tk.Tk):
             except Exception as exc:  # 导出是收尾彩蛋，坏掉不能连累已生成的结果
                 exported = {"error": core.redact_secrets(str(exc))}
             if exported and exported.get("mapping"):
-                auto_note = f"\n已自动导出桥接映射（{exported['mapping']} 条）—— 进游戏无需重启即生效。"
+                auto_note = f"\n已自动导出桥接映射 {exported['mapping']} 条。"
                 if exported.get("bridge_note"):
                     auto_note += f"\n（{exported['bridge_note']}）"
             elif exported and exported.get("error"):
@@ -3801,7 +4720,7 @@ class FerryApp(tk.Tk):
         if packs:
             lines.append("已生成：" + "\n".join(packs))
             if usage_text:
-                lines.append("\n各模型用量（按字符量平摊）：\n" + usage_text)
+                lines.append("\n各模型用量与省流统计：\n" + usage_text)
             if errors:
                 lines.append(f"\n有 {len(errors)} 个批次失败（相关 key 保留英文，下次运行会自动重试）：")
                 lines.append("\n".join("· " + e for e in errors[:10]))
@@ -3828,7 +4747,7 @@ class FerryApp(tk.Tk):
         elif cancelled:
             self.status_var.set("已停止，未翻译任何内容，未生成资源包。")
         else:
-            self.status_var.set("没有需要翻译的 key（可能已由人工汉化覆盖，或已翻译完成）。")
+            self.status_var.set("没有待翻译条目。")
             if nbt_count:
                 if exported and exported.get("mapping"):
                     self.status_var.set(f"另翻译并自动导出 {nbt_count} 条硬编码文本的映射，进游戏即生效。")
@@ -3992,7 +4911,7 @@ class FerryApp(tk.Tk):
                     if queue_now:
                         self.result_queue.put(("batch_progress", snapshot))
 
-                corpus = core.community_corpus(scan.english, scan.community + baseline_files) if settings["refine_community"] else None
+                corpus = core.community_corpus(scan.english, scan.community + baseline_files, scan.reference_only) if settings["refine_community"] else None
                 if entries:
                     self.result_queue.put(("phase", (translate_phase, write_phase, "翻译条目")))
                     translations, errors, failed = core.translate_entries(entries, settings, progress=progress, batch_progress=report_batch, cancel_event=cancel_event, usage=usage, corpus=corpus)
@@ -4045,7 +4964,8 @@ class FerryApp(tk.Tk):
             # 翻译阶段若已完整跑完，之后才点停止只是打包被打断，包并不是「半截货」。
             self.result_queue.put(("translated" if translation_finished else "cancelled", (packs_written, all_errors, usage_text)))
         except Exception as exc:
-            self.result_queue.put(("error", ("translate", f"翻译失败：{core.redact_secrets(str(exc))}")))
+            core.LOG.exception("translate: worker failed")
+            self.result_queue.put(("error", ("translate", core.explain_error(exc, stage="MC 模组翻译"))))
 
     def _drain_queue(self) -> None:
         if self._closing:
@@ -4231,7 +5151,7 @@ class FerryApp(tk.Tk):
             if skipped:
                 message += f"；{len(skipped)} 个模组未找到英文源，已跳过"
             self.status_var.set(message + "，正在重新扫描……")
-            messagebox.showinfo("删除汉化", message + "。\n\n记得在游戏里保持本工具资源包为启用状态。")
+            messagebox.showinfo("删除汉化", message + "。")
             self.start_scan()
         elif kind == "reloaded":
             self.managing_pack = False
@@ -4247,7 +5167,7 @@ class FerryApp(tk.Tk):
             self.managing_pack = False
             modid, pack = payload
             self.status_var.set(f"{modid} 的人工汉化资源包已安装，正在重新扫描……")
-            messagebox.showinfo("人工汉化包已下载", f"已安装至：\n{pack}\n\n请在 Minecraft 资源包界面启用它；如与其他资源包冲突，请调整资源包顺序。")
+            messagebox.showinfo("人工汉化包已下载", f"已安装至：\n{pack}\n请在游戏资源包列表中启用。")
             self.start_scan()
         elif kind == "qc_retranslated":
             self.translating = False
@@ -4300,10 +5220,21 @@ class FerryApp(tk.Tk):
             else:
                 root, report, adapter_name, hints = payload
                 existing_lines = []
+            self._loc_progress_busy(False)
             self._loc_set_busy(False)
+            if root is not None and (self._loc_root is None or Path(self._loc_root) != Path(root)):
+                self._loc_root = Path(root)
+                self._loc_path_var.set(str(root))
+                if hasattr(self, "_loc_path_entry"):
+                    try:
+                        self._loc_path_entry.xview_moveto(1.0)
+                    except tk.TclError:
+                        pass
+                self._remember_localize_dir(Path(root))
+            target_label = f" · {Path(root).name}" if (root is not None and Path(root).is_file()) else ""
             if report is None:
                 self._loc_probe = None
-                self._loc_status_var.set("认不出这个游戏")
+                self._loc_status_var.set(f"认不出这个游戏{target_label}")
                 hint_lines = self._loc_hint_lines(root, hints)
                 if existing_lines:
                     hint_lines.append(("", ""))
@@ -4318,9 +5249,86 @@ class FerryApp(tk.Tk):
                 self._loc_write(hint_lines)
             else:
                 self._loc_probe = report
-                self._loc_status_var.set("体检通过，可以开工" if report.ready else "体检完成，但不建议开工")
+                self._loc_status_var.set(
+                    ("体检通过，可以开工" if report.ready else "体检完成，但不建议开工") + target_label
+                )
                 self._loc_write(self._loc_probe_lines(report, adapter_name, existing_lines))
+                if getattr(report, "needs", None):
+                    self.after(120, lambda r=root, n=list(report.needs): self._loc_offer_missing_deps(r, n))
             self._loc_refresh_run_state()
+        elif kind == "loc_analyze_done":
+            self._localizing = False
+            if not self._loc_alive():
+                return
+            self._loc_set_busy(False)
+            wb = payload
+            lines: list[tuple[str, str]] = [
+                ("head", f"剧本预分析完成：{wb.summary()}"),
+                ("ok", f"设定集文件：{wb.path}"),
+            ]
+            if wb.worldview:
+                lines.append(("", f"世界观：{wb.worldview}"))
+            if wb.style:
+                lines.append(("", f"文风建议：{wb.style}"))
+            for note in wb.notes:
+                lines.append(("dim", f"· {note}"))
+            lines.append(("dim", "下次点击「开始汉化」时，摆渡会自动加载这份设定集以统一人物称谓与专有名词。"))
+            self._loc_write(lines)
+            self._loc_status_var.set("剧本预分析完成")
+            if wb.path and messagebox.askyesno("预分析完成", f"{wb.summary()}\n\n是否现在打开 ferry_worldbook.json 查看/微调？", parent=self):
+                try:
+                    os.startfile(str(wb.path))
+                except OSError:
+                    pass
+        elif kind == "loc_extract_done":
+            self._localizing = False
+            if not self._loc_alive():
+                return
+            proj, tsv_path, out_dir, probe_summary = payload
+            self._loc_set_busy(False)
+            if proj is None or tsv_path is None:
+                self._loc_progress_busy(False, fill_done=False)
+                self._loc_status_var.set("未提取出可翻译条目")
+                messagebox.showinfo("提取文本（自翻导出）", f"尚未提取出可翻译条目：\n{probe_summary}", parent=self)
+            else:
+                self._loc_progress_busy(False, fill_done=True)
+                lines = [
+                    ("head", f"文本提取完成（0 Token）：{proj.summary()}"),
+                    ("ok", f"· 导出目录：{out_dir}"),
+                    ("ok", f"· 自翻表格（TSV，改 dst 列即可）：{tsv_path}"),
+                    ("ok", f"· 双语工程表（JSON，改 \"dst\" 字段即可）：{proj.path}"),
+                    ("dim", "提示：未自动打开文件；可按上方路径自行用习惯的编辑器/Excel 打开，或点击下方「打开导出目录」。"),
+                    ("dim", "编辑保存后，直接点击「② 自翻回录重打包」即可写回游戏并重打包！"),
+                ]
+                self._loc_write(lines)
+                self._loc_out_dir = out_dir
+                self._loc_open_button.configure(state="normal", text="打开导出目录")
+                self._loc_status_var.set(f"已提取文本 → {tsv_path}")
+        elif kind == "loc_extract_error":
+            self._localizing = False
+            if self._loc_alive():
+                self._loc_progress_busy(False, fill_done=False)
+                self._loc_set_busy(False)
+                self._loc_status_var.set("提取文本失败")
+                self._loc_write([("bad", "提取文本失败"), ("", str(payload))])
+            messagebox.showerror("提取文本", str(payload), parent=self)
+        elif kind == "loc_dep_progress":
+            if self._loc_alive():
+                dep_name, done, total = payload
+                pct = done * 100 // max(1, total)
+                self._loc_progress.configure(maximum=max(1, total), value=done)
+                self._loc_status_var.set(f"正在下载 {dep_name}…… {pct}%")
+        elif kind == "loc_dep_done":
+            if not self._loc_alive():
+                return
+            root, ok, message = payload
+            self._loc_set_busy(False)
+            self._loc_write([("ok" if ok else "bad", message)])
+            self._loc_status_var.set("工具安装完成，正在重新检测…" if ok else "工具安装失败")
+            if ok:
+                self._loc_start_probe()
+            else:
+                messagebox.showerror("工具安装失败", message, parent=self)
         elif kind == "loc_progress":
             if not self._loc_alive():
                 return

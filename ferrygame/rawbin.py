@@ -29,6 +29,7 @@ from ferrycore.adapters.undo import UndoLog
 from ferrycore.models import Entry
 
 from . import controls
+from .tbl import ThingyTable, encode_tbl_padded, find_tbl_pair, is_thingy_tbl_file, scan_tbl_strings
 from .units import Unit, classify
 
 # 值得扫的二进制/脚本后缀。图音视频一律不碰，省得在 2 GB 贴图里捞出随机假名。
@@ -146,9 +147,9 @@ def _is_valid_sjis_text(text: str, raw: bytes = b"") -> bool:
         return False
     if full_kana + cjk == 0:
         return False
-    # 没有任何假名、没有任何日文标点、也没有游戏控制码的纯汉字串（如「甥沿甥埆」「鈷孤釈実」），
-    # 在二进制里 99.9% 是位图或机器码巧合；真菜单词由 JP_MENU_TERMS 放行。
-    if full_kana == 0 and punct == 0 and not had_controls:
+    # 没有任何假名、也没有游戏控制码的纯汉字/标点串（如「甥沿甥埆」「「蛍蓉」「…皇歪」），
+    # 在二进制里 99.9% 是位图或 SH-2/x86 机器码巧合；真菜单词由 JP_MENU_TERMS 放行。
+    if full_kana == 0 and not had_controls:
         return False
 
     # 拦截「日文字符紧挨半角英文字母/乱码符号」的位图/机器码噪音（如 夢Om屬、礎継かd、けU!）
@@ -156,8 +157,10 @@ def _is_valid_sjis_text(text: str, raw: bytes = b"") -> bool:
         return False
     if any(ch in visible for ch in ";*<>`\\|@#%&") and punct == 0:
         return False
+    if any(ch in visible for ch in "%\\$@^~`") and len(visible) <= 6:
+        return False
 
-    # 检查 JIS 二级生僻汉字（首字节 >= 0x99）占比：x86 机器码和位图里全是生僻字
+    # 检查 JIS 二级生僻汉字（首字节 >= 0x99）占比：机器码和位图里全是生僻字
     try:
         vis_raw = visible.encode("cp932")
     except UnicodeEncodeError:
@@ -176,10 +179,19 @@ def _is_valid_sjis_text(text: str, raw: bytes = b"") -> bool:
                 idx += 2
             else:
                 idx += 1
-        if lvl2 > 0 and (lvl1 == 0 or lvl2 / (lvl1 + lvl2) > 0.25) and punct == 0:
-            return False
+        if lvl2 > 0 and (lvl1 == 0 or lvl2 / (lvl1 + lvl2) > 0.25):
+            if not (len(visible) >= 8 and full_kana >= 3):
+                return False
 
     hira = sum(1 for ch in visible if "\u3040" <= ch <= "\u309f")
+    # 短串（<= 4 字）若包含生僻符号或非日文句读的半角字符，极易命中 RISC/x86 机器码
+    if len(visible) <= 4 and not had_controls:
+        if full_kana < 2 and punct == 0:
+            return False
+        if any(ord(c) < 0x80 for c in visible):
+            return False
+        if hira == 0 and cjk > 0 and full_kana <= 1:
+            return False
     if not _JP_FULLWIDTH_RUN_RE.search(visible):
         # 短于 3 个连续全角字符时，除非带控制码（如「数年後^m」「年B$c1月C$c1日」）或纯全角假名叹词（如「か～」）
         if not (had_controls and lvl1 >= 1) and not (len(visible) == 2 and hira >= 1 and visible.isprintable()):
@@ -348,54 +360,44 @@ def _is_valid_en_or_global_text(text: str) -> bool:
     return False
 
 
+_UTF8_SPAN_RE = re.compile(rb"[\x20-\x7e\t\r\n\x80-\xf4]{4,2048}\x00")
+
+
 def scan_utf8_strings(blob: bytes, rel_path: str = "") -> list[Unit]:
     """在二进制字节流中扫描以 `0x00` 结尾的 UTF-8 / ASCII 欧美及全球多语言台词与菜单。"""
     units: list[Unit] = []
-    n = len(blob)
-    i = 0
     order = 0
-    while i < n:
-        b = blob[i]
-        if not (0x20 <= b <= 0x7E or 0xC2 <= b <= 0xF4):
-            i += 1
+    for m in _UTF8_SPAN_RE.finditer(blob):
+        start = m.start()
+        raw = m.group(0)[:-1]
+        if not (0x20 <= raw[0] <= 0x7E or 0xC2 <= raw[0] <= 0xF4):
             continue
-        start = i
-        while i < n and blob[i] != 0x00:
-            cur = blob[i]
-            if 0x20 <= cur <= 0x7E or cur in (0x09, 0x0A, 0x0D) or (0x80 <= cur <= 0xF4):
-                i += 1
-            else:
-                break
-        end = i
-        if end < n and blob[end] == 0x00 and 4 <= (end - start) <= 2048:
-            raw = blob[start:end]
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                text = ""
-            if text and _is_valid_en_or_global_text(text):
-                order += 1
-                kind = "menu" if text.strip() in (EN_MENU_TERMS | JP_MENU_TERMS) else classify(text)
-                key = f"{rel_path}@0x{start:x}" if rel_path else f"0x{start:x}"
-                units.append(
-                    Unit(
-                        key=key,
-                        src=text,
-                        kind=kind,
-                        file=rel_path,
-                        order=order,
-                        max_bytes=len(raw),
-                        encoding="utf-8",
-                        meta={
-                            "offset": start,
-                            "length": len(raw),
-                            "src_encoding": "utf-8",
-                            "raw_hex": raw.hex(),
-                            "pad": "nul",
-                        },
-                    )
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if text and _is_valid_en_or_global_text(text):
+            order += 1
+            kind = "menu" if text.strip() in (EN_MENU_TERMS | JP_MENU_TERMS) else classify(text)
+            key = f"{rel_path}@0x{start:x}" if rel_path else f"0x{start:x}"
+            units.append(
+                Unit(
+                    key=key,
+                    src=text,
+                    kind=kind,
+                    file=rel_path,
+                    order=order,
+                    max_bytes=len(raw),
+                    encoding="utf-8",
+                    meta={
+                        "offset": start,
+                        "length": len(raw),
+                        "src_encoding": "utf-8",
+                        "raw_hex": raw.hex(),
+                        "pad": "nul",
+                    },
                 )
-        i = max(i + 1, end + 1)
+            )
     return units
 
 
@@ -473,26 +475,23 @@ def scan_binary_strings(blob: bytes, rel_path: str = "", target_encoding: str = 
     u16_units = scan_utf16le_strings(blob, rel_path=rel_path)
     utf8_units = scan_utf8_strings(blob, rel_path=rel_path)
 
-    occupied: list[tuple[int, int]] = []
-    merged: list[Unit] = []
-
-    def _overlaps(s: int, e: int) -> bool:
-        for os_start, os_end in occupied:
-            if s < os_end and os_start < e:
-                return True
-        return False
-
-    # 优先级：Shift-JIS 双字节 > UTF-16LE 宽字符 > UTF-8/ASCII 英文句
-    for group in (sjis_units, u16_units, utf8_units):
+    # O(N log N) 按起点排序去重合并（优先级：Shift-JIS > UTF-16LE > UTF-8/ASCII）
+    tagged: list[tuple[int, int, int, Unit]] = []
+    for prio, group in ((0, sjis_units), (1, u16_units), (2, utf8_units)):
         for u in group:
             off = int(u.meta.get("offset", 0))
             ln = int(u.meta.get("length") or u.max_bytes or 0)
-            if ln <= 0 or _overlaps(off, off + ln):
-                continue
-            occupied.append((off, off + ln))
-            merged.append(u)
+            if ln > 0:
+                tagged.append((off, prio, off + ln, u))
+    tagged.sort(key=lambda item: (item[0], item[1]))
 
-    merged.sort(key=lambda u: int(u.meta.get("offset", 0)))
+    merged: list[Unit] = []
+    last_end = -1
+    for off, _prio, end, u in tagged:
+        if off < last_end:
+            continue
+        last_end = end
+        merged.append(u)
     for idx, u in enumerate(merged, start=1):
         u.order = idx
     return merged
@@ -534,7 +533,12 @@ def encode_padded(text: str, max_bytes: int, encoding: str = "gbk", pad: str = "
     return raw + (b" " * diff)
 
 
-def patch_blob(blob: bytes, units: list[Unit]) -> tuple[bytes, int, list[str]]:
+def patch_blob(
+    blob: bytes,
+    units: list[Unit],
+    *,
+    tbl_encode: ThingyTable | None = None,
+) -> tuple[bytes, int, list[str]]:
     """把一批有 `offset` 的 `Unit` 原位写进字节流，返回 (新字节流, 成功条数, 冲突列表)。"""
     buf = bytearray(blob)
     applied = 0
@@ -554,10 +558,20 @@ def patch_blob(blob: bytes, units: list[Unit]) -> tuple[bytes, int, list[str]]:
         if raw_hex and current.hex() != raw_hex:
             conflicts.append(f"{unit.key}：原文件该位置的字节已变动，拒绝盲写")
             continue
-        padded = encode_padded(unit.dst, length, unit.encoding or "gbk", pad=pad)
-        if padded is None or len(padded) != length:
-            conflicts.append(f"{unit.key}：译文编码后超出 {length} 字节上限，已跳过")
-            continue
+        use_tbl = bool(meta.get("tbl_mode")) or (unit.encoding or "").startswith("tbl:")
+        if use_tbl:
+            if tbl_encode is None:
+                conflicts.append(f"{unit.key}：缺少用于回写的 .tbl 码表，已跳过")
+                continue
+            padded = encode_tbl_padded(unit.dst, length, tbl_encode)
+            if padded is None or len(padded) != length:
+                conflicts.append(f"{unit.key}：译文在 {tbl_encode.name} 中缺字或超出 {length} 字节上限，已跳过")
+                continue
+        else:
+            padded = encode_padded(unit.dst, length, unit.encoding or "gbk", pad=pad)
+            if padded is None or len(padded) != length:
+                conflicts.append(f"{unit.key}：译文编码后超出 {length} 字节上限，已跳过")
+                continue
         buf[offset : offset + length] = padded
         applied += 1
     return bytes(buf), applied, conflicts
@@ -581,6 +595,8 @@ def candidate_files(root: Path, max_file_mb: int = 64) -> list[Path]:
             continue
         suf = path.suffix.lower()
         if suf in _MEDIA_SUFFIXES:
+            continue
+        if suf == ".tbl" and is_thingy_tbl_file(path):
             continue
         try:
             size = path.stat().st_size
@@ -606,6 +622,7 @@ class RawBinaryAdapter(Adapter):
     def scan_units(self, root: Path) -> list[Unit]:
         root = Path(root).resolve()
         base = root.parent if root.is_file() else root
+        src_tbl, _dst_tbl = find_tbl_pair(root)
         all_units: list[Unit] = []
         for path in candidate_files(root):
             try:
@@ -613,26 +630,47 @@ class RawBinaryAdapter(Adapter):
             except OSError:
                 continue
             rel = path.relative_to(base).as_posix()
-            found = scan_binary_strings(blob, rel_path=rel, target_encoding=self.target_encoding)
-            # 一个文件里至少要有 3 条正经台词或菜单才算数，防止在纯代码 DLL 里抓出 1 个巧合词
-            if len(found) >= 3:
-                all_units.extend(found)
+            if src_tbl is not None:
+                found = scan_tbl_strings(blob, src_tbl, rel_path=rel)
+                if found:
+                    all_units.extend(found)
+            else:
+                found = scan_binary_strings(blob, rel_path=rel, target_encoding=self.target_encoding)
+                # 一个文件里至少要有 3 条正经台词或菜单才算数，防止在纯代码 DLL 里抓出 1 个巧合词
+                if len(found) >= 3:
+                    all_units.extend(found)
         return all_units
 
     def probe(self, root: Path) -> ProbeReport:
         root = Path(root).resolve()
+        src_tbl, dst_tbl = find_tbl_pair(root)
         units = self.scan_units(root)
         if not units:
+            notes = ["二进制盲扫未发现成规模的 Shift-JIS 剧情或菜单字符串"]
+            if src_tbl is not None:
+                notes = [f"已加载外挂码表 {src_tbl.name}，但未在二进制文件中命中符合条件的字符串"]
             return ProbeReport(
                 engine="未知二进制 / 单 EXE",
                 root=root,
                 readable=False,
                 writable=False,
-                notes=["二进制盲扫未发现成规模的 Shift-JIS 剧情或菜单字符串"],
+                notes=notes,
             )
         files = sorted({u.file for u in units})
         stories = sum(1 for u in units if u.kind == "story")
         menus = sum(1 for u in units if u.kind == "menu")
+        if src_tbl is not None:
+            enc_desc = f"{src_tbl.name} -> {dst_tbl.name if dst_tbl else src_tbl.name}"
+            notes = [
+                f"已加载外挂 Thingy 码表（{enc_desc}），在 {len(files)} 个文件中扫出 {len(units)} 条文本。",
+                "回写采用自定义码表定长原位覆盖，不改变任何文件长度与指针偏移。",
+            ]
+        else:
+            enc_desc = "cp932->gbk (定长原位覆盖)"
+            notes = [
+                f"在 {len(files)} 个二进制文件中扫出 {len(units)} 条文本（剧情 {stories} / 菜单 {menus}）",
+                "回写采用「定长原位覆盖 + 全角/半角空格对齐」，不改变任何文件长度与指针偏移",
+            ]
         return ProbeReport(
             engine="通用二进制 / 单 EXE (RawBin)",
             root=root,
@@ -640,12 +678,9 @@ class RawBinaryAdapter(Adapter):
             writable=True,
             unit_count=len(units),
             container="binary",
-            text_format="cp932->gbk (定长原位覆盖)",
+            text_format=enc_desc,
             in_place=True,
-            notes=[
-                f"在 {len(files)} 个二进制文件中扫出 {len(units)} 条文本（剧情 {stories} / 菜单 {menus}）",
-                "回写采用「定长原位覆盖 + 全角/半角空格对齐」，不改变任何文件长度与指针偏移",
-            ],
+            notes=notes,
         )
 
     def collect(self, root: Path) -> list[Entry]:
@@ -675,13 +710,14 @@ class RawBinaryAdapter(Adapter):
 
         report = ApplyReport(in_place=out is None, out_path=out or base)
         undo = UndoLog.open(base, engine=self.name) if out is None else None
+        _src_tbl, dst_tbl = find_tbl_pair(root)
         for rel, group in sorted(by_file.items()):
             src_path = base / rel
             if not src_path.is_file():
                 report.conflicts.append(f"找不到文件：{rel}")
                 continue
             blob = src_path.read_bytes()
-            patched, count, conflicts = patch_blob(blob, group)
+            patched, count, conflicts = patch_blob(blob, group, tbl_encode=dst_tbl)
             report.conflicts.extend(conflicts)
             if count == 0:
                 continue

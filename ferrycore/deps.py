@@ -55,6 +55,8 @@ class Dependency:
     sevenz_url: str = ""
     # 除了 PATH 和 target，还去哪儿找（已经装过的位置）
     search: tuple[Path, ...] = ()
+    # 可选：若压缩包很大（如包含完整编辑器），只抽出这几个必需的运行时文件（按 basename 忽略大小写匹配）
+    extract_files: tuple[str, ...] = ()
 
     def locate(self) -> Path | None:
         """找到就算装好了。先看 PATH，再看约定目录，最后看已知安装位置。"""
@@ -117,9 +119,63 @@ def _mingw(arch: str) -> Dependency:
     )
 
 
+def _repak() -> Dependency:
+    """repak：开源 Unreal Engine 4/5 .pak 解包与补丁打包工具（支持 UE5 v11 / Oodle / 加密 pak）。"""
+    return Dependency(
+        id="repak",
+        name="repak（Unreal .pak 解包/打包工具）",
+        why=(
+            "这本虚幻引擎游戏的 .locres 语言文件打包在 UE5/压缩/加密 .pak 归档内，"
+            "需要用开源工具 repak 拆出 .locres 并在译完后打成高优先级 *_P.pak 补丁包"
+        ),
+        size_mb=4.5,
+        binaries=("repak.exe", "repak"),
+        target=DEFAULT_TOOLS_DIR / "repak",
+        zip_url="https://github.com/trumank/repak/releases/latest/download/repak_cli-x86_64-pc-windows-msvc.zip",
+    )
+
+
+def _ags36() -> Dependency:
+    """AGS 3.6+ 开源 Windows 运行时（仅抽取 acwin.exe + SDL2.dll，用于旧版 AGS 2.x/3.5 游戏显示 UTF-8 中文）。"""
+    return Dependency(
+        id="ags36",
+        name="AGS 3.6+ 中文兼容运行时 (acwin.exe)",
+        why=(
+            "这本游戏由旧版 Adventure Game Studio（3.6 之前，如 2.62）编译，自带的老 exe 只支持单字节 ANSI，"
+            "直接运行无法显示 UTF-8 中文；安装官方开源 AGS 3.6 运行时后，摆渡会自动铺好中文字体并生成"
+            "「启动中文版.bat」，无需修改原版主程序（解压后仅保留约 5 MB 的 acwin.exe 与 SDL2.dll）"
+        ),
+        size_mb=53.1,
+        binaries=("acwin.exe", "ags.exe"),
+        target=DEFAULT_TOOLS_DIR / "ags36",
+        zip_url="https://github.com/adventuregamestudio/ags/releases/download/v3.6.3.17/AGS-3.6.3.17.zip",
+        extract_files=("acwin.exe", "SDL2.dll"),
+    )
+
+
+def _chdman() -> Dependency:
+    """chdman：MAME 官方光盘压缩镜像 (`.chd`) 无损解包与重打包工具（支持世嘉土星 / PS1 / DC 等多轨 CDDA 音轨）。"""
+    return Dependency(
+        id="chdman",
+        name="chdman（MAME .chd 光盘镜像解包/打包工具）",
+        why=(
+            "这本光盘游戏采用 MAME .chd（LZMA + FLAC 多轨音轨）压缩归档，需要开源工具 chdman "
+            "无损解出原始 2352 字节音/数据轨并在回写校验后重新封回 .cn.chd（解压后仅保留 2.7 MB 的 chdman.exe）"
+        ),
+        size_mb=13.9,
+        binaries=("chdman.exe", "chdman"),
+        target=DEFAULT_TOOLS_DIR / "chdman",
+        zip_url="https://github.com/Mr-Shizzy/Game-Format-Converter/releases/download/v2.1.1/Game-Format-Converter-2.1.1-win64.zip",
+        extract_files=("chdman.exe",),
+    )
+
+
 REGISTRY: dict[str, Dependency] = {
     "mingw32": _mingw("32"),
     "mingw64": _mingw("64"),
+    "repak": _repak(),
+    "ags36": _ags36(),
+    "chdman": _chdman(),
 }
 
 
@@ -195,7 +251,7 @@ def install(dep: Dependency, progress=None) -> tuple[bool, str]:
         return False, f"下载失败：{exc}"
 
     try:
-        _extract(archive, dep.target)
+        _extract(archive, dep.target, only_files=dep.extract_files)
     except Exception as exc:
         return False, f"解压失败：{exc}（压缩包留在 {archive}）"
     archive.unlink(missing_ok=True)
@@ -220,10 +276,11 @@ def _download(url: str, dest: Path, progress=None) -> None:
                 progress(done, total)
 
 
-def _extract(archive: Path, target: Path) -> None:
+def _extract(archive: Path, target: Path, *, only_files: tuple[str, ...] = ()) -> None:
     """解压到 target。压缩包里通常带一层同名目录，这里把它剥掉。"""
     target.mkdir(parents=True, exist_ok=True)
-    if archive.suffix.lower() == ".zip":
+    wanted = {name.lower() for name in only_files} if only_files else set()
+    if archive.suffix.lower() == ".zip" or zipfile.is_zipfile(archive):
         with zipfile.ZipFile(archive) as zf:
             names = zf.namelist()
             prefix = _common_prefix(names)
@@ -231,7 +288,13 @@ def _extract(archive: Path, target: Path) -> None:
                 rel = info.filename[len(prefix):] if prefix else info.filename
                 if not rel or rel.endswith("/"):
                     continue
-                out = target / rel
+                if wanted:
+                    base_name = Path(rel).name
+                    if base_name.lower() not in wanted:
+                        continue
+                    out = target / base_name
+                else:
+                    out = target / rel
                 out.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, out.open("wb") as dst:
                     shutil.copyfileobj(src, dst)

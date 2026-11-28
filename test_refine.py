@@ -90,10 +90,12 @@ class CorpusTranslationTests(unittest.TestCase):
             def fake_post(_url, payload, _headers, _timeout):
                 request = json.loads(payload["messages"][1]["content"])
                 calls.append(request)
-                self.assertEqual(set(request["strings"]), {"item.c"})
-                self.assertEqual({item["zh"] for item in request["references"]}, {"苹果", "红苹果"})
+                # 主引擎发往 LLM 时使用短编号（省输入/输出 token），参考语料压缩为 {en: zh}。
+                self.assertEqual(set(request["strings"]), {"1"})
+                self.assertEqual(request["strings"]["1"], "Pear")
+                self.assertEqual(set(request["references"].values()), {"苹果", "红苹果"})
                 return {"choices": [{"message": {"content": json.dumps({
-                    "item.c": "梨", "item.a": "禁止覆盖苹果",
+                    "1": "梨", "item.a": "禁止覆盖苹果",
                 }, ensure_ascii=False)}}]}
 
             with patch.object(ferryengine, "_http_post_json", side_effect=fake_post):
@@ -205,7 +207,7 @@ class CorpusTranslationTests(unittest.TestCase):
             self.assertEqual(pack.read_bytes(), previous)
 
     def test_invalid_single_key_does_not_discard_other_keys(self):
-        entries = [core.Entry("demo", name, "Hello", "test") for name in ("bad", "good")]
+        entries = [core.Entry("demo", name, f"Hello {name}", "test") for name in ("bad", "good")]
         with tempfile.TemporaryDirectory() as tmp:
             settings = {"cache_dir": tmp, "batch_size": 2, "concurrency": 1, "glossary": {}, "keep": set(), "delay": 0,
                         "engine": "openai", "model": "test", "base_url": "https://example.test/v1"}
@@ -240,13 +242,14 @@ class CorpusTranslationTests(unittest.TestCase):
 
             def fake_post(_url, payload, _headers, _timeout):
                 captured.append(payload)
-                content = payload["messages"][1]["content"]
-                self.assertIn("redstone", content.lower())
+                user_payload = json.loads(payload["messages"][1]["content"])
+                self.assertEqual(user_payload["strings"], {"1": "Mine redstone near the Golden Apple"})
+                # 动态术语提示移入 user 消息，保持 system 提示词静态以便命中厂商前缀缓存。
+                self.assertEqual(user_payload["hints"], {"Golden Apple": "金苹果", "Redstone": "红石"})
                 prompt = payload["messages"][0]["content"]
-                self.assertIn("Redstone", prompt)
-                self.assertIn("Golden Apple", prompt)
-                self.assertIn("contextual suggestions", prompt)
-                return {"choices": [{"message": {"content": json.dumps({"key": "在金苹果附近挖红石"}, ensure_ascii=False)}}]}
+                self.assertNotIn("Golden Apple", prompt)
+                self.assertIn("contextual terminology suggestions", prompt)
+                return {"choices": [{"message": {"content": json.dumps({"1": "在金苹果附近挖红石"}, ensure_ascii=False)}}]}
 
             with patch.object(ferryengine, "_http_post_json", side_effect=fake_post):
                 translated, errors, failed = core.translate_entries(entries, settings)

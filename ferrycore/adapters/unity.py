@@ -25,6 +25,18 @@ from .base import Adapter, ApplyReport, ProbeReport
 from .rpgmaker import parse_pointer, set_pointer
 from .undo import UNDO_NAME, UndoLog
 
+try:
+    import UnityPy  # type: ignore
+
+    HAS_UNITYPY = True
+except Exception:
+    UnityPy = None
+    HAS_UNITYPY = False
+
+_ZH_LANG_TOKENS = ("zh", "cn", "chs", "chinese", "hans")
+_SRC_LANG_PRIORITY = ("en", "en_us", "en-us", "english", "jp", "ja", "jpn", "japanese", "kr", "ko", "kor", "korean")
+_UNITY_ASSET_MAX_BYTES = 256 * 1024 * 1024
+
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z]{3,}")
@@ -289,6 +301,248 @@ def _iter_json_strings(node, base: str = ""):
                 yield from _iter_json_strings(item, ptr)
 
 
+def _is_zh_lang_dir(name: str) -> bool:
+    low = name.strip().lower().replace("-", "_")
+    parts = [p for p in re.split(r"[^a-z0-9]+", low) if p]
+    return any(tok in parts for tok in _ZH_LANG_TOKENS) or low in _ZH_LANG_TOKENS
+
+
+def _is_source_lang_dir(name: str) -> int | None:
+    low = name.strip().lower()
+    if _is_zh_lang_dir(low):
+        return None
+    for rank, tok in enumerate(_SRC_LANG_PRIORITY):
+        if low == tok or low.startswith(tok + "_") or low.startswith(tok + "-"):
+            return rank
+    return None
+
+
+def _discover_external_lang_pack(data_dir: Path) -> tuple[Path, Path | None, Path] | None:
+    """识别外置接口型网游语言目录（如《边狱巴士》`LimbusCompany_Data/Lang/`）。
+
+    返回 `(source_dir, existing_zh_dir_or_none, target_zh_dir)`：
+    - `source_dir`: 英文/日文/韩文源语言 JSON 文件夹；
+    - `existing_zh_dir`: 若目录里已有零协等人工汉化包（含 zh/cn），自动作为增量补翻基线；
+    - `target_zh_dir`: 回写目标中文目录（不改动原版 EN/KR 文件，也不碰游戏本体二进制）。
+    """
+    lang_root = data_dir / "Lang"
+    if not lang_root.is_dir():
+        return None
+    subdirs = [p for p in sorted(lang_root.iterdir()) if p.is_dir() and not p.name.startswith(".")]
+    if not subdirs:
+        return None
+    zh_dirs = [p for p in subdirs if _is_zh_lang_dir(p.name) and any(p.rglob("*.json"))]
+    ranked_src: list[tuple[int, Path]] = []
+    for p in subdirs:
+        rank = _is_source_lang_dir(p.name)
+        if rank is not None and any(p.rglob("*.json")):
+            ranked_src.append((rank, p))
+    if not ranked_src:
+        return None
+    ranked_src.sort(key=lambda item: (item[0], item[1].name.lower()))
+    source_dir = ranked_src[0][1]
+    existing_zh = zh_dirs[0] if zh_dirs else None
+    target_zh = existing_zh if existing_zh is not None else (lang_root / "Ferry_zh-CN")
+    return source_dir, existing_zh, target_zh
+
+
+def _read_json_pointer_map(path: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return {ptr: text for ptr, text in _iter_json_strings(payload)}
+
+
+def _extract_unitypy_entries(asset_path: Path, rel_path: str, modid: str) -> list[Entry]:
+    """借助 UnityPy 从 `.assets` / `.bundle` / `data.unity3d` 中提取 TextAsset 与 Localization StringTable。"""
+    if not HAS_UNITYPY or UnityPy is None:
+        return []
+    entries: list[Entry] = []
+    try:
+        env = UnityPy.load(str(asset_path))
+    except Exception:
+        return []
+    for obj in env.objects:
+        tname = getattr(getattr(obj, "type", None), "name", "")
+        if tname == "TextAsset":
+            try:
+                data = obj.read()
+                raw_script = getattr(data, "m_Script", "")
+                if isinstance(raw_script, bytes):
+                    raw_script = raw_script.decode("utf-8-sig", errors="replace")
+                if not isinstance(raw_script, str) or not raw_script.strip():
+                    continue
+                pid = str(obj.path_id)
+                stripped = raw_script.strip()
+                if stripped.startswith(("{", "[")):
+                    try:
+                        parsed = json.loads(stripped)
+                        for ptr, text in _iter_json_strings(parsed):
+                            entries.append(
+                                Entry(
+                                    modid=modid,
+                                    key=f"{rel_path}#ASSET:{pid}{ptr}",
+                                    english=text,
+                                    source="game",
+                                    kind="unity_asset_json",
+                                    book=pid,
+                                    rel_path=rel_path,
+                                    json_pointer=ptr,
+                                )
+                            )
+                        continue
+                    except ValueError:
+                        pass
+                for lineno, line in enumerate(raw_script.splitlines(), start=1):
+                    s = line.strip()
+                    if not s or s.startswith(("#", "//", ";")):
+                        continue
+                    if is_unity_translatable(s):
+                        entries.append(
+                            Entry(
+                                modid=modid,
+                                key=f"{rel_path}#ASSET:{pid}:L{lineno}",
+                                english=line,
+                                source="game",
+                                kind="unity_asset_txt",
+                                book=pid,
+                                rel_path=rel_path,
+                                json_pointer=str(lineno),
+                            )
+                        )
+            except Exception:
+                continue
+        elif tname == "MonoBehaviour":
+            try:
+                tree = obj.read_typetree()
+            except Exception:
+                continue
+            table = tree.get("m_TableData") if isinstance(tree, dict) else None
+            if not isinstance(table, list):
+                continue
+            pid = str(obj.path_id)
+            for idx, row in enumerate(table):
+                if not isinstance(row, dict):
+                    continue
+                loc_text = row.get("m_Localized")
+                if isinstance(loc_text, str) and is_unity_translatable(loc_text):
+                    entries.append(
+                        Entry(
+                            modid=modid,
+                            key=f"{rel_path}#TABLE:{pid}:{idx}",
+                            english=loc_text,
+                            source="game",
+                            kind="unity_asset_table",
+                            book=pid,
+                            rel_path=rel_path,
+                            json_pointer=str(idx),
+                        )
+                    )
+    return entries
+
+
+def _rebuild_unitypy_asset(
+    asset_path: Path,
+    file_entries: list[Entry],
+    translations: dict[str, str],
+) -> tuple[bytes | None, int, int, list[str]]:
+    """借助 UnityPy 回写 TextAsset / Localization Table 并重新序列化 `.assets` / `.bundle`。"""
+    if not HAS_UNITYPY or UnityPy is None:
+        return None, 0, len(file_entries), []
+    applied = 0
+    missed = 0
+    conflicts: list[str] = []
+    by_pid: dict[str, list[Entry]] = {}
+    for entry in file_entries:
+        by_pid.setdefault(entry.book, []).append(entry)
+
+    try:
+        env = UnityPy.load(str(asset_path))
+    except Exception as exc:
+        return None, 0, len(file_entries), [f"{asset_path.name}: UnityPy 加载失败 ({exc})"]
+
+    changed_any = False
+    for obj in env.objects:
+        pid = str(obj.path_id)
+        group = by_pid.get(pid)
+        if not group:
+            continue
+        kind = group[0].kind
+        try:
+            if kind == "unity_asset_json":
+                data = obj.read()
+                raw_script = getattr(data, "m_Script", "")
+                if isinstance(raw_script, bytes):
+                    raw_script = raw_script.decode("utf-8-sig", errors="replace")
+                payload = json.loads(raw_script)
+                changed = False
+                for entry in group:
+                    tr = translations.get(entry.key) or translations.get(entry.english)
+                    if not tr or not tr.strip():
+                        missed += 1
+                        continue
+                    set_pointer(payload, entry.json_pointer, tr)
+                    changed = True
+                    applied += 1
+                if changed:
+                    data.m_Script = json.dumps(payload, ensure_ascii=False, indent=2)
+                    data.save()
+                    changed_any = True
+            elif kind == "unity_asset_txt":
+                data = obj.read()
+                raw_script = getattr(data, "m_Script", "")
+                if isinstance(raw_script, bytes):
+                    raw_script = raw_script.decode("utf-8-sig", errors="replace")
+                lines = raw_script.splitlines()
+                changed = False
+                for entry in group:
+                    tr = translations.get(entry.key) or translations.get(entry.english)
+                    if not tr or not tr.strip():
+                        missed += 1
+                        continue
+                    idx = int(entry.json_pointer) - 1
+                    if 0 <= idx < len(lines):
+                        lines[idx] = tr
+                        changed = True
+                        applied += 1
+                if changed:
+                    data.m_Script = "\n".join(lines) + ("\n" if raw_script.endswith("\n") else "")
+                    data.save()
+                    changed_any = True
+            elif kind == "unity_asset_table":
+                tree = obj.read_typetree()
+                table = tree.get("m_TableData") if isinstance(tree, dict) else None
+                if not isinstance(table, list):
+                    continue
+                changed = False
+                for entry in group:
+                    tr = translations.get(entry.key) or translations.get(entry.english)
+                    if not tr or not tr.strip():
+                        missed += 1
+                        continue
+                    idx = int(entry.json_pointer)
+                    if 0 <= idx < len(table) and isinstance(table[idx], dict):
+                        table[idx]["m_Localized"] = tr
+                        changed = True
+                        applied += 1
+                if changed:
+                    obj.save_typetree(tree)
+                    changed_any = True
+        except Exception as exc:
+            conflicts.append(f"{asset_path.name}#obj:{pid}: {exc}")
+
+    if not changed_any:
+        return None, applied, missed, conflicts
+    try:
+        repacked = env.file.save()
+        if isinstance(repacked, (bytes, bytearray)):
+            return bytes(repacked), applied, missed, conflicts
+    except Exception as exc:
+        conflicts.append(f"{asset_path.name}: UnityPy 重打包失败 ({exc})")
+    return None, applied, missed, conflicts
+
+
 class UnityAdapter(Adapter):
     name = "unity"
     priority = 28
@@ -300,6 +554,7 @@ class UnityAdapter(Adapter):
         if root.name.endswith("_Data") and (
             (root / "Managed").is_dir()
             or (root / "StreamingAssets").is_dir()
+            or (root / "Lang").is_dir()
             or (root / "il2cpp_data").is_dir()
             or (root / "globalgamemanagers").is_file()
             or (root / "data.unity3d").is_file()
@@ -312,6 +567,14 @@ class UnityAdapter(Adapter):
             return [root]
         return []
 
+    def _find_external_lang_packs(self, root: Path) -> list[tuple[Path, Path | None, Path]]:
+        packs: list[tuple[Path, Path | None, Path]] = []
+        for data_dir in self._find_data_dirs(root):
+            found = _discover_external_lang_pack(data_dir)
+            if found is not None:
+                packs.append(found)
+        return packs
+
     def _find_streaming_files(self, root: Path) -> list[Path]:
         files: list[Path] = []
         for data_dir in self._find_data_dirs(root):
@@ -319,6 +582,30 @@ class UnityAdapter(Adapter):
             if sa.is_dir():
                 for ext in ("*.json", "*.txt"):
                     files.extend(sorted(p for p in sa.rglob(ext) if p.is_file()))
+        return files
+
+    def _find_unity_asset_files(self, root: Path) -> list[Path]:
+        if not HAS_UNITYPY:
+            return []
+        files: list[Path] = []
+        seen: set[Path] = set()
+        for data_dir in self._find_data_dirs(root):
+            candidates: list[Path] = []
+            for pattern in ("resources.assets", "sharedassets*.assets", "data.unity3d"):
+                candidates.extend(sorted(data_dir.glob(pattern)))
+            sa = data_dir / "StreamingAssets"
+            if sa.is_dir():
+                for ext in ("*.bundle", "*.ab", "*.unity3d"):
+                    candidates.extend(sorted(sa.rglob(ext)))
+            for path in candidates:
+                if not path.is_file() or path in seen or ".ferry-backup" in path.parts:
+                    continue
+                try:
+                    if 64 <= path.stat().st_size <= _UNITY_ASSET_MAX_BYTES:
+                        seen.add(path)
+                        files.append(path)
+                except OSError:
+                    continue
         return files
 
     def _find_managed_dlls(self, root: Path) -> list[Path]:
@@ -354,15 +641,27 @@ class UnityAdapter(Adapter):
             )
 
         il2cpp = any((d / "il2cpp_data").is_dir() for d in data_dirs) or (root / "GameAssembly.dll").is_file()
+        ext_packs = self._find_external_lang_packs(root)
         entries = self.collect(root)
         sa_files = self._find_streaming_files(root)
         dlls = self._find_managed_dlls(root)
+        asset_files = self._find_unity_asset_files(root)
 
         if not entries:
+            if ext_packs and any(zh is not None for _, zh, _ in ext_packs):
+                return ProbeReport(
+                    engine="Unity Engine（外置语言接口）",
+                    root=root,
+                    readable=True,
+                    writable=False,
+                    unicode_engine=True,
+                    notes=["检测到外置语言目录，且已有中文汉化包已完整覆盖当前全部词条，无需补翻。"],
+                )
             note = (
-                "检测到 Unity (IL2CPP 后端)，但未找到明文 StreamingAssets，需先提取 global-metadata 或 AssetBundle"
+                "检测到 Unity (IL2CPP 后端)，未在明文/资产包中检出可翻译文本"
+                + ("（建议安装 UnityPy 以支持 AssetBundle/.assets 提取）" if not HAS_UNITYPY else "（资产包可能加密）")
                 if il2cpp
-                else "检测到 Unity 工程目录，但未在 StreamingAssets 或 Assembly-CSharp.dll 中检出可翻译文本"
+                else "检测到 Unity 工程目录，但未在 StreamingAssets / 资产包 / Assembly-CSharp.dll 中检出可翻译文本"
             )
             return ProbeReport(
                 engine="Unity Engine",
@@ -372,11 +671,32 @@ class UnityAdapter(Adapter):
                 notes=[note],
             )
 
+        if ext_packs:
+            src_dir, zh_dir, dst_dir = ext_packs[0]
+            mode_note = (
+                f"检测到外置语言包接口（源：{src_dir.name}，已存在中文基线：{zh_dir.name}），仅增量补翻缺失的 {len(entries)} 条，保留全部已有译文。"
+                if zh_dir is not None
+                else f"检测到外置语言包接口（源：{src_dir.name}），共 {len(entries)} 条；将写出到独立中文目录 {dst_dir.name}，不修改游戏本体。"
+            )
+            return ProbeReport(
+                engine="Unity Engine（外置语言接口）",
+                root=root,
+                readable=True,
+                writable=True,
+                verifiable=False,
+                unit_count=len(entries),
+                container="external-lang",
+                text_format="Lang JSON（增量补丁，不改原包）",
+                unicode_engine=True,
+                in_place=True,
+                notes=[mode_note],
+            )
+
+        asset_entries_count = sum(1 for e in entries if e.kind.startswith("unity_asset_"))
         notes = [
-            f"检测到 Unity 游戏（StreamingAssets 文件 {len(sa_files)} 个，Managed 程序集 {len(dlls)} 个），"
-            f"共抽取 {len(entries)} 条文本。",
-            "回写策略：StreamingAssets 明文词表原地更新，并同步输出 XUnity.AutoTranslator 预翻译包 "
-            "(BepInEx/Translation/zh/Text/_PreTranslated.txt)。",
+            f"检测到 Unity 游戏（StreamingAssets {len(sa_files)} 个，Managed {len(dlls)} 个，资产包 {len(asset_files)} 个），"
+            f"共抽取 {len(entries)} 条文本" + (f"（其中 UnityPy 资产内文本 {asset_entries_count} 条）" if asset_entries_count else "") + "。",
+            "回写策略：明文词表与 UnityPy 资产包原地回写重打包（带备份），并同步输出 XUnity.AutoTranslator 预翻译包。",
         ]
         return ProbeReport(
             engine="Unity Engine",
@@ -385,8 +705,8 @@ class UnityAdapter(Adapter):
             writable=True,
             verifiable=False,
             unit_count=len(entries),
-            container="folder",
-            text_format="StreamingAssets + .NET #US -> XUnity",
+            container="folder+assets" if asset_entries_count else "folder",
+            text_format="StreamingAssets + UnityPy Assets + .NET #US -> XUnity",
             unicode_engine=True,
             in_place=True,
             notes=notes,
@@ -397,7 +717,45 @@ class UnityAdapter(Adapter):
         if not self._find_data_dirs(root):
             return []
 
-        entries: list[Entry] = []
+        # 0. 外置语言接口模式（如《边狱巴士》*_Data/Lang/）：安全只走外置 JSON 增量补丁，绝不碰游戏本体。
+        ext_packs = self._find_external_lang_packs(root)
+        if ext_packs:
+            entries: list[Entry] = []
+            for source_dir, existing_zh_dir, target_zh_dir in ext_packs:
+                src_base_rel = source_dir.relative_to(root).as_posix()
+                dst_base_rel = target_zh_dir.relative_to(root).as_posix()
+                for src_file in sorted(source_dir.rglob("*.json")):
+                    if not src_file.is_file():
+                        continue
+                    sub_rel = src_file.relative_to(source_dir).as_posix()
+                    src_map = _read_json_pointer_map(src_file)
+                    if not src_map:
+                        continue
+                    existing_map: dict[str, str] = {}
+                    if existing_zh_dir is not None:
+                        zh_file = existing_zh_dir / sub_rel
+                        if zh_file.is_file():
+                            existing_map = _read_json_pointer_map(zh_file)
+                    for pointer, text in src_map.items():
+                        # 已有人工汉化（如零协）直接跳过，0 Token 保留，只抽热更新新增/未翻词条
+                        old_zh = existing_map.get(pointer)
+                        if old_zh and old_zh.strip() and old_zh != text:
+                            continue
+                        entries.append(
+                            Entry(
+                                modid=root.name,
+                                key=f"lang:{src_base_rel}/{sub_rel}#{pointer}",
+                                english=text,
+                                source="game",
+                                kind="ext_lang_json",
+                                book=f"{src_base_rel}|{dst_base_rel}",
+                                rel_path=sub_rel,
+                                json_pointer=pointer,
+                            )
+                        )
+            return entries
+
+        entries = []
         seen_dll_texts: set[str] = set()
 
         # 1. StreamingAssets 明文 JSON / TXT
@@ -441,6 +799,11 @@ class UnityAdapter(Adapter):
                                 json_pointer=str(lineno),
                             )
                         )
+
+        # 1.5 UnityPy 资产包（resources.assets / sharedassets*.assets / *.bundle）
+        for asset_path in self._find_unity_asset_files(root):
+            rel = asset_path.relative_to(root).as_posix()
+            entries.extend(_extract_unitypy_entries(asset_path, rel, root.name))
 
         # 2. Managed Assembly-CSharp.dll (#US 用户字符串表)
         for dll_path in self._find_managed_dlls(root):
@@ -503,6 +866,67 @@ class UnityAdapter(Adapter):
             report.notes.append("未找到可回写的 Unity 文本单元")
             return report
 
+        # ── 外置语言接口模式（如《边狱巴士》*_Data/Lang/）：增量合并写出到中文目录，不改原版文件 ──
+        if entries[0].kind == "ext_lang_json":
+            by_target: dict[tuple[str, str, str], list[Entry]] = {}
+            for entry in entries:
+                src_base_rel, dst_base_rel = entry.book.split("|", 1)
+                by_target.setdefault((src_base_rel, dst_base_rel, entry.rel_path), []).append(entry)
+
+            pending_ext: dict[str, bytes] = {}
+            for (src_base_rel, dst_base_rel, sub_rel), group in sorted(by_target.items()):
+                src_file = root / src_base_rel / sub_rel
+                dst_rel = f"{dst_base_rel}/{sub_rel}"
+                dst_file = root / dst_rel
+                try:
+                    payload = json.loads(src_file.read_text(encoding="utf-8-sig"))
+                except (OSError, ValueError) as exc:
+                    report.conflicts.append(f"{sub_rel}: 读取源 JSON 失败 ({exc})")
+                    continue
+                # 若已有中文汉化包文件，先把它已翻译的条目全部合回，保证 100% 保留人工汉化。
+                if dst_file.is_file():
+                    existing_map = _read_json_pointer_map(dst_file)
+                    for ptr, zh_val in existing_map.items():
+                        try:
+                            set_pointer(payload, ptr, zh_val)
+                        except (KeyError, IndexError, TypeError, ValueError):
+                            pass
+                changed = False
+                for entry in group:
+                    tr = translations.get(entry.key) or translations.get(entry.english)
+                    if not tr or not tr.strip():
+                        report.missed += 1
+                        continue
+                    try:
+                        set_pointer(payload, entry.json_pointer, tr)
+                        changed = True
+                        report.applied += 1
+                    except (KeyError, IndexError, TypeError, ValueError) as exc:
+                        report.conflicts.append(f"{entry.key}: {exc}")
+                if changed:
+                    pending_ext[dst_rel] = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+            if not pending_ext:
+                report.notes.append("未命中任何译文，未写入外置语言包")
+                return report
+
+            log = UndoLog.open(root, engine=self.name)
+            for rel_path, raw_bytes in pending_ext.items():
+                target = root / rel_path
+                if target.exists():
+                    log.will_modify(rel_path)
+                else:
+                    log.will_add(rel_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw_bytes)
+                log.did_write(rel_path)
+            log.finish()
+            report.out_path = root
+            report.in_place = True
+            report.undo_path = root / UNDO_NAME
+            report.notes.append(f"已增量写回外置语言包（更新 {len(pending_ext)} 个 JSON，共 {report.applied} 条），原版语言与游戏本体未改动。")
+            return report
+
         by_file: dict[str, list[Entry]] = {}
         for entry in entries:
             by_file.setdefault(entry.rel_path, []).append(entry)
@@ -513,6 +937,19 @@ class UnityAdapter(Adapter):
         for rel_path, file_entries in by_file.items():
             full_path = root / rel_path
             kind = file_entries[0].kind
+
+            if kind.startswith("unity_asset_"):
+                repacked, ok_n, miss_n, errs = _rebuild_unitypy_asset(full_path, file_entries, translations)
+                report.missed += miss_n
+                report.conflicts.extend(errs)
+                if repacked is not None and ok_n > 0:
+                    pending_writes[rel_path] = repacked
+                    report.applied += ok_n
+                    for entry in file_entries:
+                        tr = translations.get(entry.key) or translations.get(entry.english)
+                        if tr and tr.strip():
+                            xunity_pairs[entry.english] = tr
+                continue
 
             if kind == "json":
                 try:

@@ -297,11 +297,12 @@ class TyranoAdapter(Adapter):
             return report
         # 记一笔「我产出了这份副本」。原游戏的数据文件没动，但用户要能
         # 一句话找到并撤掉副本 —— 没这条记录，他只能自己翻目录找。
+        undo_base = Path(root).parent if Path(root).is_file() else Path(root)
         try:
-            log = UndoLog.open(root, engine=self.name)
+            log = UndoLog.open(undo_base, engine=self.name)
             log.did_copy(report.out_path)
             log.finish()
-            report.undo_path = Path(root) / UNDO_NAME
+            report.undo_path = undo_base / UNDO_NAME
         except OSError as exc:
             report.notes.append(f"副本已产出，但撤销记录没写成（{exc}）；删副本请手动")
         report.notes.extend(container.notes)
@@ -370,6 +371,9 @@ class TyranoAdapter(Adapter):
     @staticmethod
     def default_output(root: Path, container: Container) -> Path:
         if container.kind == "zip-in-exe":
+            source = container.source
+            return source.with_name(f"{source.stem}.cn{source.suffix}")
+        if container.kind == "asar" and Path(root).is_file():
             source = container.source
             return source.with_name(f"{source.stem}.cn{source.suffix}")
         return root.parent / f"{root.name}.cn"

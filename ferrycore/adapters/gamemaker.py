@@ -310,13 +310,17 @@ def find_language_table(root: Path) -> LanguageTable | None:
     游戏一个字没变，报告却显示成功。
     """
     root = Path(root)
-    for path in sorted(root.rglob("*.csv")):
-        try:
-            rel_parts = path.relative_to(root).parts[:-1]
-        except ValueError:
-            continue
-        if any(part.startswith(".") or part in _SKIP_DIRS for part in rel_parts):
-            continue
+    candidates = [root] if (root.is_file() and root.suffix.lower() == ".csv") else (
+        sorted(root.rglob("*.csv")) if root.is_dir() else []
+    )
+    for path in candidates:
+        if root.is_dir():
+            try:
+                rel_parts = path.relative_to(root).parts[:-1]
+            except ValueError:
+                continue
+            if any(part.startswith(".") or part in _SKIP_DIRS for part in rel_parts):
+                continue
         try:
             if not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
                 continue
@@ -389,6 +393,11 @@ class GameMakerAdapter(Adapter):
             except OSError:
                 return False
 
+        if root.is_file():
+            return root if signed(root) else None
+        if not root.is_dir():
+            return None
+
         for name in _DATA_NAMES:
             for p in root.rglob(name):
                 if p.is_file() and signed(p):
@@ -411,7 +420,11 @@ class GameMakerAdapter(Adapter):
         再用「同时静态导入 ddraw.dll 和 d3d8.dll」兜一层 —— 那是 GM8 runner 的
         渲染后端，GMS 之后换成了 d3d9 / OpenGL。
         """
-        for exe in Path(root).glob("*.exe"):
+        root = Path(root)
+        exes = [root] if (root.is_file() and root.suffix.lower() == ".exe") else (
+            list(root.glob("*.exe")) if root.is_dir() else []
+        )
+        for exe in exes:
             try:
                 blob = exe.read_bytes()
             except OSError:
@@ -685,15 +698,17 @@ class GameMakerAdapter(Adapter):
 
         out = "\n".join(lines)
         blob = (b"\xef\xbb\xbf" + out.encode("utf-8")) if encoding == "utf-8-sig" else out.encode(encoding)
+        base = root.parent if root.is_file() else root
         try:
-            log = UndoLog.open(root, engine=self.name)
-            rel = table.path.relative_to(root).as_posix()
+            log = UndoLog.open(base, engine=self.name)
+            rel = table.path.relative_to(base).as_posix()
             log.will_modify(rel)
             table.path.write_bytes(blob)
             log.did_write(rel)
             log.finish()
             report.applied = written
-            report.undo_path = root / ".ferry-undo.json"
+            report.out_path = table.path if root.is_file() else base
+            report.undo_path = base / ".ferry-undo.json"
             report.notes.append(f"{rel} 改了 {written} 行，其余行原样未动（编码 {encoding}）")
         except OSError as exc:
             report.conflicts.append(f"写入失败：{exc}")
@@ -748,14 +763,17 @@ class GameMakerAdapter(Adapter):
             return report
 
         new_data = build_strg(strings, with_ptrs)
+        base = root.parent if root.is_file() else root
         try:
-            log = UndoLog.open(root, engine=self.name)
-            log.will_modify(data_win.relative_to(root).as_posix())
+            log = UndoLog.open(base, engine=self.name)
+            rel = data_win.relative_to(base).as_posix()
+            log.will_modify(rel)
             out = rebuild(blob, strg[0], new_data)
             data_win.write_bytes(out)
-            log.did_write(data_win.relative_to(root).as_posix())
+            log.did_write(rel)
             log.finish()
-            report.undo_path = root / ".ferry-undo.json"
+            report.out_path = data_win if root.is_file() else base
+            report.undo_path = base / ".ferry-undo.json"
         except OSError as exc:
             report.conflicts.append(f"写入失败：{exc}")
             return report

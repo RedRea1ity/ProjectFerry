@@ -25,6 +25,7 @@ from .project import merge as merge_project
 from .rawbin import RawBinaryAdapter
 from .translate import CallFn, TranslateReport, translate_units
 from .units import Unit, classify, detect_source_lang
+from .worldbook import Worldbook, analyze_units, load as load_worldbook
 
 def _game_adapters() -> list[type[Adapter]]:
     seen: list[type[Adapter]] = []
@@ -50,6 +51,9 @@ def get_adapter(name: str, **options) -> Adapter | None:
 
 def detect_adapter(root: Path, **options) -> Adapter | None:
     root = Path(root).resolve()
+    resolved, found = core_adapters.resolve_game_target(root, **options)
+    if found is not None and resolved == root and found.probe(root).readable:
+        return found
     for cls in sorted(_game_adapters(), key=lambda c: c.priority):
         try:
             adapter = cls(**options)
@@ -97,7 +101,12 @@ def scan_game(
     """扫描游戏并生成/更新 `ferry_tl.json`。已有的译文与人工修改原样保留。"""
     root = Path(root).resolve()
     if adapter is None:
-        adapter = detect_adapter(root, **(adapter_options or {}))
+        resolved, found = core_adapters.resolve_game_target(root, **(adapter_options or {}))
+        if found is not None and found.probe(resolved).readable:
+            root = Path(resolved).resolve()
+            adapter = found
+        else:
+            adapter = detect_adapter(root, **(adapter_options or {}))
     if adapter is None:
         probe = ProbeReport(root=root, notes=["所有已知引擎与二进制盲扫均未发现可提取的剧情/菜单文本"])
         return Project(root=root, game=root.name, notes=list(probe.notes)), probe
@@ -125,6 +134,43 @@ def scan_game(
     return project, probe
 
 
+def analyze_game(
+    root: Path,
+    settings: dict[str, Any],
+    *,
+    adapter: Adapter | None = None,
+    adapter_options: dict[str, Any] | None = None,
+    force: bool = False,
+    save: bool = True,
+    call: CallFn | None = None,
+    cancel_event=None,
+) -> tuple[Worldbook, Project, ProbeReport]:
+    """第 0 步：先扫描剧本，再用轻量 LLM 预分析产出 `ferry_worldbook.json`。"""
+    project, probe = scan_game(root, adapter=adapter, adapter_options=adapter_options, save=save)
+    if not probe.readable or not project.units:
+        raise ValueError(probe.summary() or "未提取到可分析的游戏文本")
+    wb = analyze_units(
+        project.units,
+        settings,
+        root=project.root,
+        game=project.game,
+        source_lang=project.source_lang or "ja",
+        force=force,
+        save=save,
+        call=call,
+        cancel_event=cancel_event,
+    )
+    # 将校验通过的新术语同步补充到 project.glossary（不覆盖已有人工条目）
+    changed = False
+    for k, v in wb.merged_glossary().items():
+        if k not in project.glossary:
+            project.glossary[k] = v
+            changed = True
+    if changed and save:
+        project.save()
+    return wb, project, probe
+
+
 def translate_project(
     project: Project,
     settings: dict[str, Any],
@@ -134,8 +180,10 @@ def translate_project(
     call: CallFn | None = None,
     cache_dir: Path | None = None,
     save: bool = True,
+    worldbook: Worldbook | None = None,
 ) -> TranslateReport:
     """翻译 `Project` 里未完成的条目，并把结果落盘到 `ferry_tl.json`。"""
+    wb = worldbook if worldbook is not None else load_worldbook(project.root)
     report = translate_units(
         project.units,
         settings=settings,
@@ -146,6 +194,7 @@ def translate_project(
         cancel_event=cancel_event,
         call=call,
         cache_dir=cache_dir,
+        worldbook=wb,
     )
     if save:
         project.save()
@@ -216,8 +265,9 @@ def run_game(
     force: bool = False,
     call: CallFn | None = None,
     cache_dir: Path | None = None,
+    analyze: bool = False,
 ) -> GameRunResult:
-    """一步到位：扫描 → 落盘 `ferry_tl.json` → 翻译缺失项 → 写回游戏。"""
+    """一步到位：扫描 →（可选剧本预分析）→ 落盘 `ferry_tl.json` → 翻译缺失项 → 写回游戏。"""
     project, probe = scan_game(root, adapter=adapter, save=not dry_run)
     result = GameRunResult(project=project, probe=probe)
     if not probe.ready or dry_run or settings is None:
@@ -225,6 +275,20 @@ def run_game(
 
     if adapter is None:
         adapter = get_adapter(project.adapter)
+    wb = load_worldbook(project.root)
+    if analyze and wb is None:
+        try:
+            wb = analyze_units(
+                project.units,
+                settings,
+                root=project.root,
+                game=project.game,
+                source_lang=project.source_lang or "ja",
+                save=True,
+                call=call,
+            )
+        except Exception as exc:
+            project.notes.append(f"剧本预分析跳过：{exc}")
     result.translation = translate_project(
         project,
         settings=settings,
@@ -232,6 +296,7 @@ def run_game(
         call=call,
         cache_dir=cache_dir,
         save=True,
+        worldbook=wb,
     )
     result.applied = apply_project(project, adapter=adapter, out=out)
     return result

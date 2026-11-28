@@ -36,7 +36,11 @@ _MARKERS: list[tuple[str, tuple[str, ...]]] = [
     ("LiveMaker", ("livemaker.exe", "*.lsb")),
     ("HSP（Hot Soup Processor）", ("hsp3imp.dll", "hsp3.exe", "*.ax", "*.dpm")),
     ("Flash / AIR", ("*.swf", "adobe air", "*.swc")),
+    ("Adventure Game Studio (AGS)", ("acsetup.cfg", "*.tra", "ac2game.dta", "speech.vox", "music.vox")),
     ("Galgame 老引擎（SystemNNN / CatSystem）", ("*.pac", "cs2.exe", "system40.exe")),
+    ("世嘉土星 Sega Saturn", ("ip.bin", "*.cue", "*.chd")),
+    ("PlayStation 1 / PlayStation 2", ("system.cnf", "psx.exe", "*.cue", "*.chd")),
+    ("任天堂 Nintendo 64", ("*.z64", "*.v64", "*.n64")),
     ("PC-98 磁盘镜像", ("*.hdi", "*.fdi", "*.nhd")),
 ]
 
@@ -66,7 +70,24 @@ def scan_hints(root: Path, max_lines: int = 10) -> list[str]:
     if not root.exists():
         return [f"{root} 不存在。"]
     if not root.is_dir():
-        return [f"{root} 是文件，不是目录；请选择游戏所在的那一层目录。"]
+        hints: list[str] = []
+        try:
+            size = root.stat().st_size
+            size_desc = f"{size / 1048576:.2f} MB" if size >= 1024 * 1024 else f"{size:,} 字节"
+        except OSError:
+            size_desc = "大小未知"
+        tail = ""
+        if root.suffix.lower() == ".exe":
+            try:
+                span = locate_appended_zip(root)
+            except OSError:
+                span = None
+            if span is not None:
+                tail = f"，尾部追加了 zip 档案（{span.size / 1048576:.1f} MB）"
+        hints.append(f"单文件目标：{root.name}（{size_desc}{tail}）")
+        hints.append("当前已精准锁定该文件本身（未扫描同目录里的其他文件），但没有适配器认领它。")
+        hints.append("如果它属于多文件游戏目录的一部分，请直接把整个游戏文件夹拖进窗口。")
+        return hints
 
     try:
         top = list(os.scandir(root))

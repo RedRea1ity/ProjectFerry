@@ -87,6 +87,37 @@ def remember(record: LocalizedRecord) -> None:
     save_history(records)
 
 
+def remove_history(play_path: str | Path) -> bool:
+    """从历史登记中移除指定 play_path（只删记录，不动磁盘上的任何游戏文件）。"""
+    target = str(play_path).strip().lower()
+    if not target:
+        return False
+    records = load_history()
+    kept = [r for r in records if str(r.play_path).strip().lower() != target]
+    if len(kept) == len(records):
+        return False
+    save_history(kept)
+    return True
+
+
+def prune_history() -> int:
+    """清理历史里已经不存在于磁盘的失效条目，返回清理条数。"""
+    records = load_history()
+    kept = [r for r in records if r.play_path and Path(r.play_path).exists()]
+    removed = len(records) - len(kept)
+    if removed:
+        save_history(kept)
+    return removed
+
+
+def clear_history() -> int:
+    """清空全部产物历史登记（只清空记录文件，不删除磁盘上的游戏或副本），返回原条数。"""
+    records = load_history()
+    count = len(records)
+    save_history([])
+    return count
+
+
 def _record_from_undo(root: Path) -> LocalizedRecord | None:
     data = load_undo(root)
     if not data:
@@ -140,27 +171,46 @@ def find_localized(root: Path) -> list[LocalizedRecord]:
     # 1) 目录本身有 undo（原地，或 Ace 原目录上记了 copy）
     add(_record_from_undo(root))
 
-    # 2) 旁路副本 游戏名.cn / .cn2 …
+    # 2) 旁路副本：目录型为 游戏名.cn / .cn2 …，单文件型为 文件名.cn.扩展名 / 文件名.cn2.扩展名 …
     parent = root.parent
-    stem = root.name
     if parent.is_dir():
-        for child in sorted(parent.iterdir()):
-            if not child.is_dir():
-                continue
-            name = child.name
-            if name == stem or name.startswith(stem + ".cn"):
-                add(_record_from_undo(child))
-                # 没有 undo 但明显是 .cn 副本
-                if name.startswith(stem + ".cn") and name not in {r.label for r in found}:
+        if root.is_file():
+            stem_prefix = f"{root.stem}.cn"
+            suffix_low = root.suffix.lower()
+            for child in sorted(parent.iterdir()):
+                if not child.is_file() or child == root:
+                    continue
+                if child.suffix.lower() != suffix_low:
+                    continue
+                if child.stem.startswith(stem_prefix):
                     add(
                         LocalizedRecord(
                             root=str(root),
                             play_path=str(child.resolve()),
                             mode="copy",
-                            label=name,
+                            label=child.name,
                             created="",
                         )
                     )
+        else:
+            stem = root.name
+            for child in sorted(parent.iterdir()):
+                if not child.is_dir():
+                    continue
+                name = child.name
+                if name == stem or name.startswith(stem + ".cn"):
+                    add(_record_from_undo(child))
+                    # 没有 undo 但明显是 .cn 副本
+                    if name.startswith(stem + ".cn") and name not in {r.label for r in found}:
+                        add(
+                            LocalizedRecord(
+                                root=str(root),
+                                play_path=str(child.resolve()),
+                                mode="copy",
+                                label=name,
+                                created="",
+                            )
+                        )
 
     # 3) 历史里同 root 的记录
     root_key = str(root).lower()

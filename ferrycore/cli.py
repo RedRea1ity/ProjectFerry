@@ -11,14 +11,28 @@ from pathlib import Path
 
 from ferrycore import adapters as engine_adapters
 from ferrycore.base import CONFIG_FILE, USER_GLOSSARY_FILE
+from ferrycore.batch_api import (
+    BATCH_PRESETS,
+    BATCH_PROVIDERS,
+    cancel_batch_job,
+    collect_batch_results,
+    list_batch_jobs,
+    load_batch_job,
+    poll_batch_job,
+    prepare_batch_job,
+    resolve_batch_endpoint,
+    submit_batch_job,
+)
 from ferrycore.bridge import COLLECTED_MODID, COLLECTED_NAME, collected_entries, parse_collected_file, write_ferrybridge_external
 from ferrycore.community import community_corpus, fetch_community_baseline
 from ferrycore.config import DEFAULT_CONFIG, load_config, public_config, save_config, update_progress
 from ferrycore.deps import REGISTRY as DEPENDENCIES, install as install_dependency, resolve as resolve_dependencies
 from ferrycore.engine import ENGINES_WITH_KEY, resolve_translate_settings, translate_entries
 from ferrycore.fontcheck import check_font, scan_fonts
+from ferrycore.fontpatch import patch_game_font
+from ferrycore.patchpack import export_patch_pack
 from ferrycore.glossary import BUILTIN_GLOSSARY, DEFAULT_GLOSSARY_EN_URL, DEFAULT_GLOSSARY_ZH_URL, fetch_glossary, load_user_glossary
-from ferrycore.localize import localize_game
+from ferrycore.localize import localize_game, localize_settings
 from ferrycore.models import LangFile, mod_status_label
 from ferrycore.packio import load_pack_reverted, load_pack_sources, load_uninstalled_ai, merge_pack_translations, merged_sources, migrate_legacy_pack, write_pack, yield_to_community
 from ferrycore.scan import _promote_disabled_packs, build_mod_status, entries_with_baseline, find_instance_dirs, load_pack_patchouli, missing_ftb_entries, missing_patchouli_entries, resolve_instance_path, scan_inputs, skip_ignored_entries, translated_ftb_components, translated_patchouli_files, ftb_source_map
@@ -59,13 +73,13 @@ def command_detect(args: argparse.Namespace) -> int:
 
 def command_scan(args: argparse.Namespace) -> int:
     instance, mods, resourcepacks = instance_dirs_from_args(args)
-    scan = scan_inputs(mods, resourcepacks)
+    scan = scan_inputs(mods, resourcepacks, instance)
     config = load_config()
     output_dir = Path(config.get("output_dir") or instance / "resourcepacks")
     pack_name = config.get("pack_name") or DEFAULT_CONFIG["pack_name"]
     version = detect_minecraft_version(instance)
     if version and pack_format_for_version(version) <= 3 and migrate_legacy_pack(output_dir / pack_name, pack_format_for_version(version)):
-        scan = scan_inputs(mods, resourcepacks)
+        scan = scan_inputs(mods, resourcepacks, instance)
     yield_to_community(scan, output_dir / pack_name)
     include = include_modids_from_args(args)
     provenance = load_pack_sources(output_dir / pack_name)
@@ -119,6 +133,7 @@ def command_bridge_collect(args: argparse.Namespace) -> int:
         "timeout": args.timeout,
         "delay": args.delay,
         "concurrency": args.concurrency,
+        "disable_thinking": getattr(args, "disable_thinking", None),
         # 桥接映射与资源包格式无关：给个兜底值，别让「版本认不出来」挡住翻译。
         "pack_format": args.pack_format if args.pack_format is not None else 15,
     }
@@ -182,6 +197,7 @@ def command_translate(args: argparse.Namespace) -> int:
         "output_dir": args.output_dir,
         "fill_community": args.fill_community,
         "refine_community": args.refine_community,
+        "disable_thinking": getattr(args, "disable_thinking", None),
     }
     try:
         settings = resolve_translate_settings(config, instance, overrides)
@@ -238,7 +254,7 @@ def command_translate(args: argparse.Namespace) -> int:
     update_progress(all_translations, failed)
     usage_text = format_usage(usage)
     if usage_text:
-        print("各模型用量（按字符量平摊）：")
+        print("各模型用量与省流统计：")
         print(usage_text)
     ftb_components = translated_ftb_components(scan, ftb_entries, all_translations, Path(settings["output_dir"]) / settings["pack_name"]) if settings["pack_format"] > 3 else {}
     if not all_translations and not baseline and not ftb_components:
@@ -296,7 +312,9 @@ def command_localize(args: argparse.Namespace) -> int:
         return 2
 
     adapter = None
-    options = {"include_samples": bool(getattr(args, "include_samples", False))}
+    options: dict = {"include_samples": bool(getattr(args, "include_samples", False))}
+    if getattr(args, "aes_key", None):
+        options["aes_key"] = str(args.aes_key)
     if args.adapter:
         adapter = engine_adapters.get(args.adapter, **options)
         if adapter is None:
@@ -315,10 +333,13 @@ def command_localize(args: argparse.Namespace) -> int:
             "timeout": args.timeout,
             "delay": args.delay,
             "concurrency": args.concurrency,
+            "disable_thinking": getattr(args, "disable_thinking", None),
             # 非 MC 游戏没有 pack_format 这个概念，只为满足内部校验而固定
             "pack_format": 15,
         }
-        settings = resolve_translate_settings(config, root, overrides)
+        settings = localize_settings(config, root, overrides)
+        if getattr(args, "worldbook", False):
+            settings["auto_worldbook"] = True
         if settings["engine"] in ENGINES_WITH_KEY and not settings["api_key"]:
             print(f"{settings['engine']} 引擎需要 API key：请在 ferry_config.json 配置对应字段，或用 --api-key 传入。", file=sys.stderr)
             return 2
@@ -416,6 +437,51 @@ def command_fontcheck(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_export_patch(args: argparse.Namespace) -> int:
+    """导出纯净可分享的汉化补丁 ZIP（仅含补丁差异/译文协作包，不含原版游戏大文件）。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+    out = Path(args.out) if getattr(args, "out", None) else None
+    report = export_patch_pack(root, out_zip=out, include_source=not bool(getattr(args, "no_source", False)))
+    print(report.summary())
+    for note in report.notes:
+        print(f"  · {note}")
+    for sk in report.skipped[:15]:
+        print(f"  跳过：{sk}")
+    return 0 if report.ok else 1
+
+
+def command_fontpatch(args: argparse.Namespace) -> int:
+    """为高频引擎或缺字游戏一键注入中文字体回退（纳入 UndoLog，可随时撤销）。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    root = Path(args.game)
+    if not root.exists():
+        print(f"路径不存在：{root}", file=sys.stderr)
+        return 2
+    font_path = Path(args.font) if getattr(args, "font", None) else None
+    report = patch_game_font(
+        root,
+        engine=str(getattr(args, "engine", "auto") or "auto"),
+        font_path=font_path,
+        dry_run=bool(getattr(args, "dry_run", False)),
+    )
+    print(report.summary())
+    for note in report.notes:
+        print(f"  · {note}")
+    return 0 if report.ok else 1
+
+
 def command_deps(args: argparse.Namespace) -> int:
     """查看 / 安装汉化依赖。
 
@@ -495,6 +561,135 @@ def command_glossary(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_batch(args: argparse.Namespace) -> int:
+    """官方 Batch API（5 折异步批量翻译）CLI 开放入口。
+
+    支持：
+      - list              列出所有本地 Batch 任务
+      - prepare           0 费用预览并生成待提交 JSONL
+      - submit <job_id>   把已准备好的任务提交到云端
+      - status <job_id>   查询云端进度
+      - collect <job_id>  拉回结果写入条目缓存，并可选输出译文 JSON
+      - cancel <job_id>   取消云端任务
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+    config = load_config()
+    cache_dir = config.get("cache_dir") or None
+    action = args.batch_action
+
+    if action == "list":
+        jobs = list_batch_jobs(cache_dir)
+        if not jobs:
+            print("暂无本地 Batch API 任务。")
+            return 0
+        for job in jobs:
+            print(f"  · {job.summary()}")
+        return 0
+
+    if action == "prepare":
+        instance, mods, resourcepacks = instance_dirs_from_args(args)
+        preset_name = getattr(args, "preset", None)
+        preset = BATCH_PRESETS.get(preset_name or "") if preset_name else None
+        engine_override = args.engine or (preset["provider"] if preset else None)
+        base_url_override = args.base_url or (preset["base_url"] if preset else None)
+        model_override = args.model or (preset["model"] if preset else None)
+        overrides = {
+            "engine": engine_override,
+            "base_url": base_url_override,
+            "api_key": args.api_key,
+            "model": model_override,
+            "batch_size": args.batch_size,
+            "timeout": args.timeout,
+            "pack_format": args.pack_format if args.pack_format is not None else 15,
+            "fill_community": args.fill_community,
+            "refine_community": args.refine_community,
+            "disable_thinking": getattr(args, "disable_thinking", None),
+        }
+        settings = resolve_translate_settings(config, instance, overrides)
+        if getattr(args, "batch_endpoint", None):
+            settings["batch_endpoint"] = args.batch_endpoint
+        elif preset:
+            settings["batch_endpoint"] = preset["endpoint"]
+        if settings["engine"] not in BATCH_PROVIDERS:
+            print(
+                "Batch API 支持 OpenAI 兼容平台（阿里云百炼 dashscope / 智谱 bigmodel / 硅基流动 siliconflow / 百度千帆 qianfan / openai）"
+                f"及 anthropic / gemini，当前引擎：{settings['engine']}",
+                file=sys.stderr,
+            )
+            return 2
+        scan = scan_inputs(mods, resourcepacks, instance)
+        baseline = fetch_community_baseline(scan, config, Path(settings["cache_dir"]))
+        baseline_files = [LangFile(modid, "zh_cn", "community-baseline", data) for modid, data in baseline.items()]
+        entries = entries_with_baseline(
+            scan, baseline, include_modids_from_args(args), only_modids_from_args(args),
+            settings["fill_community"], settings["refine_community"],
+        )
+        entries.extend(missing_patchouli_entries(scan, only_modids_from_args(args)))
+        entries = skip_ignored_entries(entries, config)
+        if not entries:
+            print("没有待翻译的条目，无需创建 Batch 任务。")
+            return 0
+        corpus = community_corpus(scan.english, scan.community + baseline_files, scan.reference_only) if settings["refine_community"] else None
+        job = prepare_batch_job(entries, settings, corpus=corpus, meta={"instance": str(instance)})
+        print(job.summary())
+        print(f"JSONL 预览文件：{job.jsonl_path}")
+        if args.submit:
+            job = submit_batch_job(job, settings)
+            print("已提交到云端：" + job.summary())
+        return 0
+
+    job_id = getattr(args, "job_id", None)
+    if not job_id:
+        print("请提供任务 ID（可用 `batch list` 查看）。", file=sys.stderr)
+        return 2
+    saved_job = load_batch_job(job_id, cache_dir)
+    if saved_job is None:
+        print(f"找不到 Batch 任务：{job_id}", file=sys.stderr)
+        return 1
+    overrides = {
+        "engine": args.engine or saved_job.provider,
+        "base_url": args.base_url or saved_job.base_url,
+        "api_key": args.api_key,
+        "model": args.model or saved_job.model,
+        "timeout": args.timeout,
+        "pack_format": 15,
+    }
+    settings = resolve_translate_settings(config, Path("."), overrides)
+
+    if action == "submit":
+        job = submit_batch_job(saved_job, settings)
+        print(job.summary())
+        return 0
+    if action == "status":
+        job = poll_batch_job(saved_job, settings)
+        print(job.summary())
+        return 0
+    if action == "cancel":
+        job = cancel_batch_job(saved_job, settings)
+        print(job.summary())
+        return 0
+    if action == "collect":
+        translations, errors, failed, job = collect_batch_results(saved_job, settings)
+        print(job.summary())
+        total_ok = sum(len(v) for v in translations.values())
+        total_fail = sum(len(v) for v in failed.values())
+        print(f"已取回 {total_ok} 条译文（并写入本地条目缓存），失败 {total_fail} 条。")
+        if args.out:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(translations, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(f"译文 JSON 已写出：{out_path}")
+        for msg in errors[:10]:
+            print(f"  错误：{msg}", file=sys.stderr)
+        return 0 if total_ok or not errors else 1
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="只基于英文原文生成 Minecraft 临时 AI 汉化资源包")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -530,6 +725,7 @@ def build_parser() -> argparse.ArgumentParser:
     translate.add_argument("--timeout", type=int, default=None)
     translate.add_argument("--delay", type=float, default=None)
     translate.add_argument("--concurrency", type=int, default=None, help="并发翻译线程数（多模型加速），默认 1")
+    translate.add_argument("--disable-thinking", action=argparse.BooleanOptionalAction, default=None, help="是否关闭模型的深度思考链（省流提速）；不传则读配置文件")
     translate.add_argument("--pack-format", type=float, default=None, help="资源包格式；默认按实例版本自动检测（1.21.9+ 为小数，如 97.1）")
     translate.add_argument("--yes", action="store_true", help="版本无法识别时强制按 pack_format 15 生成，并在包内标记版本未确认")
     translate.add_argument("--fill-community", action="store_true", default=None, help="检测到人工汉化时仍用 AI 补缺失 key")
@@ -562,6 +758,7 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_collect.add_argument("--timeout", type=int, default=None)
     bridge_collect.add_argument("--delay", type=float, default=None)
     bridge_collect.add_argument("--concurrency", type=int, default=None, help="并发翻译线程数（多模型加速），默认 1")
+    bridge_collect.add_argument("--disable-thinking", action=argparse.BooleanOptionalAction, default=None, help="是否关闭模型的深度思考链（省流提速）；不传则读配置文件")
     bridge_collect.add_argument("--pack-format", type=float, default=None, help="仅用于满足内部校验；桥接映射与其无关")
     bridge_collect.set_defaults(func=command_bridge_collect)
     localize = sub.add_parser(
@@ -574,6 +771,8 @@ def build_parser() -> argparse.ArgumentParser:
     localize.add_argument("--adapter", default=None, help="强制指定适配器，不填则自动识别")
     localize.add_argument("--dry-run", action="store_true", help="只体检并统计条数，不翻译、不写文件")
     localize.add_argument("--include-samples", action="store_true", help="连引擎官方示例剧本一起翻（默认跳过，那不是游戏内容）")
+    localize.add_argument("--aes-key", default=None, help="虚幻引擎加密 .pak 的 256 位 AES 密钥（0x+64位十六进制或 Base64）")
+    localize.add_argument("--worldbook", action="store_true", help="翻译前先执行轻量剧本预分析，产出并注入 ferry_worldbook.json")
     localize.add_argument("--out", default=None, help="副本输出路径；默认 <游戏名>.cn.exe / <游戏名>.cn")
     localize.add_argument("--engine", choices=["mymemory", "deepl", "openai", "anthropic", "gemini", "local"], default=None, help="翻译引擎；默认 mymemory（免费）")
     localize.add_argument("--base-url", default=None, help="覆盖当前引擎的 base URL")
@@ -583,6 +782,7 @@ def build_parser() -> argparse.ArgumentParser:
     localize.add_argument("--timeout", type=int, default=None)
     localize.add_argument("--delay", type=float, default=None)
     localize.add_argument("--concurrency", type=int, default=None, help="并发翻译线程数（多模型加速），默认 1")
+    localize.add_argument("--disable-thinking", action=argparse.BooleanOptionalAction, default=None, help="是否关闭模型的深度思考链（省流提速）；不传则读配置文件")
     localize.set_defaults(func=command_localize)
 
     revert = sub.add_parser(
@@ -610,6 +810,25 @@ def build_parser() -> argparse.ArgumentParser:
     fontcheck.add_argument("--level", type=int, choices=[1, 2], default=1, help="用一级字（3755，默认）还是二级字（3008）做判据")
     fontcheck.set_defaults(func=command_fontcheck)
 
+    fontpatch_cmd = sub.add_parser(
+        "fontpatch",
+        help="为高频引擎（Ren'Py / RM MV/MZ/Ace / Kirikiri / Godot / 缺字 TTF）一键注入中文字体回退",
+    )
+    fontpatch_cmd.add_argument("game", nargs="?", default=".", help="游戏目录")
+    fontpatch_cmd.add_argument("--engine", default="auto", help="引擎名（auto/renpy/rpgmaker/rpgmaker_ace/kirikiri/godot/generic）")
+    fontpatch_cmd.add_argument("--font", default=None, help="指定中文字体文件（.ttf/.otf）；默认优先选摆渡 fonts/ 或系统 CJK 字体")
+    fontpatch_cmd.add_argument("--dry-run", action="store_true", help="预演模式，不实际写文件")
+    fontpatch_cmd.set_defaults(func=command_fontpatch)
+
+    export_patch_cmd = sub.add_parser(
+        "export-patch",
+        help="一键导出纯净可分享的汉化补丁 ZIP（仅含补丁差异 + 自动安装/还原脚本，不含原版游戏大文件）",
+    )
+    export_patch_cmd.add_argument("game", nargs="?", default=".", help="已汉化或已提取文本的游戏目录")
+    export_patch_cmd.add_argument("--out", default=None, help="输出 ZIP 路径；默认放在游戏同级目录")
+    export_patch_cmd.add_argument("--no-source", action="store_true", help="不附带 ferry_tl.json / ferry_tl.tsv 译文协作文件")
+    export_patch_cmd.set_defaults(func=command_export_patch)
+
     deps = sub.add_parser(
         "deps",
         help="查看/安装汉化依赖（有些游戏的文本改动需要外部工具）",
@@ -623,4 +842,27 @@ def build_parser() -> argparse.ArgumentParser:
     deps.add_argument("--install", action="store_true", help="真的下载安装；不加这个只显示会做什么")
     deps.add_argument("--yes", action="store_true", help="跳过确认（非交互环境必须显式给出）")
     deps.set_defaults(func=command_deps)
+
+    batch = sub.add_parser(
+        "batch",
+        parents=[common],
+        help="官方 Batch API 开放接口（5 折异步批量：prepare/submit/list/status/collect/cancel）",
+    )
+    batch.add_argument("batch_action", choices=["list", "prepare", "submit", "status", "collect", "cancel"], help="要执行的 Batch 操作")
+    batch.add_argument("job_id", nargs="?", default=None, help="本地任务 ID（submit/status/collect/cancel 需要）")
+    batch.add_argument("--preset", choices=list(BATCH_PRESETS.keys()), default=None, help="国内/国际 Batch 平台预设（dashscope/bigmodel/siliconflow/qianfan/openai/anthropic/gemini）")
+    batch.add_argument("--engine", choices=["openai", "anthropic", "gemini"], default=None, help="Batch 协议类型")
+    batch.add_argument("--base-url", default=None, help="覆盖接口地址")
+    batch.add_argument("--batch-endpoint", default=None, help="覆盖 Batch endpoint 路径（智谱为 /v4/chat/completions）")
+    batch.add_argument("--api-key", default=None, help="覆盖 API Key")
+    batch.add_argument("--model", default=None, help="覆盖模型名")
+    batch.add_argument("--batch-size", type=int, default=None)
+    batch.add_argument("--timeout", type=int, default=None)
+    batch.add_argument("--pack-format", type=float, default=None)
+    batch.add_argument("--fill-community", action="store_true", default=None)
+    batch.add_argument("--refine-community", action="store_true", default=None)
+    batch.add_argument("--disable-thinking", action=argparse.BooleanOptionalAction, default=None)
+    batch.add_argument("--submit", action="store_true", help="prepare 后直接提交到云端（默认仅 0 费用生成预览 JSONL）")
+    batch.add_argument("--out", default=None, help="collect 时顺便导出完整译文 JSON 的路径")
+    batch.set_defaults(func=command_batch)
     return parser

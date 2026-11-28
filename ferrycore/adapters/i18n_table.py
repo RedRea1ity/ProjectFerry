@@ -187,6 +187,15 @@ class I18nTableAdapter(Adapter):
 
     def _find_files(self, root: Path) -> tuple[list[Path], list[Path], list[Path]]:
         root = Path(root)
+        if root.is_file():
+            suf = root.suffix.lower()
+            if suf == ".po":
+                return [root], [], []
+            if suf == ".json":
+                return [], [root], []
+            if suf == ".csv":
+                return [], [], [root]
+            return [], [], []
         if not root.is_dir():
             return [], [], []
         # 避开 Minecraft 模组资源目录
@@ -258,11 +267,12 @@ class I18nTableAdapter(Adapter):
 
     def collect(self, root: Path) -> list[Entry]:
         root = Path(root).absolute()
+        base = root.parent if root.is_file() else root
         po_files, json_files, csv_files = self._find_files(root)
         entries: list[Entry] = []
 
         for path in po_files:
-            rel = path.relative_to(root).as_posix()
+            rel = path.relative_to(base).as_posix()
             try:
                 raw = path.read_text(encoding="utf-8-sig")
             except (OSError, UnicodeDecodeError):
@@ -281,7 +291,7 @@ class I18nTableAdapter(Adapter):
                 )
 
         for path in json_files:
-            rel = path.relative_to(root).as_posix()
+            rel = path.relative_to(base).as_posix()
             try:
                 payload = json.loads(path.read_text(encoding="utf-8-sig"))
             except (OSError, UnicodeDecodeError, ValueError):
@@ -300,7 +310,7 @@ class I18nTableAdapter(Adapter):
                 )
 
         for path in csv_files:
-            rel = path.relative_to(root).as_posix()
+            rel = path.relative_to(base).as_posix()
             try:
                 raw = path.read_text(encoding="utf-8-sig")
             except (OSError, UnicodeDecodeError):
@@ -334,6 +344,7 @@ class I18nTableAdapter(Adapter):
         out: Path | None = None,
     ) -> ApplyReport:
         root = Path(root).absolute()
+        base = root.parent if root.is_file() else root
         report = ApplyReport()
         entries = self.collect(root)
         if not entries:
@@ -346,7 +357,7 @@ class I18nTableAdapter(Adapter):
 
         pending: dict[str, str] = {}
         for rel_path, file_entries in by_file.items():
-            full_path = root / rel_path
+            full_path = base / rel_path
             kind = file_entries[0].kind
 
             if kind == "po":
@@ -418,15 +429,15 @@ class I18nTableAdapter(Adapter):
             report.notes.append("没有命中任何译文，未修改文件")
             return report
 
-        log = UndoLog.open(root, engine=self.name)
+        log = UndoLog.open(base, engine=self.name)
         for rel_path, new_text in pending.items():
             log.will_modify(rel_path)
-            (root / rel_path).write_text(new_text, encoding="utf-8")
+            (base / rel_path).write_text(new_text, encoding="utf-8")
             log.did_write(rel_path)
         log.finish()
 
-        report.out_path = root
+        report.out_path = root if root.is_file() else base
         report.in_place = True
-        report.undo_path = root / UNDO_NAME
+        report.undo_path = base / UNDO_NAME
         report.notes.append(f"已原地更新 {len(pending)} 个本地化词表文件（{report.applied} 条），revert 可还原。")
         return report

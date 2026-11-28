@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ferrygame.rawbin import patch_blob, scan_binary_strings, scan_sjis_strings
+from ferrygame.tbl import ThingyTable, find_tbl_pair, scan_tbl_strings
 from ferrygame.units import Unit
 
 from ..models import Entry
@@ -253,8 +254,10 @@ def _is_console_binary_candidate(rel: str, raw: bytes) -> bool:
 def _collect_console_all(
     modid: str,
     virtual_files: dict[str, bytes],
+    *,
+    src_tbl: ThingyTable | None = None,
 ) -> tuple[list[Entry], dict[str, list[Unit]]]:
-    """同时抽取结构化文本文件与掌机二进制剧本（Shift-JIS 定长串）。"""
+    """同时抽取结构化文本文件与掌机二进制剧本（支持 Shift-JIS 定长串与外挂 Thingy `.tbl` 码表）。"""
     structured_files = {
         k: v for k, v in virtual_files.items() if k.lower().endswith(_STRUCTURED_SUFFIXES)
     }
@@ -266,7 +269,7 @@ def _collect_console_all(
             continue
         if not _is_console_binary_candidate(rel, raw):
             continue
-        units = scan_binary_strings(raw, rel_path=rel)
+        units = scan_tbl_strings(raw, src_tbl, rel_path=rel) if src_tbl is not None else scan_binary_strings(raw, rel_path=rel)
         if not units:
             continue
         bin_units_by_file[rel] = units
@@ -290,6 +293,8 @@ def _patch_console_all(
     entries: list[Entry],
     bin_units_by_file: dict[str, list[Unit]],
     translations: dict[str, str],
+    *,
+    dst_tbl: ThingyTable | None = None,
 ) -> tuple[dict[str, bytes], int, int, list[str]]:
     structured_entries = [e for e in entries if not e.kind.startswith("bin_")]
     modified, applied, missed, conflicts = patch_virtual_files(
@@ -310,7 +315,7 @@ def _patch_console_all(
                 missed += 1
         if not file_hit:
             continue
-        patched, count, bin_conflicts = patch_blob(raw, units)
+        patched, count, bin_conflicts = patch_blob(raw, units, tbl_encode=dst_tbl)
         conflicts.extend(bin_conflicts)
         if count > 0:
             modified[rel] = patched
@@ -391,7 +396,8 @@ class PsvAdapter(Adapter):
         _, files, sfo = self._load_files(root)
         title = str(sfo.get("TITLE") or root.name)
         title_id = str(sfo.get("TITLE_ID") or "UNKNOWN")
-        entries, _ = _collect_console_all(root.name, files)
+        src_tbl, _dst_tbl = find_tbl_pair(root)
+        entries, _ = _collect_console_all(root.name, files, src_tbl=src_tbl)
 
         eboot_raw = files.get("eboot.bin") or files.get("EBOOT.BIN")
         eboot_note = ""
@@ -434,7 +440,8 @@ class PsvAdapter(Adapter):
     def collect(self, root: Path) -> list[Entry]:
         root = Path(root).resolve()
         _, files, _ = self._load_files(root)
-        entries, _ = _collect_console_all(root.name, files)
+        src_tbl, _ = find_tbl_pair(root)
+        entries, _ = _collect_console_all(root.name, files, src_tbl=src_tbl)
         return entries
 
     def apply(self, root: Path, translations: dict[str, str], out: Path | None = None) -> ApplyReport:
@@ -442,14 +449,15 @@ class PsvAdapter(Adapter):
         base = root.parent if root.is_file() else root
         vpk, files, sfo = self._load_files(root)
         title_id = str(sfo.get("TITLE_ID") or "PCSG00000")
-        entries, bin_units = _collect_console_all(root.name, files)
+        src_tbl, dst_tbl = find_tbl_pair(root)
+        entries, bin_units = _collect_console_all(root.name, files, src_tbl=src_tbl)
         report = ApplyReport()
         if not entries:
             report.notes.append("PSV 游戏内无可用文本单元")
             return report
 
         modified, applied, missed, conflicts = _patch_console_all(
-            files, entries, bin_units, translations
+            files, entries, bin_units, translations, dst_tbl=dst_tbl
         )
         report.applied = applied
         report.missed = missed
@@ -590,7 +598,8 @@ class PspAdapter(Adapter):
 
         title = str(sfo.get("TITLE") or root.name)
         disc_id = str(sfo.get("DISC_ID") or "ULJM00000")
-        entries, _ = _collect_console_all(root.name, files)
+        src_tbl, _ = find_tbl_pair(root)
+        entries, _ = _collect_console_all(root.name, files, src_tbl=src_tbl)
 
         if not entries:
             return ProbeReport(
@@ -624,7 +633,8 @@ class PspAdapter(Adapter):
     def collect(self, root: Path) -> list[Entry]:
         root = Path(root).resolve()
         _iso, _blob, _idx, files, _sfo = self._load_files(root)
-        entries, _ = _collect_console_all(root.name, files)
+        src_tbl, _ = find_tbl_pair(root)
+        entries, _ = _collect_console_all(root.name, files, src_tbl=src_tbl)
         return entries
 
     def apply(self, root: Path, translations: dict[str, str], out: Path | None = None) -> ApplyReport:
@@ -632,14 +642,15 @@ class PspAdapter(Adapter):
         base = root.parent if root.is_file() else root
         iso_path, iso_blob, iso_index, files, sfo = self._load_files(root)
         disc_id = str(sfo.get("DISC_ID") or "ULJM00000")
-        entries, bin_units = _collect_console_all(root.name, files)
+        src_tbl, dst_tbl = find_tbl_pair(root)
+        entries, bin_units = _collect_console_all(root.name, files, src_tbl=src_tbl)
         report = ApplyReport()
         if not entries:
             report.notes.append("PSP 游戏内无可用文本单元")
             return report
 
         modified, applied, missed, conflicts = _patch_console_all(
-            files, entries, bin_units, translations
+            files, entries, bin_units, translations, dst_tbl=dst_tbl
         )
         report.applied = applied
         report.missed = missed
@@ -820,7 +831,8 @@ class NdsAdapter(Adapter):
         if nds_path is None:
             return ProbeReport(engine=self.name, root=root, notes=["未找到合法的 Nintendo DS (.nds) NitroROM 镜像"])
 
-        entries, _ = _collect_console_all(root.name, files)
+        src_tbl, _ = find_tbl_pair(nds_path)
+        entries, _ = _collect_console_all(root.name, files, src_tbl=src_tbl)
         label = f"Nintendo DS ({title or nds_path.stem} [{code}])"
         if not entries:
             return ProbeReport(
@@ -850,8 +862,9 @@ class NdsAdapter(Adapter):
 
     def collect(self, root: Path) -> list[Entry]:
         root = Path(root).resolve()
-        _path, _blob, _title, _code, _idx, files = self._load_rom(root)
-        entries, _ = _collect_console_all(root.name, files)
+        nds_path, _blob, _title, _code, _idx, files = self._load_rom(root)
+        src_tbl, _ = find_tbl_pair(nds_path or root)
+        entries, _ = _collect_console_all(root.name, files, src_tbl=src_tbl)
         return entries
 
     def apply(self, root: Path, translations: dict[str, str], out: Path | None = None) -> ApplyReport:
@@ -863,9 +876,10 @@ class NdsAdapter(Adapter):
             report.notes.append("未找到 NDS ROM")
             return report
 
-        entries, bin_units = _collect_console_all(root.name, files)
+        src_tbl, dst_tbl = find_tbl_pair(nds_path)
+        entries, bin_units = _collect_console_all(root.name, files, src_tbl=src_tbl)
         modified, applied, missed, conflicts = _patch_console_all(
-            files, entries, bin_units, translations
+            files, entries, bin_units, translations, dst_tbl=dst_tbl
         )
         report.applied = applied
         report.missed = missed

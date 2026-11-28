@@ -153,6 +153,224 @@ class GuiP0Tests(unittest.TestCase):
         self.window.update_idletasks()
         self.assertEqual(self.window._active_mode, "mc")
 
+    def test_disable_thinking_checkbox_syncs_config_and_summary(self):
+        original = bool(self.window.disable_thinking_var.get())
+        try:
+            self.window.disable_thinking_var.set(False)
+            self.window._update_settings_summary()
+            self.assertFalse(self.window._snapshot_config()["disable_thinking"])
+            self.assertNotIn("已关思考", self.window.settings_summary_var.get())
+
+            self.window.disable_thinking_var.set(True)
+            self.window._update_settings_summary()
+            self.assertTrue(self.window._snapshot_config()["disable_thinking"])
+            self.assertIn("已关思考", self.window.settings_summary_var.get())
+        finally:
+            self.window.disable_thinking_var.set(original)
+            self.window._update_settings_summary()
+
+    def test_batch_api_dialog_switches_domestic_presets(self):
+        dlg = self.window._show_batch_api_dialog()
+        self.addCleanup(dlg.destroy)
+        dlg.update_idletasks()
+        ctrl = dlg._batch_controls
+        ctrl["preset_var"].set(core.BATCH_PRESETS["bigmodel"]["label"])
+        ctrl["on_preset_changed"]()
+        self.assertEqual(ctrl["url_var"].get(), "https://open.bigmodel.cn/api/paas/v4")
+        self.assertEqual(ctrl["endpoint_var"].get(), "/v4/chat/completions")
+
+        ctrl["preset_var"].set(core.BATCH_PRESETS["dashscope"]["label"])
+        ctrl["on_preset_changed"]()
+        self.assertEqual(ctrl["url_var"].get(), "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.assertEqual(ctrl["endpoint_var"].get(), "/v1/chat/completions")
+
+    def test_drag_and_drop_routes_game_and_mc_instance(self):
+        from ferrycore.win_dnd import classify_dropped_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            game_dir = base / "MyGame"
+            game_dir.mkdir()
+            game_exe = game_dir / "Game.exe"
+            game_exe.write_bytes(b"MZ")
+
+            mc_dir = base / "MyMC"
+            (mc_dir / "mods").mkdir(parents=True)
+            (mc_dir / "resourcepacks").mkdir()
+            mod_jar = mc_dir / "mods" / "sample.jar"
+            mod_jar.write_bytes(b"PK")
+
+            self.assertEqual(classify_dropped_path(game_dir), ("game", game_dir))
+            self.assertEqual(classify_dropped_path(game_exe), ("game", game_exe))
+            self.assertEqual(classify_dropped_path(mc_dir), ("mc", mc_dir))
+            self.assertEqual(classify_dropped_path(mod_jar), ("mc", mc_dir))
+            self.assertEqual(classify_dropped_path(base / "missing")[0], "invalid")
+
+            # 测试实际拖入游戏文件：自动切到「游戏汉化」页并保留精确文件路径（不截断成父目录）
+            with patch.object(self.window, "_loc_start_probe") as probe_spy:
+                self.window._on_files_dropped([game_exe])
+            self.assertEqual(self.window._active_mode, "game")
+            self.assertEqual(Path(self.window._loc_path_var.get()), game_exe)
+            probe_spy.assert_called_once()
+
+            # 测试实际拖入 MC 实例目录：自动切到「模组汉化」页并触发扫描
+            with patch.object(self.window, "start_scan") as scan_spy, patch.object(core, "save_config"):
+                self.window._on_files_dropped([mc_dir])
+            self.assertEqual(self.window._active_mode, "mc")
+            self.assertEqual(Path(self.window.path_var.get()), mc_dir)
+            scan_spy.assert_called_once()
+
+            # 验证 Windows 原生拖放钩子可正常安装并卸载（无崩溃/泄漏）
+            self.window._setup_file_drop()
+            if self.window._dnd_hook is not None:
+                self.window._dnd_hook.uninstall()
+                self.window._dnd_hook = None
+
+    def test_drag_single_file_in_mixed_folder_targets_only_dropped_file(self):
+        from ferrycore.adapters import resolve_game_target
+        from ferrygame import project as fg_project
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mixed = Path(tmp) / "Downloads"
+            mixed.mkdir()
+
+            # 同目录混放多个可识别文件 + AGS 标记，验证不会随机识别成别的文件
+            (mixed / "acsetup.cfg").write_text("[misc]\n", encoding="utf-8")
+            other_po = mixed / "aaa_other.po"
+            other_po.write_text('msgid "Other Game Title"\nmsgstr ""\n', encoding="utf-8")
+            target_po = mixed / "zzz_target.po"
+            target_po.write_text('msgid "Target Game Dialogue"\nmsgstr ""\n', encoding="utf-8")
+            unrelated_txt = mixed / "readme.txt"
+            unrelated_txt.write_text("plain note\n", encoding="utf-8")
+
+            # 1) 精准锁定 zzz_target.po，不串读 aaa_other.po，也不被 acsetup.cfg 劫持
+            resolved, adapter = resolve_game_target(target_po)
+            self.assertEqual(resolved, target_po)
+            self.assertIsNotNone(adapter)
+            self.assertEqual(adapter.name, "i18n_table")
+            entries = adapter.collect(resolved)
+            self.assertEqual([e.english for e in entries], ["Target Game Dialogue"])
+
+            # 2) 单文件双语表按文件名隔离，不与同目录其他游戏互相覆盖
+            self.assertEqual(fg_project.default_path(target_po).name, "zzz_target.ferry_tl.json")
+            self.assertEqual(fg_project.default_path(other_po).name, "aaa_other.ferry_tl.json")
+
+            # 3) 拖入不可识别的单文件，不会错误回退去识别同目录的 aaa_other.po 或 acsetup.cfg
+            res_txt, adp_txt = resolve_game_target(unrelated_txt)
+            self.assertEqual(res_txt, unrelated_txt)
+            self.assertIsNone(adp_txt)
+
+            # 4) 同目录放两个独立二进制 .exe，拖入第二个时只抽取第二个文件本身
+            sjis_a = "これは別のゲームのメッセージです。".encode("cp932")
+            sjis_b = "これは翻訳対象のメッセージです。".encode("cp932")
+            exe_a = mixed / "aaa_game.exe"
+            exe_b = mixed / "zzz_game.exe"
+            exe_a.write_bytes(b"MZ" + b"\x00" * 32 + b"\x00".join([sjis_a] * 4) + b"\x00")
+            exe_b.write_bytes(b"MZ" + b"\x00" * 32 + b"\x00".join([sjis_b] * 4) + b"\x00")
+
+            res_b, adp_b = resolve_game_target(exe_b)
+            self.assertEqual(res_b, exe_b)
+            self.assertIsNotNone(adp_b)
+            self.assertEqual(adp_b.name, "rawbin")
+            texts_b = [e.english for e in adp_b.collect(res_b)]
+            self.assertTrue(any("翻訳対象" in t for t in texts_b))
+            self.assertFalse(any("別のゲーム" in t for t in texts_b))
+
+            # 5) 多文件目录型引擎的启动器 .exe（如 RPG Maker MV 的 Game.exe）仍能自动归位到游戏目录
+            rpg_dir = Path(tmp) / "MyRpgMv"
+            (rpg_dir / "www" / "data").mkdir(parents=True)
+            (rpg_dir / "www" / "data" / "System.json").write_text(
+                '{"gameTitle": "Fantasy Quest", "terms": {"basic": ["Level"]}}',
+                encoding="utf-8",
+            )
+            rpg_exe = rpg_dir / "Game.exe"
+            rpg_exe.write_bytes(b"MZ" + b"\x00" * 64)
+
+            res_rpg, adp_rpg = resolve_game_target(rpg_exe)
+            self.assertEqual(res_rpg, rpg_dir)
+            self.assertIsNotNone(adp_rpg)
+            self.assertEqual(adp_rpg.name, "rpgmaker")
+
+    def test_history_remove_and_clear_buttons_never_delete_disk_files(self):
+        from ferrycore import localized as ferrylocalized
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            keep_dir = base / "GameA.cn"
+            keep_dir.mkdir()
+            marker = keep_dir / "keep.txt"
+            marker.write_text("alive", encoding="utf-8")
+            rec1 = ferrylocalized.LocalizedRecord(root=str(base / "GameA"), play_path=str(keep_dir), mode="copy", engine="tyrano", label="GameA.cn")
+            rec2 = ferrylocalized.LocalizedRecord(root=str(base / "GameB"), play_path=str(base / "GameB.cn"), mode="copy", engine="renpy", label="GameB.cn")
+
+            with patch.object(ferrylocalized, "app_dir", return_value=base):
+                ferrylocalized.save_history([rec1, rec2])
+                self.window._home_page.refresh(ferrylocalized.load_history())
+                self.assertEqual(len(self.window._home_page.table.get_children()), 2)
+
+                # 移除单条
+                self.assertTrue(ferrylocalized.remove_history(keep_dir))
+                self.assertEqual(len(ferrylocalized.load_history()), 1)
+                self.assertTrue(marker.is_file(), "清理历史绝不能删除磁盘上的游戏文件")
+
+                # 清理失效条目 + 全部清空
+                self.assertEqual(ferrylocalized.prune_history(), 1)
+                ferrylocalized.save_history([rec1])
+                with patch.object(core, "load_localize_history", side_effect=ferrylocalized.load_history), \
+                     patch.object(core, "clear_localize_history", side_effect=ferrylocalized.clear_history), \
+                     patch.object(self.gui.messagebox, "askyesno", return_value=True):
+                    self.window._clear_records()
+                self.assertEqual(ferrylocalized.load_history(), [])
+                self.assertEqual(len(self.window._home_page.table.get_children()), 0)
+                self.assertTrue(marker.is_file())
+
+    def test_settings_page_and_three_mode_theme_follow_system(self):
+        import ferrycore.config as ferryconfig
+        original_mode = self.window._theme_mode
+        try:
+            # 侧边栏精简：翻译引擎/运行日志/导出诊断/主题统一收纳进「设置」页
+            self.assertNotIn("夜间模式", self.window.shell.util_buttons)
+            self.assertNotIn("运行日志", self.window.shell.util_buttons)
+            self.assertNotIn("导出诊断", self.window.shell.util_buttons)
+            self.assertIn("使用说明", self.window.shell.util_buttons)
+            self.assertIn("关于摆渡", self.window.shell.util_buttons)
+            self.assertIn("settings", self.window.shell.nav)
+
+            with patch.object(core, "save_config"):
+                self.window.theme_mode_var.set("light")
+                self.window._on_theme_mode_selected()
+                self.assertEqual(self.window._theme_mode, "light")
+                self.assertEqual(self.window._theme, "light")
+                self.assertEqual(self.window.cget("bg"), self.gui.THEMES["light"]["bg"])
+                self.assertEqual(self.window.config.get("theme"), "light")
+                self.assertIn("日间模式", self.window.theme_status_var.get())
+
+                self.window.theme_mode_var.set("dark")
+                self.window._on_theme_mode_selected()
+                self.assertEqual(self.window._theme_mode, "dark")
+                self.assertEqual(self.window._theme, "dark")
+                self.assertEqual(self.window.cget("bg"), self.gui.THEMES["dark"]["bg"])
+                self.assertEqual(self.window._loc_report.cget("bg"), self.gui.THEMES["dark"]["card"])
+                self.assertEqual(self.window.config.get("theme"), "dark")
+                self.assertIn("夜间模式", self.window.theme_status_var.get())
+
+                # 跟随系统：系统深色 → 自动切换夜间；系统切浅色 → 刷新跟随日间
+                with patch.object(ferryconfig, "detect_system_theme", return_value="dark"):
+                    self.window.theme_mode_var.set("system")
+                    self.window._on_theme_mode_selected()
+                    self.assertEqual(self.window._theme_mode, "system")
+                    self.assertEqual(self.window._theme, "dark")
+                    self.assertEqual(self.window.config.get("theme"), "system")
+                    self.assertIn("跟随系统", self.window.theme_status_var.get())
+
+                with patch.object(ferryconfig, "detect_system_theme", return_value="light"):
+                    self.window._refresh_system_theme()
+                    self.assertEqual(self.window._theme_mode, "system")
+                    self.assertEqual(self.window._theme, "light")
+                    self.assertEqual(self.window.cget("bg"), self.gui.THEMES["light"]["bg"])
+        finally:
+            self.window._apply_theme(original_mode, save=False)
+
     def test_about_reflows_without_clipping_text(self):
         self.window._show_about()
         dialog = next(w for w in self.window.winfo_children()
@@ -184,7 +402,7 @@ class GuiP0Tests(unittest.TestCase):
         app = self.window
         app._mc_started = False
         with patch.object(app, "refresh_instances") as discover, patch.object(app, "start_scan") as scan:
-            for key in ("home", "engine", "game", "home"):
+            for key in ("home", "settings", "game", "home"):
                 app._switch_mode(key, persist=False)
                 app.update_idletasks()
                 self.assertEqual([k for k, page in app._pages.items() if page.winfo_ismapped()], [key])
@@ -200,8 +418,9 @@ class GuiP0Tests(unittest.TestCase):
             discover.assert_called_once()
             app._on_rescan_key()
             scan.assert_called_once()
+        # 兼容旧版配置里存的 "engine" 页名，平滑映射到 "settings"
         app._switch_mode("engine")
-        self.assertEqual(app._load_ui_state()["workbench_page"], "engine")
+        self.assertEqual(app._load_ui_state()["workbench_page"], "settings")
         self.assertEqual(app.api_key_entry.cget("show"), "•")
 
     def test_home_opens_selected_record_not_first_record(self):

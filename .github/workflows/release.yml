@@ -26,7 +26,7 @@ jobs:
 
       # 先跑测试再打包：测试不过就不该产出 exe
       - name: Run unit tests
-        run: python -m unittest -v test_refine test_spec_p0 test_localize test_ftb_localizer test_fontcheck test_deps test_hsp test_gamemaker test_rpa_renpy test_rpgmaker_ace test_localized_resume test_ferrygame
+        run: python -m unittest -v test_refine test_spec_p0 test_localize test_ftb_localizer test_fontcheck test_deps test_hsp test_gamemaker test_rpa_renpy test_rpgmaker_ace test_localized_resume test_ferrygame test_ags test_batch_api test_engines_and_theme test_p1_p2 test_playstation test_retro_console test_token_optimizations
 
       - name: Install PyInstaller
         run: pip install pyinstaller

@@ -14,6 +14,47 @@ from typing import Any
 from ferrycore.base import redact_secrets
 
 
+class ApiRequestError(RuntimeError):
+    """结构化 HTTP/网络错误：携带状态码、Retry-After 与是否可重试标记。
+
+    继承自 RuntimeError，所有旧的 `except RuntimeError` 调用方无需改动。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+        retryable: bool = True,
+        detail: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.retryable = retryable
+        self.detail = detail
+
+
+def _is_retryable_status(code: int) -> bool:
+    return code in (408, 429) or code >= 500
+
+
+def _parse_retry_after(headers: Any) -> float | None:
+    if headers is None:
+        return None
+    raw = headers.get("Retry-After") if hasattr(headers, "get") else None
+    if not raw:
+        return None
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return min(value, 30.0)
+
+
 def _http_error_detail(code: int) -> str:
     if code == 400:
         return "请求参数错误（400）"
@@ -44,16 +85,22 @@ def _http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str], 
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = redact_secrets(exc.read().decode("utf-8", "replace")[:300])
-        raise RuntimeError(f"{_http_error_detail(exc.code)}：{detail}") from exc
+        raise ApiRequestError(
+            f"{_http_error_detail(exc.code)}：{detail}",
+            status_code=exc.code,
+            retry_after=_parse_retry_after(getattr(exc, "headers", None)),
+            retryable=_is_retryable_status(exc.code),
+            detail=detail,
+        ) from exc
     except TimeoutError as exc:
-        raise RuntimeError("请求超时") from exc
+        raise ApiRequestError("请求超时", retryable=True) from exc
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
-            raise RuntimeError("请求超时") from exc
-        raise RuntimeError(f"网络连接失败：{redact_secrets(str(reason))}") from exc
+            raise ApiRequestError("请求超时", retryable=True) from exc
+        raise ApiRequestError(f"网络连接失败：{redact_secrets(str(reason))}", retryable=True) from exc
     except json.JSONDecodeError as exc:
-        raise RuntimeError("服务器返回的不是合法 JSON") from exc
+        raise ApiRequestError("服务器返回的不是合法 JSON", retryable=True) from exc
 
 
 def _fetch_json(url: str, timeout: float) -> Any:
